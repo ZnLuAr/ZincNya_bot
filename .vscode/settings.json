@@ -1,0 +1,51 @@
+{
+  // 允许直接打开未信任的文件（防止 VSCode 弹安全警告）
+  "security.workspace.trust.untrustedFiles": "open",
+
+  // 在修改配置时自动重启 Rust Analyzer
+  "rust-analyzer.restartServerOnConfigChange": true,
+
+  // 启用 Rust 测试资源管理器
+  "rust-analyzer.testExplorer": true,
+
+  // 缓存容量，适合中大型项目
+  "rust-analyzer.lru.capacity": 256,
+
+  // 手动指定要加载的 Cargo 项目
+  // 这里告诉 Rust Analyzer 去分析 ZincStickerCrawler 这个子项目
+  "rust-analyzer.linkedProjects": [
+    "ZincStickerCrawler/Cargo.toml"
+  ],
+
+  // 启用 cargo check（用于实时诊断）
+  "rust-analyzer.check.command": "check",
+
+  // 不修改默认的 Rust Analyzer 可执行路径
+  "rust-analyzer.server.path": null,
+
+  // 允许在终端中点击打开各种链接
+  "terminal.integrated.allowedLinkSchemes": [
+    "file",
+    "http",
+    "https",
+    "mailto",
+    "vscode",
+    "vscode-insiders",
+    "ms-settings"
+  ],
+
+  // 可选：在保存时自动运行 rustfmt 格式化
+  "[rust]": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "rust-lang.rust-analyzer"
+  },
+
+  // 可选：减少不必要的诊断信息
+  "rust-analyzer.diagnostics.enable": true,
+  "rust-analyzer.diagnostics.disabled": [
+    "unresolved-proc-macro"
+  ],
+
+  // 可选：启用实验性功能（如语法高亮增强）
+  "rust-analyzer.experimental.procAttrMacros": true
+}

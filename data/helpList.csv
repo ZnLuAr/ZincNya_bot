@@ -1,0 +1,5 @@
+command , description
+
+"/help" , "提供 ZincNya bot 命令的帮助信息"
+"/send" , "在控制台中向指定对象发送一条消息"
+"/shutdown" , "让机器人安全且正确地关机"
