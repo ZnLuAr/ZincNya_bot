@@ -14,7 +14,7 @@ def getHelp():
 
         "name": "/shudown",
         "description": "使咱能够被安全、正确地关机喵",
-        "usage": "/shutdown",
+        "usage": "直接打 /shutdown 就好了哦",
         "example": "もー、ご主人様又在装傻了……"
 
     }

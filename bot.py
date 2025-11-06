@@ -42,7 +42,7 @@ async def main():
     initLogger()
     loadHandlers(app)
 
-    print("————————————————♥チョコミント♥ 、よ ♥ り ♥ も ♥ 、あ · な · た————————————————\n")
+    
     print("ZincNya Bot——\n喵的一声，就启动啦——\n")
 
     await app.initialize()
