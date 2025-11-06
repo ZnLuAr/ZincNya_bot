@@ -2,7 +2,7 @@ import os
 
 
 
-BOT_TOKEN = os.getenv("BOT_TOKEN" , "***REMOVED***")
+BOT_TOKEN = os.getenv("BOT_TOKEN" , "")
 
 
 
