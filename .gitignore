@@ -4,5 +4,8 @@ log/
 
 
 __pycache__/
+handlers/__pycache__/
+utils/__pycache__/
+utils/command/__pycache__/
 *.pyc
 .env
