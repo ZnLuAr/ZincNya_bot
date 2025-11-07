@@ -10,7 +10,7 @@ from utils.logger import logAction
 
 def loadQuotes():
     try:
-        with open(QUOTES_PATH, "r", encoding="utf-8") as f:
+        with open(QUOTES_DIR, "r", encoding="utf-8") as f:
             reader = csv.reader(f)
             quotes = [row[0].strip() for row in reader if row]
         return quotes

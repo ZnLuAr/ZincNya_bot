@@ -68,6 +68,10 @@ def getHelp():
         "name": "/send",
         "description": "向一个或多个会话发送文本消息喵",
         "usage": "/send [-a/--at <userName>] [-id/--id <id1 , id2 ,...>] [-t/--text <text>]\n用户或群聊的ID需要在 Telegram 的 @myidbot 中获取哦。",
-        "example": "向一个用户发送消息：/send -id '1234567' -t 'Hello world'\n向聊天中发送消息并@用户：/send -id '-1234567' -a 'userName' -t 'Do you know I'm a bot?'\n向多个用户发送消息：/send -id '1234567' '1234568' -t '👀'"
+        "example": (
+            "向一个用户发送消息：/send -id '1234567' -t 'Hello world'\n"
+            "向聊天中发送消息并@用户：/send -id '-1234567' -a 'userName' -t 'Do you know I'm a bot?'\n"
+            "向多个用户发送消息：/send -id '1234567' '1234568' -t '👀'"
+        ),
 
     }
