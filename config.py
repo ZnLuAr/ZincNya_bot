@@ -2,7 +2,7 @@ import os
 
 
 
-BOT_TOKEN = os.getenv("BOT_TOKEN" , "")
+BOT_TOKEN = os.getenv("BOT_TOKEN" , "7770221224:AAGvij0WepiklXbqXDqB7RHa7k-9Y6nyzJs")
 
 
 
@@ -17,7 +17,7 @@ MAX_DOWNLOADS_ATTEMPTS = 3  # 最大尝试下载次数
 
 
 # /nya 功能相关常量
-QUOTES_PATH = os.path.join(os.path.dirname(__file__) , "data" , "ZincNyaQuotes.csv")
+QUOTES_DIR = os.path.join(os.path.dirname(__file__) , "data" , "ZincNyaQuotes.csv")
 
 
 
@@ -37,3 +37,5 @@ HELP_LIST_DIR = os.path.join(os.path.dirname(__file__) , "data" , "helpList.csv"
 
 # Sudoers 列表
 SUDOER_LIST = ["ZincPhos"]
+SUDOER_ID = ["7767386015"]
+WHITELIST_DIR = os.path.join(os.path.dirname(__file__) , "data" , "whitelist.json")
