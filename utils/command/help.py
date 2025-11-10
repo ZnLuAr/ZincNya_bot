@@ -38,7 +38,7 @@ async def execute(app , args):
             # 按命令名排序 commands 列表，格式化打印各条命令的名称和简短描述（左对齐宽度15）
             for info in sorted(commandsList , key=lambda x: x["name"]):
                 print(f"{info['name']:<15}      {info.get('description' , '')}")
-            print("\n" , "—" * 62)
+            print("\n" , "—" * 61)
             print("使用 /help <command> 查看详细说明喵——\n\n")
             return
         
@@ -71,8 +71,11 @@ def getHelp():
     return {
 
         "name": "/help",
+
         "description": "获取 ZincNya bot 的命令帮助喵",
+
         "usage": "/help [<command>]",
+
         "example": "展示此页面：/help\n获取 /shutdown 命令的帮助：/help shutdown"
 
     }
