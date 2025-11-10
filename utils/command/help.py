@@ -34,11 +34,11 @@ async def execute(app , args):
         # 无参数，即列出命令列表
         if not args:
             print("所有可用命令喵：")
-            print("——————————————————————————————————————————————————————————————\n")
+            print("—" * 62 , "\n")
             # 按命令名排序 commands 列表，格式化打印各条命令的名称和简短描述（左对齐宽度15）
             for info in sorted(commandsList , key=lambda x: x["name"]):
                 print(f"{info['name']:<15}      {info.get('description' , '')}")
-            print("\n——————————————————————————————————————————————————————————————")
+            print("\n" , "—" * 62)
             print("使用 /help <command> 查看详细说明喵——\n\n")
             return
         
@@ -54,7 +54,7 @@ async def execute(app , args):
                 print(f"\n{info.get('usage' , 'ないです（即答')}\n")
                 if info.get("example"):
                     print(f"{info['example']}")
-                    print("———————————————————————————————————————————————————————————————————————————————————————\n\n")
+                    print("—" * 87 , "\n\n")
             else:
                 print(f"❌ 命令 /{command} 没有定义 getHelp() 函数喵……")
         except ModuleNotFoundError:
