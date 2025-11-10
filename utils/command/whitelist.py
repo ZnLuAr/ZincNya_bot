@@ -95,8 +95,14 @@ def getHelp():
     return {
 
         "name": "/whitelist",
+        
         "description": "管理 ZincNya bot 使用的白名单",
-        "usage": "/whitelist [-a/--add <id>] [-d/--del <id>] [-s/--sus <id>] [-l/--list]\n用户或群聊的ID需要在 Telegram 的 @myidbot 中获取哦。",
+
+        "usage": (
+            "/whitelist [-a/--add <id>] [-d/--del <id>] [-s/--sus <id>] [-l/--list]\n"
+            "用户或群聊的ID需要在 Telegram 的 @myidbot 中获取哦。"
+        ),
+
         "example": (
             "添加用户至白名单：/whitelist -a 12345678\n"
             "从白名单移除用户：/whitelist -d 12345678\n"

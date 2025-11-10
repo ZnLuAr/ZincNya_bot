@@ -12,9 +12,12 @@ async def execute(app, args):
 def getHelp():
     return {
 
-        "name": "/shudown",
-        "description": "使咱能够被安全、正确地关机喵",
-        "usage": "直接打 /shutdown 就好了哦",
-        "example": "もー、ご主人様又在装傻了……"
+    "name": "/shudown",
+    
+    "description": "使咱能够被安全、正确地关机喵",
+    
+    "usage": "直接输入 /shutdown 就好了哦",
+
+    "example": "もー、ご主人様又在装傻了……"
 
     }
