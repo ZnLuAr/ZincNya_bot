@@ -41,7 +41,10 @@ def initLogger():
 
 
 
-async def logAction(user , action , result="OK喵" , child="False"):
+async def logAction(user , action , result , child , writeInLog=True):
+
+    if not action and not result:
+        return
 
     # 当不存在日志时，初始化
     if _CURRENT_LOG_PATH is None:
@@ -68,18 +71,19 @@ async def logAction(user , action , result="OK喵" , child="False"):
 
     logLine = f"[{timestamp}] @{userName}：{action}\n[{timestamp}] @锌酱：Result：{result}\n"
 
-    try:
-        await asyncio.to_thread(writeLogSync , consoleText , logLine)
-    except Exception as e:
-        print(f"[{timestamp}] @锌酱：咦？日志写入失败了喵……？\n             └─┤ 报错在这里——{e}")
-
-
+    if writeInLog:
+        try:
+            await asyncio.to_thread(writeLogSync , consoleText , logLine)
+        except Exception as e:
+            print(f"[{timestamp}] @锌酱：咦？日志写入失败了喵……？\n             └─┤ 报错在这里——{e}")
+    else:
+        print(consoleText)
 
 
 def writeLogSync(consoleText , logLine):
     with open (_CURRENT_LOG_PATH , "a" , encoding="utf-8") as f:
         f.write(logLine)
-    print (consoleText)
+    print(consoleText)
 
 
 

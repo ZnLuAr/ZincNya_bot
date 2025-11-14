@@ -14,6 +14,7 @@ async def execute(app , args):
     delMatch = re.search(r'--?(?:d|del)\s+(?:"([^"]+)"|(\S+))', joined)
     susMatch = re.search(r'--?(?:s|sus)\s+(?:"([^"]+)"|(\S+))', joined)
     listMatch = re.search(r'--?(?:l|list)', joined)
+    commentMatch = re.search(r'--?(?:c|comment)\s+(?:"([^"]+)"|(\S+))', joined)
 
     def _extract(match):
         if not match:
@@ -23,9 +24,34 @@ async def execute(app , args):
     addedUser = _extract(addMatch)
     deletedUser = _extract(delMatch)
     suspendedUser = _extract(susMatch)
+    commentTarget = _extract(commentMatch)
 
     if sum(bool(x) for x in [addedUser , deletedUser , suspendedUser , listMatch]) > 1:
         print("もー、/whitelist 只能有一种参数喵——\n")
+        return
+    
+    # 当独立使用 -c/--comment 参数时（在 args 中 comment 会作为额外参数出现）
+    if commentTarget and not addedUser:
+        # 此处 commentTarget 实际上是用户 ID
+        userID = commentTarget
+        # 提取 comment 内容至 ["-c" , "<userID>" , "<comment>"] 格式
+        try:
+            idx = args.index("-c") if "-c" in args else args.index("--comment")
+        except ValueError:
+            print("\n参数解析失败喵……\n")
+            return
+        try:
+            # comment 为 -c "<ID>" 之后的内容
+            comment = " ".join(args[idx + 2:])
+        except:
+            comment = None
+        if not comment:
+            print("もー，备注内容不能为空的喵——\n")
+            return
+        ok = userOperation("setComment" , userID , comment)
+        action = f"为 {userID} 添加备注 '{comment}' ……"
+        result = f"OK喵——" if ok else f"备注添加失败喵……"
+        await logAction("Console" , action , result , "withChild")
         return
 
     if addedUser or deletedUser or suspendedUser or listMatch:
@@ -33,7 +59,20 @@ async def execute(app , args):
             operation = "addUser"
             action = f"将 {addedUser} 加入白名单……"
             result = ["OK喵" , f"{addedUser} 已经在白名单了喵——"]
-
+            if commentTarget:
+            # -a 和 -c 同时使用的情况下
+                # Step 1：添加用户 ID 进入白名单
+                ok = userOperation(operation , addedUser)
+                if not ok:
+                    await logAction("Console" , action , result[1] , "withChild" , False)
+                    return
+                await logAction("Console" , action , result[0] , "withChild")
+                # Step 2：添加备注
+                comment = commentTarget
+                result = f"已为 {userID} 添加备注 {comment} 喵——" if ok else f"备注添加失败喵……"
+                ok = userOperation("setComment" , userID , comment)
+                await logAction("Console" , action , result , "lastChild")
+                return
         elif deletedUser:
             operation = "deleteUser"
             action = f"将 {deletedUser} 移出白名单……"
