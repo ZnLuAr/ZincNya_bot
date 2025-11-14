@@ -73,7 +73,7 @@ def listUsers() -> dict:
     return loadWhitelistFile()
 '''
 
-def userOperation(operation , userID:str|None=None) -> bool | dict:
+def userOperation(operation , userID:str|None=None , comment=None) -> bool | dict:
     data =loadWhitelistFile()
     userID = str(userID) if userID else None
 
@@ -100,7 +100,17 @@ def userOperation(operation , userID:str|None=None) -> bool | dict:
             return False
         
         case "listUsers":
-                return dict(data)
+            return dict(data)
+        
+        case "setComment":
+            if userID in data["allowed"]:
+                data["allowed"][userID]["comment"] = comment
+            elif userID in data["suspended"]:
+                data["suspended"][userID]["comment"] = comment
+            else:
+                return False
+            saveWhitelistFile(data)
+            return True
         
         case _:
             raise ValueError(f"未知的操作类型喵：{operation}")
