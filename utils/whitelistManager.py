@@ -15,20 +15,23 @@ from utils.logger import logAction
 def ensureWhitelistFile():
     os.makedirs(os.path.dirname(WHITELIST_DIR) , exist_ok=True)
     if not os.path.exists(WHITELIST_DIR):
-        saveWhitelistFile({"allowed": [] , "suspended": []})
+        saveWhitelistFile({
+            "allowed": {},
+            "suspended": {}
+        })
             
 
 def loadWhitelistFile():
     ensureWhitelistFile()
     with open(WHITELIST_DIR , "r" , encoding="utf-8") as f:
         return json.load(f)
-        
+
 
 def saveWhitelistFile(data):
     with open(WHITELIST_DIR , "w" , encoding="utf-8") as f:
         json.dump(data , f , ensure_ascii=False , indent=2)
 
-    
+
 
 
 # 外部函数，面向命令模块或 bot 调用
@@ -38,40 +41,7 @@ def whetherAuthorizedUser(userID: int | str) -> bool:
     return userID in data["allowed"] and userID not in data["suspended"]
 
 
-'''
-def addUser(userID: str) -> bool:
-    data = loadWhitelistFile()
-    userID = str(userID)
-    if userID not in data["allowed"]:
-        data["allowed"].append(userID)
-        saveWhitelistFile(data)
-        return True
-    return False
 
-
-def removeUser(userID: str) -> bool:
-    data = loadWhitelistFile()
-    userID = str(userID)
-    if userID in data["allowed"]:
-        data["allowed"].remove(userID)
-        saveWhitelistFile(data)
-        return True
-    return False
-
-
-def suspendUser(userID: str) -> bool:
-    data = loadWhitelistFile()
-    userID = str(userID)
-    if userID in data["allowed"] and userID not in data["suspended"]:
-        data["suspended"].append(userID)
-        saveWhitelistFile(data)
-        return True
-    return False
-
-
-def listUsers() -> dict:
-    return loadWhitelistFile()
-'''
 
 def userOperation(operation , userID:str|None=None , comment=None) -> bool | dict:
     data =loadWhitelistFile()
@@ -80,21 +50,21 @@ def userOperation(operation , userID:str|None=None , comment=None) -> bool | dic
     match operation:
         case "addUser":
             if userID not in data["allowed"]:
-                data["allowed"].append(userID)
+                data["allowed"][userID] = {"comment": ""}
                 saveWhitelistFile(data)
                 return True
             return False
         
         case "deleteUser":
             if userID in data["allowed"]:
-                data["allowed"].remove(userID)
+                data["allowed"].pop(userID)
                 saveWhitelistFile(data)
                 return True
             return False
         
         case "suspendUser":
             if userID in data["allowed"] and userID not in data["suspended"]:
-                data["suspended"].append(userID)
+                data["suspended"][userID] = data["allowed"].pop(userID)
                 saveWhitelistFile(data)
                 return True
             return False

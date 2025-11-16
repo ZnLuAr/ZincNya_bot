@@ -54,6 +54,7 @@ async def execute(app , args):
         await logAction("Console" , action , result , "withChild")
         return
 
+    # 以下是包含了-a、-d、-s 的使用情况
     if addedUser or deletedUser or suspendedUser or listMatch:
         if addedUser:
             operation = "addUser"
@@ -69,8 +70,8 @@ async def execute(app , args):
                 await logAction("Console" , action , result[0] , "withChild")
                 # Step 2：添加备注
                 comment = commentTarget
-                result = f"已为 {userID} 添加备注 {comment} 喵——" if ok else f"备注添加失败喵……"
-                ok = userOperation("setComment" , userID , comment)
+                result = f"已为 {addedUser} 添加备注 {comment} 喵——" if ok else f"备注添加失败喵……"
+                ok = userOperation("setComment" , addedUser , comment)
                 await logAction("Console" , action , result , "lastChild")
                 return
         elif deletedUser:
@@ -85,7 +86,7 @@ async def execute(app , args):
             data = userOperation("listUsers")
             allowedUser = data["allowed"]
             suspendedUser = data["suspended"]
-            whitelistUIRenderer(allowedUser , suspendedUser)
+            whitelistUIRenderer(data)
             return
 
 
@@ -101,32 +102,108 @@ async def execute(app , args):
 
 
 
-def whitelistUIRenderer(allowedUser , suspendedUser):
-    print("\n当前有——")
-    
-    if not allowedUser and not suspendedUser:
-        print("\n     啊……没有呢喵……")
-        return
-    
-    # 计算最大长度，保证表头对齐
-    maxLen = max(len(allowedUser) , len(suspendedUser))
-    headerLeft = "白名单"
-    headerRight = "暂停名单"
+def whitelistUIRenderer(whitelistData: dict):
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    import keyboard
+    import os
+    import time
 
-    leftMax = max((len(u) for u in allowedUser) , default=0)
-    rightMax = max((len(u) for u in suspendedUser) , default=0)
-    colWidthLeft = max(len(headerLeft) , leftMax) + 4
-    colWidthRight = max(len(headerRight) , rightMax) + 4
+    console = Console()
 
-    print(f"{'·':<5}{headerLeft:<{colWidthLeft - 3}}┃ {headerRight:<{colWidthRight}}")
-    print("—" * (colWidthLeft + colWidthRight + 10))
+    entries = []
+    for uid , data in whitelistData.get("allowed" , {}).items():
+        entries.append(
+            {
+                "uid": uid,
+                "status": "Allowed",
+                "comment": data.get("comment" , ""),
+                "collapsed": True
+            }
+        )
 
-    for i in range(maxLen):
-        left = allowedUser[i] if i < len(allowedUser) else ""
-        right = suspendedUser[i] if i < len(suspendedUser) else ""
-        print(f"{i+1:<5}{left:<{colWidthLeft}}┃ {right:<{colWidthRight}}")
+    for uid , data in whitelistData.get("suspended" , {}).items():
+        entries.append(
+            {
+                "uid": uid,
+                "status": "Suspended",
+                "comment": data.get("comment" , ""),
+                "collapsed": True
+            }
+        )
     
-    print("\n\n\n以上喵——\n\n")
+    entries.sort(key=lambda x: (x["status"] , x["uid"]))
+
+    selected = 0
+
+    def render():
+        os.system("cls" if os.name == "nt" else "clear")
+
+        table = Table(title="正在查看白名单喵——\n（↑↓ 移动，Enter 展开/折叠，q 退出）")
+        table.add_column("No." , justify="right")
+        table.add_column("UID" , justify= "left")
+        table.add_column("状态" , justify="left")
+        table.add_column("备注" , justify="left")
+
+
+        for i , e in enumerate(entries):
+            commentPreview = ""
+            if e["comment"].strip() == "":
+                commentPreview = ""
+            else:
+                if e["collapsed"]:
+                    # 过长的备注只显示 “ > ”，较短的备注直接显示
+                    preview = e["comment"]
+                    if len(preview) > 15:
+                        commentPreview = ">"
+                    else:
+                        commentPreview = preview
+                else:
+                    # 展开状态完整显示
+                    commentPreview = e["comment"]
+            
+            if i == selected:
+                # 给选中项加高亮
+                table.add_row(
+                    f"[bold yellow]{i+1}[/]",
+                    f"[bold yellow]{e['uid']}[/]",
+                    f"[bold yellow]{e['status']}[/]",
+                    f"[bold yellow]{commentPreview}[/]"
+                )
+            else:
+                table.add_row(
+                    str(i+1),
+                    e["uid"],
+                    e["status"],
+                    commentPreview
+                )
+
+        console.print(table , "\n\n")
+
+
+    # UI渲染函数主循环
+    render()
+
+    while True:
+        if keyboard.is_pressed("down"):
+            selected = min(selected + 1, len(entries) - 1)
+            render()
+            time.sleep(0.15)
+
+        elif keyboard.is_pressed("up"):
+            selected = max(selected - 1, 0)
+            render()
+            time.sleep(0.15)
+
+        elif keyboard.is_pressed("enter"):
+            entries[selected]["collapsed"] = not entries[selected]["collapsed"]
+            render()
+            time.sleep(0.15)
+
+        elif keyboard.is_pressed("q"):
+            break
+
 
 
 
@@ -138,15 +215,17 @@ def getHelp():
         "description": "管理 ZincNya bot 使用的白名单",
 
         "usage": (
-            "/whitelist [-a/--add <id>] [-d/--del <id>] [-s/--sus <id>] [-l/--list]\n"
+            "/whitelist [-a/--add <id>] [-d/--del <id>] [-s/--sus <id>] [-l/--list] [-c/--comment <id> <comment>]\n"
             "用户或群聊的ID需要在 Telegram 的 @myidbot 中获取哦。"
         ),
 
         "example": (
             "添加用户至白名单：/whitelist -a 12345678\n"
+            "为白名单内的用户添加备注：/whitelist -c 12345678 我做东方鬼畜音mad，好吗？"
             "从白名单移除用户：/whitelist -d 12345678\n"
             "暂停用户的访问权限：/whitelist -s 12345678\n"
             "查看白名单列表：/whitelist -l"
+            "添加用户至白名单并给予备注：/whitelist -a 12345678 -c 我做东方鬼畜音mad，好吗？"
         ),
         
     }
