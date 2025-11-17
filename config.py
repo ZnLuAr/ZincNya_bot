@@ -17,7 +17,7 @@ MAX_DOWNLOADS_ATTEMPTS = 3  # 最大尝试下载次数
 
 
 # /nya 功能相关常量
-QUOTES_DIR = os.path.join(os.path.dirname(__file__) , "data" , "ZincNyaQuotes.csv")
+QUOTES_DIR = os.path.join(os.path.dirname(__file__) , "data" , "ZincNyaQuotes.json")
 
 
 
