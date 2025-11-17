@@ -9,6 +9,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
+from rich.text import Text
 
 from config import QUOTES_DIR
 from utils.logger import logAction
@@ -19,25 +20,27 @@ from utils.logger import logAction
 class JsonOperation:
 
     # 读取 json 文件
-    async def loadQuotesFromJson():
+    def loadQuotesFromJson():
         if not os.path.exists(QUOTES_DIR):
-            await logAction(None , f"响应 /nya 指令尝试读取 {QUOTES_DIR}" , "不存在喵……" , "withOneChild")
-            return
+            JsonOperation.saveQuotesToJson(None)
+            return[]
         try:
             with open(QUOTES_DIR , "r" , encoding="utf-8") as f:
                 return json.load(f)
-        except Exception as e:
-            await logAction(None , f"响应 /nya 指令尝试打开 {QUOTES_DIR}" , f"失败喵—— {e}" , "withOneChild")
-            return
+        except:
+            JsonOperation.saveQuotesToJson(None)
+            return[]
         
     
-    async def saveQuotesToJson(data):
+    def saveQuotesToJson(data):
         try:
             with open(QUOTES_DIR , "w" , encoding="utf-8") as f:
-                json.dump(data , f , ensure_ascii=False , indent=2)
+                if data:
+                    json.dump(data , f , ensure_ascii=False , indent=2)
+                else:
+                    json.dump([] , f , ensure_ascii=False , indent=2)
             return True
-        except Exception as e:
-            await logAction(None , f"尝试保存 {QUOTES_DIR}" , f"失败喵—— {e}" , "withOneChild")
+        except:
             return False
         
 
@@ -61,11 +64,14 @@ class WeitghtedRandom:
         
 
 class ZincNyaQuotesUIManager:
-    def editQuoteUI(quoteObject):
+    async def editQuoteUI(quoteObject):
         os.system("cls" if os.name == "nt" else "clear")
         console = Console()
 
-        bottomBar = Panel("————编辑中喵————\n" , "^S Save    ^X Exit")
+        bottomBar = Panel(
+            Text("————编辑中喵————\n^S Save    ^X Exit" , justify="center"),
+            border_style = "cyan"
+        )
 
         buf = quoteObject["text"].replace("\\n" , "\n")
 
@@ -109,7 +115,7 @@ class ZincNyaQuotesUIManager:
 
 
 
-    def listQuoteUI(quotes):
+    async def listQuoteUI(quotes):
         console = Console()
         selected = 0
 
@@ -134,8 +140,8 @@ class ZincNyaQuotesUIManager:
                 if i == selected:
                     table.add_row(
                         f"[bold yellow]{i+1}[/]",
-                        f"[bold yellow]{text}[/]",
                         f"[bold yellow]{q['weight']}[/]"
+                        f"[bold yellow]{text}[/]",
                     )
                 else:
                     table.add_row(str(i+1) , text , str(q["weight"]))
@@ -159,7 +165,7 @@ class ZincNyaQuotesUIManager:
                 time.sleep(0.05)
             elif keyboard.is_pressed("delete"):
                 os.system("cls" if os.name == "nt" else "clear")
-                console.print(Panel(f"咱的第 {selected+1} 条语录……ご主人真的要删除吗喵……？ (（)y/n)"))
+                console.print(Panel(f"咱的第 {selected+1} 条语录……ご主人真的要删除吗喵……？ （y/n）"))
                 while True:
                     k = keyboard.read_key()
                     if k == "y":
@@ -169,14 +175,14 @@ class ZincNyaQuotesUIManager:
                         renderer()
                         break
                 time.sleep(0.1)
-            elif keyboard.is_pressed("ctrl+a"):
+            elif keyboard.is_pressed("+"):
                 newQuote = {"text": "" , "weight": 1}
-                ok = ZincNyaQuotesUIManager.editQuoteUI(newQuote)
+                ok = await ZincNyaQuotesUIManager.editQuoteUI(newQuote)
                 if ok:
                     quotes.append(newQuote)
                 renderer()
                 time.sleep(0.05)
-            elif keyboard.is_pressed("ctrl+x"):
+            elif keyboard.is_pressed("q"):
                 return quotes
 
 
@@ -190,13 +196,13 @@ async def execute(app , args):
     quotes = JsonOperation.loadQuotesFromJson()
 
     if editMatch:
-        newList = ZincNyaQuotesUIManager.listQuoteUI(quotes)
+        newList = await ZincNyaQuotesUIManager.listQuoteUI(quotes)
         JsonOperation.saveQuotesToJson(newList)
         await logAction("Console" , "/nya -e" , "语录已更新喵——" , "withOneChild")
         return
         
     if not quotes:
-        print("呜喵……？说不出话来……\nご主人様——快来修修你的群猫……")
+        print("呜喵……？说不出话来……\nご主人様——快来修修你的群猫……\n")
         return
         
     selectedQuote = WeitghtedRandom.cdfCalc(quotes)
