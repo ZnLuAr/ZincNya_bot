@@ -29,8 +29,8 @@ NYA_QUOTES = loadQuotes()
 async def sendNya(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not NYA_QUOTES:
         await update.message.reply_text(
-            f"呜喵……？说不出话来……\n"
-            f"ご主人様——快来修修你的群猫……"
+            "呜喵……？说不出话来……\n"
+            "ご主人様——快来修修你的群猫……"
             )
         return
     
