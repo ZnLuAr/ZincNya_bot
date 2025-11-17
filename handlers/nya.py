@@ -14,7 +14,7 @@ async def sendNya(update:Update , context:ContextTypes.DEFAULT_TYPE):
     if not quotes:
         await update.message.reply_text(
             "呜喵……？说不出话来……\n"
-            "ご主人様快来——咱找不到咱的脚本啦……"
+            "ご主人様快来——咱找不到咱的脚本啦……\n"
         )
         await logAction(None , "来自 Telegram 的 /nya" , "quotes 缺失喵……" , "withOneChild")
         return
@@ -23,7 +23,7 @@ async def sendNya(update:Update , context:ContextTypes.DEFAULT_TYPE):
     if not chosenQuote:
         await update.message.reply_text(
             "呜喵……？说不出话来……\n"
-            "ご主人様——快来修修你的群猫……"
+            "ご主人様——快来修修你的群猫……\n"
         )
         await logAction(None , "来自 Telegram 的 /nya" , "chosenQuote 缺失喵……" , "withOneChild")
 

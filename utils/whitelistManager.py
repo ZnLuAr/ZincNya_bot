@@ -1,6 +1,5 @@
 import os
 import json
-import asyncio
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 
