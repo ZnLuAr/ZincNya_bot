@@ -1,43 +1,34 @@
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
-import random
-import csv
 
 
-from config import *
+from config import QUOTES_DIR
+from utils.command.nya import JsonOperation , WeitghtedRandom
 from utils.logger import logAction
 
 
-def loadQuotes():
-    try:
-        with open(QUOTES_DIR, "r", encoding="utf-8") as f:
-            reader = csv.reader(f)
-            quotes = [row[0].strip() for row in reader if row]
-        return quotes
-    except Exception as e:
-        logAction("锌酱" , "呜喵？引用语录的时候出现问题了……" , f"报错在这里——{e}")
-        return ["呜喵……？\nご主人様——快来修修你的群猫……"]
-     
+# 响应来自 Telegram 的 /nya 指令，随机从语录中挑一句发送出去
+async def sendNya(update:Update , context:ContextTypes.DEFAULT_TYPE):
+    quotes = JsonOperation.loadQuotesFromJson()
 
-# 提前加载，避免每次命令都读文件
-NYA_QUOTES = loadQuotes()
-
-
-
-
-# 响应 /nya 指令，随机从锌猫语录中挑一句
-async def sendNya(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not NYA_QUOTES:
+    if not quotes:
+        await update.message.reply_text(
+            "呜喵……？说不出话来……\n"
+            "ご主人様快来——咱找不到咱的脚本啦……"
+        )
+        await logAction(None , "来自 Telegram 的 /nya" , "quotes 缺失喵……" , "withOneChild")
+        return
+    
+    chosenQuote = WeitghtedRandom.cdfCalc(quotes)
+    if not chosenQuote:
         await update.message.reply_text(
             "呜喵……？说不出话来……\n"
             "ご主人様——快来修修你的群猫……"
-            )
-        return
-    
+        )
+        await logAction(None , "来自 Telegram 的 /nya" , "chosenQuote 缺失喵……" , "withOneChild")
 
-    quote = random.choice(NYA_QUOTES)
-    quote = quote.replace("\\n" , "\n")
-    await update.message.reply_text(quote)
+    msg = chosenQuote.get("text" , "").replace("\\n" , "\n")
+    await update.message.reply_text(msg)
 
 
 
