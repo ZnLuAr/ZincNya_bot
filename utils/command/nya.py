@@ -19,22 +19,25 @@ from utils.logger import logAction
 class JsonOperation:
 
     # 读取 json 文件
-    def loadQuotesFromJson():
+    async def loadQuotesFromJson():
         if not os.path.exists(QUOTES_DIR):
-            return []
+            await logAction(None , f"响应 /nya 指令尝试读取 {QUOTES_DIR}" , "不存在喵……" , "withOneChild")
+            return
         try:
             with open(QUOTES_DIR , "r" , encoding="utf-8") as f:
                 return json.load(f)
-        except:
-            return []
+        except Exception as e:
+            await logAction(None , f"响应 /nya 指令尝试打开 {QUOTES_DIR}" , f"失败喵—— {e}" , "withOneChild")
+            return
         
     
-    def saveQuotesToJson(data):
+    async def saveQuotesToJson(data):
         try:
             with open(QUOTES_DIR , "w" , encoding="utf-8") as f:
                 json.dump(data , f , ensure_ascii=False , indent=2)
             return True
-        except:
+        except Exception as e:
+            await logAction(None , f"尝试保存 {QUOTES_DIR}" , f"失败喵—— {e}" , "withOneChild")
             return False
         
 
@@ -52,7 +55,7 @@ class WeitghtedRandom:
             c += w
             if r <= c:
                 return q
-            return quotes[-1]
+        return quotes[-1]
         
 
         
@@ -90,7 +93,7 @@ class ZincNyaQuotesUIManager:
                     if lines[-1]:
                         lines[-1] = lines[-1][0:-1]
                     else:
-                        if len(lines > 1):
+                        if len(lines) > 1:
                             lines.pop()
                     os.system("cls" if os.name == "nt" else "clear")
                     console.print(bottomBar)
@@ -128,14 +131,14 @@ class ZincNyaQuotesUIManager:
                         text = text[:20] + ">"
                 text = text.replace("\\n" , "\n")
 
-            if i == selected:
-                table.add_row(
-                    f"[bold yellow]{i+1}[/]",
-                    f"[bold yellow]{text}[/]",
-                    f"[bold yellow]{q['weight']}[/]"
+                if i == selected:
+                    table.add_row(
+                        f"[bold yellow]{i+1}[/]",
+                        f"[bold yellow]{text}[/]",
+                        f"[bold yellow]{q['weight']}[/]"
                     )
-            else:
-                table.add_row(str(i+1) , text , str(q["weight"]))
+                else:
+                    table.add_row(str(i+1) , text , str(q["weight"]))
 
             console.print(table , "\n")
         
@@ -151,7 +154,7 @@ class ZincNyaQuotesUIManager:
                 renderer()
                 time.sleep(0.05)
             elif keyboard.is_pressed("enter"):
-                quotes[selected]["collapsed"] = not quotes[selected]["conllapsed"]
+                quotes[selected]["collapsed"] = not quotes[selected]["collapsed"]
                 renderer()
                 time.sleep(0.05)
             elif keyboard.is_pressed("delete"):
@@ -196,10 +199,11 @@ async def execute(app , args):
         print("呜喵……？说不出话来……\nご主人様——快来修修你的群猫……")
         return
         
-    text = WeitghtedRandom.cdfCalc(quotes)
-    text = text.replace("\\n" , "\n")
-
+    selectedQuote = WeitghtedRandom.cdfCalc(quotes)
+    text = selectedQuote.replace("\\n" , "\n")
     print(text , "\n")
+
+
 
 
 def getHelp():
