@@ -1,6 +1,6 @@
 import re
 
-from utils.whitelistManager import userOperation
+from utils.whitelistManager import userOperation , whitelistUIRenderer
 from utils.logger import logAction
 
 
@@ -98,111 +98,6 @@ async def execute(app , args):
 
     print("もー、参数错误喵——")
     print("使用 '/help whitelist' 查看 /whitelist 的详细用法哦——\n")
-
-
-
-
-def whitelistUIRenderer(whitelistData: dict):
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.table import Table
-    import keyboard
-    import os
-    import time
-
-    console = Console()
-
-    entries = []
-    for uid , data in whitelistData.get("allowed" , {}).items():
-        entries.append(
-            {
-                "uid": uid,
-                "status": "Allowed",
-                "comment": data.get("comment" , ""),
-                "collapsed": True
-            }
-        )
-
-    for uid , data in whitelistData.get("suspended" , {}).items():
-        entries.append(
-            {
-                "uid": uid,
-                "status": "Suspended",
-                "comment": data.get("comment" , ""),
-                "collapsed": True
-            }
-        )
-    
-    entries.sort(key=lambda x: (x["status"] , x["uid"]))
-
-    selected = 0
-
-    def render():
-        os.system("cls" if os.name == "nt" else "clear")
-
-        table = Table(title="正在查看白名单喵——\n（↑↓ 移动，Enter 展开/折叠，q 退出）")
-        table.add_column("No." , justify="right")
-        table.add_column("UID" , justify= "left")
-        table.add_column("状态" , justify="left")
-        table.add_column("备注" , justify="left")
-
-
-        for i , e in enumerate(entries):
-            commentPreview = ""
-            if e["comment"].strip() == "":
-                commentPreview = ""
-            else:
-                if e["collapsed"]:
-                    # 过长的备注只显示 “ > ”，较短的备注直接显示
-                    preview = e["comment"]
-                    if len(preview) > 15:
-                        commentPreview = ">"
-                    else:
-                        commentPreview = preview
-                else:
-                    # 展开状态完整显示
-                    commentPreview = e["comment"]
-            
-            if i == selected:
-                # 给选中项加高亮
-                table.add_row(
-                    f"[bold yellow]{i+1}[/]",
-                    f"[bold yellow]{e['uid']}[/]",
-                    f"[bold yellow]{e['status']}[/]",
-                    f"[bold yellow]{commentPreview}[/]"
-                )
-            else:
-                table.add_row(
-                    str(i+1),
-                    e["uid"],
-                    e["status"],
-                    commentPreview
-                )
-
-        console.print(table , "\n\n")
-
-
-    # UI渲染函数主循环
-    render()
-
-    while True:
-        if keyboard.is_pressed("down"):
-            selected = min(selected + 1, len(entries) - 1)
-            render()
-            time.sleep(0.15)
-
-        elif keyboard.is_pressed("up"):
-            selected = max(selected - 1, 0)
-            render()
-            time.sleep(0.15)
-
-        elif keyboard.is_pressed("enter"):
-            entries[selected]["collapsed"] = not entries[selected]["collapsed"]
-            render()
-            time.sleep(0.15)
-
-        elif keyboard.is_pressed("q"):
-            break
 
 
 
