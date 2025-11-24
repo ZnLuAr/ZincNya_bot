@@ -7,7 +7,6 @@ from utils.logger import logAction
 from utils.whitelistManager import (
     loadWhitelistFile,
     whitelistUIRenderer,
-    checkChatAvailable,
     collectWhitelistViewModel,
 )
 
@@ -168,6 +167,8 @@ def getHelp():
             "向一个用户发送消息：/send -id '1234567' -t 'Hello world'\n"
             "向聊天中发送消息并@用户：/send -id '-1234567' -a 'userName' -t 'Do you know I'm a bot?'\n"
             "向多个用户发送消息：/send -id '1234567' '1234568' -t '👀'"
+            "进入与指定用户的聊天界面：/send -c '1234567'\n"
+            "进入与用户的聊天界面，但弹出列表以供选择：/send -c"
         ),
 
     }
