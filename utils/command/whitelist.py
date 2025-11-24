@@ -1,5 +1,7 @@
 import re
+from telegram import Bot
 
+from handlers.cli import parseArgsTokens
 from utils.whitelistManager import userOperation , whitelistUIRenderer
 from utils.logger import logAction
 
@@ -8,24 +10,41 @@ from utils.logger import logAction
 
 async def execute(app , args):
 
-    joined = " ".join(args)
+    bot: Bot = app.bot
 
-    addMatch = re.search(r'--?(?:a|add)\s+(?:"([^"]+)"|(\S+))', joined)
-    delMatch = re.search(r'--?(?:d|del)\s+(?:"([^"]+)"|(\S+))', joined)
-    susMatch = re.search(r'--?(?:s|sus)\s+(?:"([^"]+)"|(\S+))', joined)
-    listMatch = re.search(r'--?(?:l|list)', joined)
-    commentMatch = re.search(r'--?(?:c|comment)\s+(?:"([^"]+)"|(\S+))', joined)
+    parsed = {
+        "add": None,
+        "del": None,
+        "sus": None,
+        "list": None,
+        "comment": None
+    }
 
-    def _extract(match):
-        if not match:
-            return None
-        return match.group(1) or match.group(2)
+    parsed = parseArgsTokens(parsed , args)
     
-    addedUser = _extract(addMatch)
-    deletedUser = _extract(delMatch)
-    suspendedUser = _extract(susMatch)
-    commentTarget = _extract(commentMatch)
+    addedTarget = parsed["add"]
+    deletedTarget = parsed["del"]
+    suspendedTarget = parsed["sus"]
+    commentTarget = parsed["comment"]
+    listMatch = parsed["list"]
 
+    # 参数验证
+    # 当四个参数中出现超过一个（设定的规则上不能同时使用）时，报错并返回
+    if sum(bool(x) for x in [
+        addedTarget,
+        deletedTarget,
+        suspendedTarget,
+        listMatch
+    ]) > 1:
+        print("もー、/whitelist 只能有一种参数喵——\n")
+        return
+    
+
+        
+
+
+
+'''
     if sum(bool(x) for x in [addedUser , deletedUser , suspendedUser , listMatch]) > 1:
         print("もー、/whitelist 只能有一种参数喵——\n")
         return
@@ -98,7 +117,7 @@ async def execute(app , args):
 
     print("もー、参数错误喵——")
     print("使用 '/help whitelist' 查看 /whitelist 的详细用法哦——\n")
-
+'''
 
 
 

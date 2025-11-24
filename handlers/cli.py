@@ -57,7 +57,8 @@ def parseArgsTokens(parsed: dict , tokens: list[str]):
 
     '''
     通用参数解析函数
-    接受来自各指令模块的 parsed:dict
+
+    接受来自各指令模块的 parsed:dict 
     原始 parsed 形如 {"at": None, "text": None, "id": [], "chat":None}
     最后返回填充了各个参数值的 parsed
 
