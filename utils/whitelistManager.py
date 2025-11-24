@@ -1,7 +1,11 @@
 import os
 import json
-from telegram import Update
+import asyncio
+from rich.table import Table
+from rich.console import Console
+from telegram import Update , Bot
 from telegram.ext import CommandHandler, ContextTypes
+from telegram.error import Forbidden , BadRequest
 
 from config import WHITELIST_DIR
 from utils.logger import logAction
@@ -9,7 +13,32 @@ from utils.logger import logAction
 
 
 
-# 内部函数，面向 Whitelist.json 的操作
+# =============================================================================
+'''
+内部函数，面向 data/whitelist.json 的操作
+包含 ensureWhitelistFile、loadWhitelistFile、saveWhitelistFile 三个功能
+
+当涉及到对 whitelist.json 的操作时，先调用 ensureWhitelistFile 检查文件是否存在。
+  若路径不存在则初始化为默认格式：
+    {
+        "allowed": {},
+        "suspended": {}
+    }
+
+loadWhitelistFile() 用于读取并返回白名单文件的  *完整字典结构* ，形如：
+
+    {
+        "allowed": {
+            "123": {"comment": "..."}
+        },
+        "suspended": {}
+    }
+
+saveWhitelistFile() 用于保存完整的白名单结构到 whitelist.json
+    ** data 必须是一个包含 allowed / suspended 字段的字典 **
+
+'''
+# =============================================================================
 
 def ensureWhitelistFile():
     os.makedirs(os.path.dirname(WHITELIST_DIR) , exist_ok=True)
@@ -18,7 +47,7 @@ def ensureWhitelistFile():
             "allowed": {},
             "suspended": {}
         })
-            
+
 
 def loadWhitelistFile():
     ensureWhitelistFile()
@@ -33,17 +62,72 @@ def saveWhitelistFile(data):
 
 
 
-# 外部函数，面向命令模块或 bot 调用
+# =============================================================================
+'''
+外部函数，面向命令模块和 Bot
+包含 whetherAuthorizedUser、userOperation 两个功能
+
+whetherAuthorizedUser() 接受输入 userID: int | str ，**并返回一个 bool 值**
+    输入函数的参数，无论是 int 还是 str，最终都按照字符串进行比较。
+
+userOperation() 是统一的白名单操作入口。
+    函数分别接受
+        · 操作的类型（operation: str）
+        · 对象 uuid（userID: str | None），默认为 None
+        · 对象备注（comment: str），默认为 None
+
+    operation 可能的取值有：
+        - "addUser":        添加用户到 allowed
+        - "deleteUser":     将用户从 allowed 中移除
+        - "suspendUser":    将用户从 allowed 移入 suspended，体现为用户权限被挂起
+        - "listUser":       返回完整的白名单结构（ -> dict ）
+        - "setComment":     添加 / 修改用户备注
+
+    函数的返回值视操作而定：
+        - bool: True / False    表示操作是否成功
+        - dict                  在 listUser 时返回白名单完整结构
+
+'''
+# =============================================================================
+
 def whetherAuthorizedUser(userID: int | str) -> bool:
+    '''
+    whetherAuthorizedUser() 接受输入 userID: int | str ，
+    
+    **并返回一个 bool 值**
+    
+    输入函数的参数，无论是 int 还是 str，最终都按照字符串进行比较。
+    '''
+
     data = loadWhitelistFile()
     userID = str(userID)
-    return userID in data["allowed"] and userID not in data["suspended"]
+    return userID in data.get("allowed" , {}) and userID not in data.get("suspended" , {})
 
 
 
 
 def userOperation(operation , userID:str|None=None , comment=None) -> bool | dict:
-    data =loadWhitelistFile()
+    '''
+    userOperation() 是统一的白名单操作入口。
+        函数分别接受
+            - 操作的类型（operation: str）
+            - 对象 uuid（userID: str | None），默认为 None
+            - 对象备注（comment: str），默认为 None
+
+        operation 可能的取值有：
+            - "addUser":        添加用户到 allowed
+            - "deleteUser":     将用户从 allowed 中移除
+            - "suspendUser":    将用户从 allowed 移入 suspended，体现为用户权限被挂起
+            - "listUser":       返回完整的白名单结构（ -> dict ）
+            - "setComment":     添加 / 修改用户备注
+
+        函数的返回值视操作而定：
+            - bool: True / False    表示操作是否成功
+            - dict                  在 listUser 时返回白名单完整结构
+
+    '''
+
+    data = loadWhitelistFile()
     userID = str(userID) if userID else None
 
     match operation:
@@ -83,6 +167,106 @@ def userOperation(operation , userID:str|None=None , comment=None) -> bool | dic
         
         case _:
             raise ValueError(f"未知的操作类型喵：{operation}")
+
+
+
+
+# =============================================================================
+'''
+白名单可用性检查
+包含 whetherAuthorizedUser、userOperation 两个功能
+
+whetherAuthorizedUser() 接受输入 userID: int | str ，**并返回一个 bool 值**
+    输入函数的参数，无论是 int 还是 str，最终都按照字符串进行比较。
+
+userOperation() 是统一的白名单操作入口。
+    函数分别接受
+        · 操作的类型（operation: str）
+        · 对象 uuid（userID: str | None），默认为 None
+        · 对象备注（comment: str），默认为 None
+
+    operation 可能的取值有：
+        - "addUser":        添加用户到 allowed
+        - "deleteUser":     将用户从 allowed 中移除
+        - "suspendUser":    将用户从 allowed 移入 suspended，体现为用户权限被挂起
+        - "listUser":       返回完整的白名单结构（ -> dict ）
+        - "setComment":     添加 / 修改用户备注
+
+    函数的返回值视操作而定：
+        - bool: True / False    表示操作是否成功
+        - dict                  在 listUser 时返回白名单完整结构
+
+'''
+# =============================================================================
+
+async def checkChatAvailable(bot: Bot , uid: str):
+    try:
+        await bot.get_chat(uid)
+        return True
+    except (Forbidden , BadRequest) as e:
+        return e
+    except Exception:
+        return False
+    
+
+async def collectWhitelistViewModel(bot: Bot):
+    
+    whitelistData = loadWhitelistFile()
+    entries = []
+
+    raw = []
+    for uid , obj in whitelistData.get("allowed" , {}).items():
+        raw.append((uid , "Allowed" , obj.get("comment" , "")))
+
+    for uid , obj in whitelistData.get("suspended" , {}).items():
+        raw.append((uid , "Suspended" , obj.get("comment" , "")))
+
+    uids = [x[0] for x in raw]
+    results = await asyncio.gather(*[
+        checkChatAvailable(bot , uid) for uid in uids
+    ])
+
+    for (uids , status , comment) , available in zip(raw , results):
+        entries.append({
+            "uid": uid,
+            "status": status,
+            "comment": comment,
+            "available": available,
+        })
+
+    return entries
+
+
+def whitelistUIRenderer(entries: list):
+
+    console = Console()
+
+    table = Table(title="正在查看白名单喵——\n")
+    table.add_column("No." , justify="right")
+    table.add_column("UID" , justify="left")
+    table.add_column("状态" , justify="left")
+    table.add_column("备注" , justify="left")
+
+    for i , e in enumerate(entries , 1):
+        uid = e["uid"]
+        colour = "green" if e["available"] else "grey50"
+        uidRendered = f"[{colour}]{uid}[/]"
+
+        comment = e["comment"] or ""
+        if comment.strip() == "":
+            commentPreview = ""
+        else:
+            commentPreview = comment[:15] + ("..." if len(comment) > 15 else "")
+
+        table.add_row(
+            str(i),
+            uidRendered,
+            e["status"],
+            commentPreview
+        )
+
+    console.print(table , "\n\n")
+
 
 
 
