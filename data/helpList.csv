@@ -1,6 +1,0 @@
-command , description
-
-"/help" , "提供 ZincNya bot 命令的帮助信息"
-"/send" , "在控制台中向指定对象发送一条消息"
-"/shutdown" , "正确且安全地让锌喵去睡觉"
-"/whitelist" , "管理 ZincNya bot 使用的白名单"

@@ -17,10 +17,13 @@ def getTodayLogPath():
 
     # 找出今天已经有多少个日志
     existingLogs = [
-        f for f in os.listdir(LOG_DIR) if f.startswith(f"log_{today}")
+        f for f in os.listdir(LOG_DIR)
+        if f.startswith(f"log_{today}")
     ]
+
     index = len(existingLogs) + 1    # 在已有的日志数量上+1
     logFileName = LOG_FILE_TEMPLATE.format(date=today , index=index)
+    
     return os.path.join(LOG_DIR , logFileName)
 
 

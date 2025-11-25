@@ -1,3 +1,65 @@
+"""
+handlers/cli.py
+
+用于处理来自 bot.py 控制台输入的指令解析与指令路由的模块。
+
+模块可分为两部分：命令读取/分发（handleConsoleCommand）与参数解析（parseArgsTokens）。
+
+
+================================================================================
+命令读取/分发部分：handleConsoleCommand()
+
+handleConsoleCommand() 负责解析 bot.py 传入的控制台字符串，并根据用户输入的指令名，
+动态加载位于 config.COMMAND_DIR 下的对应模块（如 /whitelist 对应 whitelist.py）。
+
+函数的基本流程如下：
+    1. 使用 shlex.split() 将控制台输入拆分为 token 列表
+    2. 将首个 token 视为指令名（去除开头的 '/'）
+    3. 按路径构造模块名称并判断文件是否存在
+    4. 使用 importlib.import_module() 导入对应指令模块
+    5. 若模块中定义了 execute(app, args)，则调用并异步执行
+    6. 将执行中发生的错误交由 logAction 记录日志
+
+若用户输入的指令不存在或模块加载失败，将以友好的提示反馈到控制台。
+
+
+================================================================================
+参数解析部分：parseArgsTokens()
+
+parseArgsTokens() 是通用参数解析器，供各指令模块调用。
+    它接受输入：
+    - parsed: dict        各指令模块定义的“参数结构模板”
+    - tokens: list[str]   需要解析的 token 序列
+    - aliasMap: dict      （可选）缩写参数映射表，如 {'a': 'add'}
+
+原始 parsed 通常形如：
+    {
+        "at": None,
+        "id": [],
+        "text": None,
+        "chat": None
+    }
+最终返回填充了值的 parsed 字典。
+
+支持解析的输入格式包括：
+    - -f value1 value2
+    - --flag value
+    - --flag=value
+    - -id 123 456 789
+    并自动忽略非以“-”开头的 token。
+
+关于参数解析行为的要点：
+    - 若 aliasMap 存在且输入为缩写（如 -a），会被替换为对应的全称键（如 add）
+    - 若 parsed[key] 是 list，则追加读取到的多个值
+    - 若 parsed[key] 是其他类型，则仅接收第一个值
+    - 若参数未显式带值，会返回 ["NoValue"] 作为占位
+
+该解析器是所有命令模块共享的基础能力，使得 Bot 的指令系统能够以统一、可扩展的方式处理各种输入。
+"""
+
+
+
+
 from telegram import Bot
 import shlex
 import importlib
@@ -43,6 +105,8 @@ async def handleConsoleCommand(app , commandLine: str):
     if hasattr(module , "execute"):
         try:
             result = await module.execute(app , commandArgs)
+            if result == "SHUTDOWN":
+                return "SHUTDOWN"
             if inspect.isawaitable(result):
                 await result
         except Exception as e:
@@ -53,22 +117,24 @@ async def handleConsoleCommand(app , commandLine: str):
 
 
 
-def parseArgsTokens(parsed: dict , tokens: list[str]):
+def parseArgsTokens(parsed: dict , tokens: list[str] , aliasMap: dict|None=None):
 
     '''
     通用参数解析函数
 
-    接受来自各指令模块的 parsed:dict 
-    原始 parsed 形如 {"at": None, "text": None, "id": [], "chat":None}
+    接受来自各指令模块的 parsed:dict
+
+    原始 parsed 形如：
+        {"at": None, "text": None, "id": [], "chat":None}
+
     最后返回填充了各个参数值的 parsed
+
 
     支持格式：
       -f value1 value2 value3
       --flag value
       --flag=value
       -id 123 456 789
-      -c 1234 任意备注文本 不用引号
-      -t "带空格的文本"
 
     非参数（不以 '-' 开头的 token）会被忽略。
     '''
@@ -83,6 +149,10 @@ def parseArgsTokens(parsed: dict , tokens: list[str]):
         if not tok.startswith("-"):
             i += 1
             continue
+
+        # 尝试将输入的 key 对应全称（若输入的是正确的缩写）
+        if aliasMap and key in aliasMap:
+            key = aliasMap[key]
 
         # 当 key 不在各个指令所定义的 parsed 当中时
         if key not in parsed:

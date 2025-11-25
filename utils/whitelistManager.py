@@ -1,10 +1,12 @@
-'''
+"""
 utils/whitelistManager.py
+
 是用于响应外部对 data/whitelist.json 的操作（如调用、添加项）并对后者进行管理的模块
+
 模块大致可分为两部分——内部函数与外部函数
 
 
-
+================================================================================
 内部函数，面向 data/whitelist.json 的操作
 包含 ensureWhitelistFile、loadWhitelistFile、saveWhitelistFile 三个功能
 
@@ -29,7 +31,7 @@ saveWhitelistFile() 用于保存完整的白名单结构到 whitelist.json
     ** data 必须是一个包含 allowed / suspended 字段的字典 **
 
 
-
+================================================================================
 外部函数，面向命令模块和 Bot
 包含：
     whetherAuthorizedUser、userOperation、
@@ -91,7 +93,7 @@ whitelistUIRenderer() 将 collectWhitelistViewModel 生成的 entries 渲染为 
 
     函数接受通常来自 collectWhitelistViewModel() 的 entries: list
 
-'''
+"""
 
 
 
@@ -294,12 +296,13 @@ async def collectWhitelistViewModel(bot: Bot):
     for uid , obj in whitelistData.get("suspended" , {}).items():
         raw.append((uid , "Suspended" , obj.get("comment" , "")))
 
+    # 从一堆 ('<ID>' , 'Status' , <Comment>)中取得前面的 IDs
     uids = [x[0] for x in raw]
     results = await asyncio.gather(*[
         checkChatAvailable(bot , uid) for uid in uids
     ])
 
-    for (uids , status , comment) , available in zip(raw , results):
+    for (uid , status , comment) , available in zip(raw , results):
         entries.append({
             "uid": uid,
             "status": status,
@@ -332,7 +335,7 @@ def whitelistUIRenderer(entries: list):
 
     for i , e in enumerate(entries , 1):
         uid = e["uid"]
-        colour = "green" if e["available"] else "grey50"
+        colour = "wheat1" if e["available"] is True else "grey70"
         uidRendered = f"[{colour}]{uid}[/]"
 
         comment = e["comment"] or ""
