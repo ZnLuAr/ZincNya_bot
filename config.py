@@ -6,7 +6,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN" , "***REMOVED***")
 
 
 
-
 # /findsticker 功能相关常量
 DATA_DIR = "data"
 DELETE_DELAY = 180  # 秒

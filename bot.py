@@ -19,6 +19,11 @@ async def consoleListener(app):
     loop = asyncio.get_event_loop()
 
     while True:
+        # 如果有其它功能需要夺取交互权，则转让输入权给内层的其它功能
+        if app.bot_data["state"]["interactiveMode"]:
+            await asyncio.sleep(0.1)
+            continue
+
         # 在异步环境中读取标准输入
         command = await loop.run_in_executor(None , sys.stdin.readline)
         command = command.strip()
@@ -29,7 +34,7 @@ async def consoleListener(app):
         # 调用 CLI 处理器
         commandResult = await handleConsoleCommand(app , command)
         if commandResult == "SHUTDOWN":
-            break
+            return "SHUTDOWN"
             
 
 
@@ -38,6 +43,12 @@ async def main():
 
     # 初始化应用
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    # 定义 bot 的一些运行状况，挂载在 app.bot_data 上
+    app.bot_data["state"] = {
+        "interactiveMode": False            # 是否暂时由某个模块接管控制台输入
+    }
+
     # 初始化日志
     initLogger()
     loadHandlers(app)
@@ -52,11 +63,11 @@ async def main():
     consoleTask = asyncio.create_task(consoleListener(app))
 
     # 等待控制台任务结束，即 /shutdown 时
-    await consoleTask
-
-    await app.updater.stop()    
-    await app.stop()
-    await app.shutdown()
+    result = await consoleTask
+    if result == consoleTask == "SHUTDOWN":
+        await app.updater.stop()    
+        await app.stop()
+        await app.shutdown()
 
 
 

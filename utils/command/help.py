@@ -72,7 +72,7 @@ def getHelp():
 
         "name": "/help",
 
-        "description": "获取 ZincNya bot 的命令帮助喵",
+        "description": "提供 ZincNya bot 命令的帮助信息",
 
         "usage": "/help [<command>]",
 

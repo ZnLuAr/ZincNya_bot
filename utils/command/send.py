@@ -1,5 +1,6 @@
 import asyncio
 from telegram import Bot
+from telegram.ext import ApplicationBuilder
 from telegram.error import Forbidden , BadRequest
 
 from handlers.cli import parseArgsTokens
@@ -21,10 +22,18 @@ async def execute(app , args):
         "at": None,
         "text": None,
         "id": [],
-        "chat": None
+        "chat": None,
     }
 
-    parsed = parseArgsTokens(parsed , args)
+    # Send 中将缩写对应全称的字典
+    argAlias = {
+        "a": "at",
+        "t": "text",
+        "i": "id",
+        "c": "chat",
+    }
+
+    parsed = parseArgsTokens(parsed , args , argAlias)
     
     atUser = parsed["at"]
     text = parsed["text"]
@@ -33,7 +42,7 @@ async def execute(app , args):
 
     # 参数验证
     if screenChatID is not None:
-        await chatScreen(bot , screenChatID)
+        await chatScreen(app , bot , screenChatID)
         return
 
     if not text or text == "NoValue":
@@ -68,8 +77,11 @@ async def sendMsg(bot: Bot , idList , atUser , text):
 
 
 
-async def chatScreen(bot: Bot , screenChatID: str):
+async def chatScreen(app , bot: Bot , screenChatID: str):
     # 进入与指定 chatID 的用户/群聊的本地交互聊天界面
+
+    # 暂停外层 CLI 的输入读取
+    app.bot_data["state"]["interactiveMode"] = True
 
     # 如果用户仅输入 -c（未指定 ID），弹出白名单列表供选择
     if screenChatID == "NoValue":
@@ -137,6 +149,10 @@ async def chatScreen(bot: Bot , screenChatID: str):
 
     finally:
         stopFlag.set()
+        
+        # 恢复外层 CLI 的命令读取
+        app.bot_data["state"]["interactiveMode"] = False
+
         await listenerTask
 
 
@@ -156,7 +172,7 @@ def getHelp():
 
         "name": "/send",
     
-        "description": "向一个或多个会话发送文本消息喵",
+        "description": "在控制台中向指定对象发送一条消息",
     
         "usage": (
             "/send [-c/--chat (chatID)] [-a/--at <userName>] [-id/--id <id1 , id2 ,...>] [-t/--text <text>]\n"
