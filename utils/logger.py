@@ -58,17 +58,17 @@ async def logAction(user , action , result , child , writeInLog=True):
 
     match child:
         case "False":
-            consoleText = f"[{timestamp}] @{userName}：{action}\n               └─┤ {result}\n" 
+            consoleText = f"[{timestamp}] @{userName}：{action}\n               └─┤ {result}\n\n" 
         case "withChild":
             consoleText = f"[{timestamp}] @{userName}：{action}\n               └─┤ {result}"
         case "withOneChild":
-            consoleText = f"[{timestamp}] @{userName}：{action}\n               └─┤ {result}\n"
+            consoleText = f"[{timestamp}] @{userName}：{action}\n               └─┤ {result}\n\n"
         case "childWithChild":
             consoleText = f"                   └─┤ {action}\n                         └─┤ {result}"
         case "lastChildWithChild":
-            consoleText = f"                   └─┤ {action}\n                         └─┤ {result}\n"
+            consoleText = f"                   └─┤ {action}\n                         └─┤ {result}\n\n"
         case "lastChild":
-            consoleText = f"                   └─┤ {result}\n"    
+            consoleText = f"                   └─┤ {result}\n\n"    
         case "True":
             consoleText = f"                   └─┤ {result}"
 

@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
 
 
-from telegram.ext import ApplicationBuilder
+from telegram.ext import (
+    ApplicationBuilder,
+    MessageHandler,
+    filters,
+)
 import asyncio
 import sys
 
@@ -20,7 +24,7 @@ async def consoleListener(app):
 
     while True:
         # 如果有其它功能需要夺取交互权，则转让输入权给内层的其它功能
-        if app.bot_data["state"]["interactiveMode"]:
+        if app.bot_data["state"]["interactiveMode"] is not False:
             await asyncio.sleep(0.1)
             continue
 
@@ -46,14 +50,30 @@ async def main():
     
     # 定义 bot 的一些运行状况，挂载在 app.bot_data 上
     app.bot_data["state"] = {
-        "interactiveMode": False            # 是否暂时由某个模块接管控制台输入
+        "interactiveMode": False,            # 是否暂时由某个模块接管控制台输入
+        "messageQueue": asyncio.Queue()
     }
 
     # 初始化日志
     initLogger()
     loadHandlers(app)
 
+
+    # ========================================================================
+    async def messageCollector(update , context):
+        message = update.message
+        if message:
+            await context.application.bot_data["state"]["messageQueue"].put(message)
+
     
+    def loadMessageCollector(app):
+        handler = MessageHandler(filters.ALL , messageCollector)
+        app.add_handler(handler)
+    # ========================================================================
+
+    
+    loadMessageCollector(app)
+
     print("ZincNya Bot——\n喵的一声，就启动啦——\n")
 
     await app.initialize()
