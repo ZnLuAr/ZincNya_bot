@@ -1,6 +1,7 @@
 import asyncio
 from telegram import Bot
-from telegram.ext import ApplicationBuilder
+from aioconsole import ainput
+from telegram.ext import ApplicationBuilder , MessageHandler , filters
 from telegram.error import Forbidden , BadRequest
 
 from handlers.cli import parseArgsTokens
@@ -58,6 +59,40 @@ async def execute(app , args):
 
 
 
+async def chatIDList(app , bot):
+    print("\n存下来的 UID 列表喵——\n")
+
+    entries = await collectWhitelistViewModel(bot)
+    whitelistUIRenderer(entries)
+
+    print("输入编号来选择目标喵……或者直接输入ID也行——\n")
+
+    while True:
+        userInput = await asyncio.to_thread(input , ">> ")
+
+        i = userInput.strip()
+        if not i:
+            print("退出喵——\n")
+            return
+    
+        # 若输入数字编号
+        if i.isdigit():
+            idx = int(i)
+            if 1 <= idx <= len(entries):
+                app.bot_data["state"]["interactiveMode"] = False
+                return str(entries[idx-1]["uid"])
+            else:
+                print("呜喵……？没有这个编号哦……\n")
+                continue
+
+        if i.lstrip("-").isdigit():
+            return str(i)
+        
+        print("ムリー！这样输入是不行的喵……再试试吧——\n")
+
+
+
+
 async def sendMsg(bot: Bot , idList , atUser , text):
     # 执行发送信息给<chatID>
     for chatID in idList:
@@ -77,93 +112,75 @@ async def sendMsg(bot: Bot , idList , atUser , text):
 
 
 
-async def chatScreen(app , bot: Bot , screenChatID: str):
+async def chatScreen(app , bot: Bot , targetChatID: str):
     # 进入与指定 chatID 的用户/群聊的本地交互聊天界面
 
     # 暂停外层 CLI 的输入读取
-    app.bot_data["state"]["interactiveMode"] = True
+    app.bot_data["state"]["interactiveMode"] = "SendChatScreenMode"
 
     # 如果用户仅输入 -c（未指定 ID），弹出白名单列表供选择
-    if screenChatID == "NoValue":
-        screenChatID = await chatIDList(bot)
+    if targetChatID == "NoValue":
+        targetChatID = await chatIDList(app , bot)
 
-    if not screenChatID:
+    if not targetChatID:
+        # 恢复外层 CLI 的命令读取
+        app.bot_data["state"]["interactiveMode"] = False
         return
     
-    print(
-        "\n已进入聊天界面\n",
-        f"与 {screenChatID} 的实时聊天已连接",
-        "发送文字即可直接发出；输入 ':q' 退出\n",
-        "=" * 60,
-    )
+    queue: asyncio.Queue = app.bot_data["state"]["messageQueue"]
 
 
-    async def chatListener(bot: Bot , chatID: str , stopFlag: asyncio.Event):
+    async def receiverLoop(bot: Bot , chatID: str):
     # 后台协程：持续监听对方发来的消息并展示，形成一个类聊天窗口的界面
+    # （其实就是不断从全局队列中读取消息，
+    # 若消息属于当前聊天对象，则打印出来
 
-        lastMsgID = None
+        while app.bot_data["state"]["interactiveMode"] == "SendChatScreenMode":
 
-        while not stopFlag.is_set():
-            try:
-                updates = await bot.get_updates()
+            msg = await queue.get()
 
-                for u in updates:
-                    msg = u.message
-                    if not msg:
-                        continue
-                    if str(msg.chat.id) != str(chatID):
-                        continue
+            if str(msg.chat.id) != str(targetChatID):
+                continue
+            
+            if msg.from_user and not msg.from_user.is_bot:
+                print(f"[{msg.from_user.first_name}]: {msg.text}")
 
-                    if lastMsgID is None or msg.message_id > lastMsgID:
-                        lastMsgID = msg.message_id
-                        if msg.from_user and not msg.from_user.is_bot:
-                            print(f"[{msg.from_user.first_name}]: {msg.text}")
-        
-            except Exception:
-                pass
 
-            await asyncio.sleep(0.5)
-
-    # 启动控制台监听
-    stopFlag = asyncio.Event()
-    listenerTask = asyncio.create_task(chatListener(bot , screenChatID , stopFlag))
-
+    receiverTask = asyncio.create_task(receiverLoop(bot , targetChatID))
 
     # 主循环，从控制台读取输入并发送消息
     try:
+
+        print(
+            "\n已进入聊天界面喵",
+            f"\n与 {targetChatID} 的实时聊天已连接",
+            "\n发送文字即可直接发出；输入 ':q' 退出\n",
+            "=" * 64,
+            "\n\n"
+        )
+
         while True:
-            userInput = await asyncio.to_thread(input)
+            userInput = await ainput(">> ")
 
             if userInput.strip() == ":q":
                 print("=" * 60, "\n退出聊天界面喵\n")
-                stopFlag.set()
                 break
 
-        try:
-            await bot.send_message(chat_id=screenChatID , text=userInput)
-            print(f"> {userInput}")
-        except Forbidden:
-            print(f"被 Forbidden 了……这可能是对方还没有跟咱开始聊天的缘故哦")
-        except Exception as e:
-            print(f"呜喵……发送失败了喵…… | {e}")
+            try:
+                await bot.send_message(chat_id=targetChatID , text=userInput)
+            except Forbidden:
+                print(f"被 Forbidden 了……这可能是对方还没有跟咱开始聊天的缘故哦")
+            except Exception as e:
+                print(f"呜喵……发送失败了喵…… | {e}\n")
+
 
     finally:
-        stopFlag.set()
-        
+        app.bot_data["state"]["interactiveMode"] = False
+        receiverTask.cancel()
+
         # 恢复外层 CLI 的命令读取
         app.bot_data["state"]["interactiveMode"] = False
 
-        await listenerTask
-
-
-
-
-async def chatIDList(bot):
-    whitelist = loadWhitelistFile()
-    print("\n存下来的 UID 列表喵——\n")
-
-    entries = await collectWhitelistViewModel(bot)
-    whitelistUIRenderer(entries)
 
 
 
