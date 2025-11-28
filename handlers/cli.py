@@ -74,8 +74,13 @@ from utils.logger import logAction
 
 async def handleConsoleCommand(app , commandLine: str):
     '''
-    解析自主文件 bot.py 传来的控制台输入
+    解析自主文件 bot.py 传来的控制台输入。
     如若是有效的命令，则分发给对应模块。
+
+        值得注意的是，所有指令模块都应该有有效的 execute()，
+        这相当于该模块的入口函数。
+        一般来说，它应该包含可用的 parsed:dict，与主要的业务逻辑。
+            当读取不到 execute() 时，指令模块将不能被找到并正常运行。
 
     cli.py 最后向主文件传回命令执行的结果。
     '''
@@ -125,16 +130,21 @@ def parseArgsTokens(parsed: dict , tokens: list[str] , aliasMap: dict|None=None)
     接受来自各指令模块的 parsed:dict
 
     原始 parsed 形如：
-        {"at": None, "text": None, "id": [], "chat":None}
+        {"at": None, "text": None, "id": [], "chat": None}
 
+    进行分词，形成新的参数列表（tokens），把带“-”的和后一个不带“-”的元素对应，
     最后返回填充了各个参数值的 parsed
 
+        另外，还支持解析简写的参数，这主要通过各指令模块中的 argAlias:dict 实现
+            - argAlias 形如：
+                {"a": "at", "t": "text", "i": "id", "c": "chat"}
 
-    支持格式：
-      -f value1 value2 value3
-      --flag value
-      --flag=value
-      -id 123 456 789
+    最终，解析器所能支持的格式包含：
+
+        - -f value1 value2 value3
+        - --flag value 
+        - --flag=value
+        - -id 123 456 789
 
     非参数（不以 '-' 开头的 token）会被忽略。
     '''
