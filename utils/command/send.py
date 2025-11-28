@@ -1,17 +1,87 @@
+"""
+utils/command/send.py
+
+用于实现 /send 命令的逻辑模块，负责从控制台发送消息，或进入与某个用户的实时本地聊天界面。
+
+本模块大致可分为三个部分：
+    - 参数解析与入口函数（execute）
+    - 普通消息发送逻辑（sendMsg）
+    - 本地交互式聊天界面（chatScreen）
+
+
+================================================================================
+参数解析 / 外层命令入口
+包含 execute()、chatIDList() 两个功能
+
+execute() 为统一的命令入口：
+    - 接受 app 与命令行参数 tokens（来自 handlers/cli）
+    - 解析参数后根据模式执行对应操作：
+        · 普通发送模式：/send -id <ID> -t <TEXT>
+        · 聊天界面模式：/send -c <ID>
+
+    解析过程中使用 argAlias 将短选项映射到全称字段，并最终构造 parsed 字典。
+
+chatIDList() 用于在 "-c" 未指定 ID 时展示 whitelist 的用户列表，
+并允许用户通过编号或直接输入 ID 来选择目标聊天对象。
+
+
+================================================================================
+普通消息发送逻辑
+包含 sendMsg() 一个功能，处理在 cli 输入的指令
+
+sendMsg(bot, idList, atUser, text)
+    - 遍历 idList，将文字逐一发送给对应 ChatID
+        - idList 为在 cli 输入的 "-id" 后的一个或若干个 ChatID
+    - 当指定 -a/--at <userName> 时，会自动在消息开头加上 "@userName"
+
+================================================================================
+本地交互式聊天界面（核心功能）
+包含 chatScreen() 及其内部的 receiverLoop() / inputLoop() / printMessage()
+
+chatScreen(app , bot: Bot , targetChatID: str) 
+    用于进入与某一 chatID 的实时聊天界面。
+
+其操作模式为 CLI 聊天窗口：
+    · 上方自动展示来自对方的消息（telegram -> bot -> 全局 messageQueue）
+    · 底部由用户以 ">> " 输入并发送消息
+    · 输入 ":q" 退出界面
+
+内部结构：
+    - 设置 app.bot_data["state"]["interactiveMode"] 为 "SendChatScreen"，暂停外层 CLI
+        （"interactiveMode" 一般情况下为 False）
+    - receiverLoop() 后台读取 messageQueue 中的消息，并筛选属于当前 chatID 的部分打印到屏幕
+    - inputLoop() 等待用户输入并自动清理输入行的回显，使界面更简洁
+    - printMessage() 用于统一格式化输出聊天内容
+
+    正常情况下，用户输入 ":q" 退出函数
+
+最终会恢复 interactiveMode 并关闭内部协程。
+
+
+================================================================================
+
+本模块不直接与 whitelist.json 交互，
+仅通过 whitelistManager 提供的 collectWhitelistViewModel() 与 whitelistUIRenderer()
+来显示 UID 列表（用于选择聊天对象）。
+
+"""
+
+
+
+
+import sys
 import asyncio
 from telegram import Bot
 from datetime import datetime
 from aioconsole import ainput
-from telegram.ext import ApplicationBuilder , MessageHandler , filters
 from telegram.error import Forbidden , BadRequest
+
 
 from handlers.cli import parseArgsTokens
 from utils.logger import logAction
 from utils.whitelistManager import (
-    loadWhitelistFile,
     whitelistUIRenderer,
-    collectWhitelistViewModel,
-)
+    collectWhitelistViewModel,)
 
 
 
@@ -135,32 +205,51 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
     # （其实就是不断从全局队列中读取消息，
     # 若消息属于当前聊天对象，则打印出来
 
-        timestamp = await getTimestamp()
         while app.bot_data["state"]["interactiveMode"] == "SendChatScreenMode":
 
             try:
                 msg = await queue.get()
-
                 if not msg:
                     continue
 
                 if str(msg.chat.id) != str(targetChatID):
                     continue
 
-                if msg.from_user and not msg.from_user.is_bot:
-                    print(
-                        f"\n{timestamp}\n",
-                        f" {msg.from_user.username} >> {msg.text}",
-                        "\n"
-                    )
+                printMessage("incomingMessage" , msg)
             
             except asyncio.CancelledError:
                 break
 
             except Exception:
                 # 忽略零星的单次读取异常，继续循环
-                pass
+                pass    
 
+
+    async def inputLoop(queue):
+        while True:
+            userInput = await ainput(">> ")
+
+            # 清除用户的原始输入，即不显示命令行的回显“>> text”
+            sys.stdout.write("\033[F")      # 光标上移一行
+            sys.stdout.write("\033[K")      # 清除整行
+            sys.stdout.flush()
+
+            return userInput
+
+    
+    def printMessage(mode , msg):
+        match mode:
+            case "incomingMessage":
+                sender = msg.from_user.username or msg.from_user.first_name
+                text = msg.text or ""
+            case "selfMessage":
+                sender = "ZincNya~"
+                text = msg
+
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        sys.stdout.write(f"\r[{timestamp}] <{sender}> {text}\n")
+        sys.stdout.write("" if sender == "ZincNya~" else ">> ")
+        sys.stdout.flush()
     # ========================================================================
 
 
@@ -178,7 +267,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         )
 
         while True:
-            userInput = await ainput()
+            userInput = await inputLoop(queue)
 
             if userInput is None:
                 continue
@@ -192,11 +281,12 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
                 break
 
             try:
+                printMessage("selfMessage" , userInput)
                 await bot.send_message(chat_id=targetChatID , text=userInput)
             except Forbidden:
-                print(f"被 Forbidden 了……这可能是对方还没有跟咱开始聊天的缘故哦")
+                print(f"    被 Forbidden 了……这可能是对方还没有跟咱开始聊天的缘故哦")
             except Exception as e:
-                print(f"呜喵……发送失败了喵…… | {e}\n")
+                print(f"    呜喵……发送失败了喵…… | {e}\n")
 
     finally:
         app.bot_data["state"]["interactiveMode"] = False
@@ -205,13 +295,6 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
             await receiverTask
         except Exception:
             pass
-
-
-
-
-async def getTimestamp():
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    return timestamp
 
 
 
