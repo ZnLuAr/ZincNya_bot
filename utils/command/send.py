@@ -1,5 +1,6 @@
 import asyncio
 from telegram import Bot
+from datetime import datetime
 from aioconsole import ainput
 from telegram.ext import ApplicationBuilder , MessageHandler , filters
 from telegram.error import Forbidden , BadRequest
@@ -26,7 +27,7 @@ async def execute(app , args):
         "chat": None,
     }
 
-    # Send 中将缩写对应全称的字典
+    # Send 中将缩写映射到全称的字典
     argAlias = {
         "a": "at",
         "t": "text",
@@ -73,13 +74,12 @@ async def chatIDList(app , bot):
         i = userInput.strip()
         if not i:
             print("退出喵——\n")
-            return
+            return None
     
         # 若输入数字编号
         if i.isdigit():
             idx = int(i)
             if 1 <= idx <= len(entries):
-                app.bot_data["state"]["interactiveMode"] = False
                 return str(entries[idx-1]["uid"])
             else:
                 print("呜喵……？没有这个编号哦……\n")
@@ -115,8 +115,9 @@ async def sendMsg(bot: Bot , idList , atUser , text):
 async def chatScreen(app , bot: Bot , targetChatID: str):
     # 进入与指定 chatID 的用户/群聊的本地交互聊天界面
 
-    # 暂停外层 CLI 的输入读取
+    # 设置交互模式，暂停外层 CLI 的输入读取
     app.bot_data["state"]["interactiveMode"] = "SendChatScreenMode"
+    queue: asyncio.Queue = app.bot_data["state"]["messageQueue"]
 
     # 如果用户仅输入 -c（未指定 ID），弹出白名单列表供选择
     if targetChatID == "NoValue":
@@ -126,24 +127,41 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         # 恢复外层 CLI 的命令读取
         app.bot_data["state"]["interactiveMode"] = False
         return
-    
-    queue: asyncio.Queue = app.bot_data["state"]["messageQueue"]
 
 
+    # ========================================================================
     async def receiverLoop(bot: Bot , chatID: str):
     # 后台协程：持续监听对方发来的消息并展示，形成一个类聊天窗口的界面
     # （其实就是不断从全局队列中读取消息，
     # 若消息属于当前聊天对象，则打印出来
 
+        timestamp = await getTimestamp()
         while app.bot_data["state"]["interactiveMode"] == "SendChatScreenMode":
 
-            msg = await queue.get()
+            try:
+                msg = await queue.get()
 
-            if str(msg.chat.id) != str(targetChatID):
-                continue
+                if not msg:
+                    continue
+
+                if str(msg.chat.id) != str(targetChatID):
+                    continue
+
+                if msg.from_user and not msg.from_user.is_bot:
+                    print(
+                        f"\n{timestamp}\n",
+                        f" {msg.from_user.username} >> {msg.text}",
+                        "\n"
+                    )
             
-            if msg.from_user and not msg.from_user.is_bot:
-                print(f"[{msg.from_user.first_name}]: {msg.text}")
+            except asyncio.CancelledError:
+                break
+
+            except Exception:
+                # 忽略零星的单次读取异常，继续循环
+                pass
+
+    # ========================================================================
 
 
     receiverTask = asyncio.create_task(receiverLoop(bot , targetChatID))
@@ -160,10 +178,17 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         )
 
         while True:
-            userInput = await ainput(">> ")
+            userInput = await ainput()
+
+            if userInput is None:
+                continue
 
             if userInput.strip() == ":q":
-                print("=" * 60, "\n退出聊天界面喵\n")
+                print(
+                    "\n\n",
+                    "=" * 64,
+                    "\n退出聊天界面喵——\n\n"
+                )
                 break
 
             try:
@@ -173,13 +198,20 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
             except Exception as e:
                 print(f"呜喵……发送失败了喵…… | {e}\n")
 
-
     finally:
         app.bot_data["state"]["interactiveMode"] = False
         receiverTask.cancel()
+        try:
+            await receiverTask
+        except Exception:
+            pass
 
-        # 恢复外层 CLI 的命令读取
-        app.bot_data["state"]["interactiveMode"] = False
+
+
+
+async def getTimestamp():
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    return timestamp
 
 
 
