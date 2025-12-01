@@ -3,13 +3,14 @@ from telegram.ext import CommandHandler, ContextTypes
 
 
 from config import QUOTES_DIR
-from utils.command.nya import JsonOperation , WeitghtedRandom
+from utils.command.nya import  getRandomQuote
+from utils.nyaQuoteManager import loadQuoteFile
 from utils.logger import logAction
 
 
 # 响应来自 Telegram 的 /nya 指令，随机从语录中挑一句发送出去
 async def sendNya(update:Update , context:ContextTypes.DEFAULT_TYPE):
-    quotes = JsonOperation.loadQuotesFromJson()
+    quotes = loadQuoteFile()
 
     if not quotes:
         await update.message.reply_text(
@@ -19,7 +20,7 @@ async def sendNya(update:Update , context:ContextTypes.DEFAULT_TYPE):
         await logAction(None , "来自 Telegram 的 /nya" , "quotes 缺失喵……" , "withOneChild")
         return
     
-    chosenQuote = WeitghtedRandom.cdfCalc(quotes)
+    chosenQuote = getRandomQuote.cdfCalc(quotes)
     if not chosenQuote:
         await update.message.reply_text(
             "呜喵……？说不出话来……\n"

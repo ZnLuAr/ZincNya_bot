@@ -327,7 +327,7 @@ def whitelistUIRenderer(entries: list):
 
     console = Console()
 
-    table = Table(title="正在查看白名单喵——\n")
+    table = Table(title="\n正在查看白名单喵——\n")
     table.add_column("No." , justify="right")
     table.add_column("UID" , justify="left")
     table.add_column("状态" , justify="left")

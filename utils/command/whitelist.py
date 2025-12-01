@@ -31,6 +31,7 @@ async def execute(app , args):
     "c": "comment",
     }
 
+
     parsed = parseArgsTokens(parsed , args , argAlias)
     
     addUID = parsed["add"]
@@ -93,11 +94,11 @@ async def execute(app , args):
         ok = userOperation("setComment" , commentUID , commentText)
         action = f"为 {commentUID} 添加备注 '{commentText}' ……"
         result = "OK喵——" if ok else "备注添加失败喵……"
-        await logAction("Console" , action , result ,"withChild")
+        await logAction("Console" , action , result ,"withOneChild")
         return
 
     # 以下是包含了-a、-d、-s 的使用情况
-    if (addUID or delUID or susUID or listFlag) and not "NoValue":
+    if (addUID or delUID or susUID or listFlag) and (addUID and delUID and susUID and listFlag) != "NoValue":
         if addUID:
             operation = "addUser"
             action = f"将 {addUID} 加入白名单……"
@@ -118,6 +119,7 @@ async def execute(app , args):
                 result = f"已为 {addUID} 添加备注 {commentText} 喵——" if ok else f"备注添加失败喵……"
                 await logAction("Console" , action , result , "lastChild")
                 return
+            result = ["OK喵" , f"{addUID} 已在白名单喵——"]
 
         elif delUID:
             operation = "deleteUser"
