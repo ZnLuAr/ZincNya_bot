@@ -1,41 +1,36 @@
-import random
-from typing import Optional
-
-from utils.nyaQuoteManager import (
-    loadQuoteFile,
-    userOperation,
-    collectQuoteViewModel,
-    quoteUIRenderer,
-    editQuoteViaEditor
-)
-
-
-
-
-def getRandomQuote() -> Optional[str]:
-
-    quotes = loadQuoteFile()
-    if not quotes:
-        return None
-    weights = [float(q.get("weight" , 1.0)) for q in quotes]
-    picked = random.choice(quotes , weights=weights , k=1)[0]
-
-    # 存储中用的是 "\n" 作为换行标记，返回给 telegram 时转换为真实换行
-    return picked.get("text", "").replace("\\n", "\n")
+from handlers.cli import parseArgsTokens
+from utils.nyaQuoteManager import getRandomQuote , quoteMenuController
 
 
 
 
 async def execute(app , args: list[str]):
+
+    parsed = {
+        "edit": None,
+    }
+
+    # Nya 中将缩写映射到全称的字典
+    argAlias = {
+        "e": "edit"
+    }
+
+    parsed = parseArgsTokens(parsed , args , argAlias)
     
-    if any(a in ("-e" , "--edit") for a in args):
-        return  # 这里亟待添加代码
+    editMatch = parsed["edit"]
     
+    if editMatch == "NoValue":
+        await quoteMenuController()
+        return
+
+    # 当不存在参数 -e/--edit 时，从语录里选一句输出
     selectedQuote = getRandomQuote()
     if selectedQuote is None:
-        print("………………\n呜喵……？说不出话来……\n")
+        print("\n…………",
+              "\n…………",
+              "\n呜喵……？说不出话来……\n")
         return
-    return selectedQuote
+    print(selectedQuote , "\n")
 
 
 
