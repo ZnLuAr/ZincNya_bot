@@ -3,8 +3,7 @@ from telegram.ext import CommandHandler, ContextTypes
 
 
 from config import QUOTES_DIR
-from utils.command.nya import  getRandomQuote
-from utils.nyaQuoteManager import loadQuoteFile
+from utils.nyaQuoteManager import loadQuoteFile , getRandomQuote
 from utils.logger import logAction
 
 
@@ -20,15 +19,16 @@ async def sendNya(update:Update , context:ContextTypes.DEFAULT_TYPE):
         await logAction(None , "来自 Telegram 的 /nya" , "quotes 缺失喵……" , "withOneChild")
         return
     
-    chosenQuote = getRandomQuote.cdfCalc(quotes)
-    if not chosenQuote:
+    selectedQuote = getRandomQuote()
+    if not selectedQuote:
         await update.message.reply_text(
             "呜喵……？说不出话来……\n"
             "ご主人様——快来修修你的群猫……\n"
+            "@ZincPhos"
         )
         await logAction(None , "来自 Telegram 的 /nya" , "chosenQuote 缺失喵……" , "withOneChild")
 
-    msg = chosenQuote.get("text" , "").replace("\\n" , "\n")
+    msg = selectedQuote.replace("\\n" , "\n") if selectedQuote else ""
     await update.message.reply_text(msg)
 
 
