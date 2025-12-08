@@ -1,17 +1,164 @@
 """
 utils/nyaQuoteManager.py
 
-用于管理 /nya 的语录存储与在 CLI 中展示用的数据模型。
+用于管理 /nya 的语录存储与在 CLI 中展示的数据模型。
 模块组织与 whitelistManager.py 类似，分为：
   - 文件读写（内部函数）
   - 外部操作入口（userOperation）
-  - UI 相关：collectQuoteViewModel、quoteUIRenderer、quoteMenuController
-  - 编辑器辅助：edit_quote_via_editor（将 \n <-> 实际换行互转）
+  - UI 相关：
+            collectQuoteViewModel、quoteUIRenderer、quoteMenuController
+            以及一堆 ANSI 工具函数：cuu、cud、ctr 等
+  - 编辑器辅助：editQuoteViaEditor（打开外部 TUI 编辑器）
+  - 键盘监听及控制函数：quoteMenuController
 
-设计要点：
-  - 存储为列表，每项为 dict: {"text": "...", "weight": float}
-  - 展示时按 weight 从小到大排序（A 模式）
-  - 编辑时在临时文件中将存储的 "\n" 展开为换行；保存时再转回 "\n"
+  
+================================================================================
+内部函数，面向 data/ZincNyaQuote.json 的操作，与 whiteliseManager.py 的相似，
+包含 ensureQuoteFile、loadQuoteFile、saveQuoteFile 三个功能
+
+
+当涉及到对 ZincNyaQuote.json 的操作时，先调用 ensureQuoteFile 检查文件是否存在。
+  若路径不存在则初始化为默认格式（空列表）：
+    []
+
+loadQuoteFile() 用于读取并返回列表形式的语录数据，形如：
+    [
+        {
+            "text": str,
+            "weight": float
+        },
+    ]
+
+saveQuoteFile() 接受 quotes: List[dict]
+    保存语录到 ZincNyaQuotes.json
+
+
+================================================================================
+外部函数，面向用户操作的函数
+包含：
+    userOperation、
+    collectQuoteViewModel、quoteUIRenderer
+
+三个功能。
+其中，第二行的两个函数主要面向外部对 ZincNyaQuotes.json 的可视化操作，即 UI 相关操作。
+
+
+userOperation()，统一操作接口
+    函数分别接受
+        - 操作的类型（operation: str）
+        - 被使用 Enter 选中的项（index: Optional[int] = None）
+        - 载荷（payload: Optional[dict] = None），作为字典，包含语录文本 text: str 和权重(在 editQuoteViaEditor 细说) weight: float
+
+      operation 可能的取值有：
+          "add"       : 添加被用户编辑好的 payload 进 json 文件 
+          "delete"    : 使用了 index 参数，从 json 中删除指定序号的项
+          "set"       : (index, payload) 修改指定条目
+          "list"      : 返回完整列表（不排序）
+          "get"       : 返回 index 对应条目或 None
+    返回：
+        - 对于增删改 返回 True/False
+        - "list" 返回 list
+        - "get" 返回 dict | None
+
+
+UI 相关的 3 个函数——
+
+collectQuoteViewModel() 一般用于构建 quoteUIRenderer 所需的数据类型，
+    一般来说，用户在进行键盘的操作后，会调用函数进行 ZincNyaQuote 表格的重绘
+    接受：
+        - 被选定的项的序号（selectedIndex: int = -1），
+            · 其接受的是经过键控函数操作后的序号
+            · 若表格为初次绘制，selectedIndex 默认为 -1，即不选中任何项
+    并返回：
+        - 被格式化的列表 entries
+        - 包含了被选中的（在渲染时应该高亮的）项的序号、列表的长度的 *字典* meta
+            meta = {
+                        "selected": max(0 , min(selectedIndex , (len(entries) - 1)) if entries else 0),
+                        "count": len(entries)
+                }
+
+    函数先通过 loadQuoteFile() 从 json 中拿到语录的原始数据，并按 weight 从小到大排序，
+    从而得到文本、权重，再将其一一塞入 entries 列表，如：
+        entries.append({
+                "text": text,
+                "preview": preview,                                 # 当对象文本过长时，取前 n 个字 (默认为 15) 作为预览
+                "weight": float(q.get("weight" , 1.0)),             # 各条 nyaQuote 被取用的权重，默认为 1.0
+                "raw": q,                                           # 正在操作的项的序号
+            })
+
+    一般而言，键控函数会先通过该函数获取表格目前的状态，根据键盘操作执行对应逻辑后，把操作后的结果发给该函数进行重绘
+    另外，排序不会修改文件，仅在内存返回排序结果。
+
+quoteUIRenderer() 将 collectWhitelistViewModel 生成的 entries 渲染为 Rich 表格，
+        并在重绘前使用几个 ANSI 功能函数对屏幕进行擦除等操作
+
+    函数接受：
+        - 格式化的表格信息 （entries: List[dict]）
+        - 被选中的数字，即应当在渲染时高亮的项的序号（selectedIndex: int = -1）
+        - 上一次渲染的表格的高度（prevHeight: int = 0），用于精准地局部擦除
+
+    并输出当前渲染的表格的长度 len(lines)
+
+    表格有 3 列：
+        - 序号
+        - 权重
+        - 文本预览
+
+
+================================================================================
+辅助函数，包含：
+    - 编辑器辅助：editQuoteViaEditor（打开外部 TUI 编辑器）
+    - 键盘监听及控制函数：quoteMenuController
+    - 获取随机语录函数：getRandomQuote
+    - ANSI 控制函数。
+
+
+编辑器辅助 editQuoteViaEditor()，用于编辑选中的 ZincNyaQuote。
+    当对项（无论是常规项还是 (+) 项）使用 Enter 键时，函数通过 tmpfile 新建一个临时文件，
+    并调用 utils/fileEditor.py 使用 prompt_toolkit 的 TextArea 编辑并保存。
+
+    文件有标准格式：
+
+        # weight: 1.0
+        <TEXT>
+
+            其中 weight: float 决定 json 中的各条语录会以多大的权重被取得，
+            <TEXT>: str 则是语录的内容
+
+        在按下^S 保存并退出界面后，文件头 # weight: 后的数字和下方的文字分别会被以浮点数和字符串类型读取，存入 weight 和 text 中
+        若未能检测到合乎格式的权重，将按照默认权重 1.0 保存。
+        
+        编辑时的换行将被保存为 \n，在读取时替换回换行
+
+
+quoteMenuController() 用于键盘监听，并执行对应的逻辑。
+
+    在控制台使用 /nya --edit / -e 时进入函数
+
+    它使用 prompt_toolkit 包，支持读取 ↑、↓、Enter、Esc、Delete 键，其中：
+        - ↑ 键：     让选中项上移一项，即令 selectedIndex 减去 1
+        - ↓ 键：     让选中项下移一项，即令 selectedIndex 加上 1
+        - Del键：   删除列表中的选中项，即调用 userOperation() 中的 "delete"
+        - Enter键： 确认选中列表中选中项，且有：
+            · 当选中的项为第 0 项，即项 (+) 时，在 json 中新建一项，并启用 editQuoteViaEditor 函数进行编辑
+            · 当选中的项为常规的语录项时，直接启用 editQuoteViaEditor 进行编辑
+    
+    进行操作后，调用内嵌的 redraw() 函数进行表格的重绘。
+    当退出时，清除残留的 UI。
+
+
+getRandomQuote() 函数用于从 json 中根据权重随机挑出语录返回。
+
+
+
+ANSI 控制函数用于控制光标的相对移动，若：
+
+    def cuu(n: int):    sys.stdout.write(f"\x1b[{n}A")      # 光标上移
+    def cud(n: int):    sys.stdout.write(f"\x1b[{n}B")      # 光标下移
+    def clr():          sys.stdout.write("\x1b[2K")         # 清除本行
+    def bol():          sys.stdout.write("\x1b[G")          # 返回第一行
+    def crt():          sys.stdout.write("\r")              # 光标移回句首
+
 """
 
 
@@ -39,6 +186,11 @@ from utils.fileEditor import editFile
 
 
 def ensureQuoteFile():
+    '''
+    当涉及到对 ZincNyaQuote.json 的操作时，先调用 ensureQuoteFile 检查文件是否存在。
+    若路径不存在则初始化为默认格式（空列表）：
+        []
+    '''
     if QUOTES_DIR:
         os.makedirs(os.path.dirname(QUOTES_DIR) , exist_ok=True)
     if not os.path.exists(QUOTES_DIR):
@@ -46,12 +198,18 @@ def ensureQuoteFile():
 
 
 def loadQuoteFile() -> List[dict]:
-    """
-    返回列表形式的语录数据（items: {"text": str, "weight": float}）
-    """
+    '''
+    loadQuoteFile() 用于读取并返回列表形式的语录数据，形如：
+
+        [
+            {
+                "text": str,
+                "weight": float
+            },
+        ]
+    '''
 
     ensureQuoteFile()
-
     try:
         with open(QUOTES_DIR , "r" , encoding="utf-8") as f:
             quoteData = json.load(f)
@@ -63,6 +221,11 @@ def loadQuoteFile() -> List[dict]:
     
 
 def saveQuoteFile(quotes: List[dict]):
+    '''
+    saveQuoteFile() 接受 quotes: List[dict]
+    
+        保存语录到 ZincNyaQuotes.json
+    '''
     ensureQuoteFile()
     with open(QUOTES_DIR , "w" , encoding="utf-8") as f:
         json.dump(quotes , f , ensure_ascii=False , indent=2)
@@ -71,6 +234,7 @@ def saveQuoteFile(quotes: List[dict]):
 
 
 def getRandomQuote() -> Optional[str]:
+    # 从 json 中根据权重随机挑出语录返回
 
     quotes = loadQuoteFile()
     if not quotes:
@@ -85,19 +249,25 @@ def getRandomQuote() -> Optional[str]:
 
 
 def userOperation(operation: str , index:Optional[int]=None , payload:Optional[dict]=None):
-    """
-    统一操作接口（面向 CLI / handlers 调用）
-      - operation:
-          "add"       : payload -> dict with keys "text"(str) and optional "weight"(float)
-          "delete"    : index -> int
-          "set"       : (index, payload) 修改指定条目（payload 可包含 text / weight）
-          "list"      : 返回完整列表（不排序）
-          "get"       : 返回 index 对应条目或 None
-    返回：
-      - 对于增删改 返回 True/False
-      - "list" 返回 list
-      - "get" 返回 dict | None
-    """
+    '''
+    userOperation()，统一操作接口
+        函数分别接受：
+            - 操作的类型（operation: str）
+            - 被使用 Enter 选中的项（index: Optional[int] = None）
+            - 载荷（payload: Optional[dict] = None）。作为字典，包含语录文本 text: str 和权重(在 editQuoteViaEditor 细说) weight: float
+
+        operation 可能的取值有：
+            "add"       : 添加被用户编辑好的 payload 进 json 文件 
+            "delete"    : 使用了 index 参数，从 json 中删除指定序号的项
+            "set"       : (index, payload) 修改指定条目
+            "list"      : 返回完整列表（不排序）
+            "get"       : 返回 index 对应条目或 None
+        返回：
+            - 对于增删改 返回 True/False
+            - "list" 返回 list
+            - "get" 返回 dict | None
+
+    '''
 
     quotes = loadQuoteFile()
 
@@ -133,15 +303,36 @@ def userOperation(operation: str , index:Optional[int]=None , payload:Optional[d
 
 
 
-def collectQuoteViewModel(selectedIndex: int=-1 , limitPreviewChars: int=15) -> Tuple[List[dict] , int]:
-    """
-    构建供渲染使用的 entries 列表，并按 weight 从小到大排序（A 模式）。
-    返回 (sorted_quotes, new_selected_index)
-      - sorted_quotes: 每项包含 {"text", "weight"}
-      - new_selected_index: 传入 selected_index 在排序后的新下标（若传入非法则为 -1）
+def collectQuoteViewModel(selectedIndex: int=-1) -> Tuple[List[dict] , int]:
+    '''
+    collectQuoteViewModel() 一般用于构建 quoteUIRenderer 所需的数据类型，
+        一般来说，用户在进行键盘的操作后，会调用函数进行 ZincNyaQuote 表格的重绘
+        接受：
+            - 被选定的项的序号（selectedIndex: int = -1），
+                · 其接受的是经过键控函数操作后的序号
+                · 若表格为初次绘制，selectedIndex 默认为 -1，即不选中任何项
+        并返回：
+            - 被格式化的列表 entries
+            - 包含了被选中的（在渲染时应该高亮的）项的序号、列表的长度的 *字典* meta
+                meta = {
+                            "selected": max(0 , min(selectedIndex , (len(entries) - 1)) if entries else 0),
+                            "count": len(entries)
+                    }
 
-    注意：排序不会修改文件，仅在内存返回排序结果。
-    """
+        函数先通过 loadQuoteFile() 从 json 中拿到语录的原始数据，并按 weight 从小到大排序，
+        从而得到文本、权重，再将其一一塞入 entries 列表，如：
+            entries.append({
+                    "text": text,
+                    "preview": preview,                                 # 当对象文本过长时，取前 n 个字 (默认为 15) 作为预览
+                    "weight": float(q.get("weight" , 1.0)),             # 各条 nyaQuote 被取用的权重，默认为 1.0
+                    "raw": q,                                           # 正在操作的项的序号
+                })
+
+    一般而言，键控函数会先通过该函数获取表格目前的状态，根据键盘操作执行对应逻辑后，把操作后的结果发给该函数进行重绘
+    另外，排序不会修改文件，仅在内存返回排序结果。
+    '''
+
+    limitPreviewChars: int = 15
 
     quotes = loadQuoteFile()
     sortedQuotes = sorted(quotes , key=lambda x:float(x.get("weight" , 1.0)))
@@ -188,6 +379,22 @@ def crt():          sys.stdout.write("\r")              # 光标移回句首
 
 
 def quoteUIRenderer(entries: List[dict] , selectedIndex:int=-1 , prevHeight:int=0) -> int:
+    '''
+    quoteUIRenderer() 将 collectWhitelistViewModel 生成的 entries 渲染为 Rich 表格，
+            并在重绘前使用几个 ANSI 功能函数对屏幕进行擦除等操作
+
+        函数接受：
+            - 格式化的表格信息 （entries: List[dict]）
+            - 被选中的数字，即应当在渲染时高亮的项的序号（selectedIndex: int = -1）
+            - 上一次渲染的表格的高度（prevHeight: int = 0），用于精准地局部擦除
+
+        并输出当前渲染的表格的长度 len(lines)
+
+        表格有 3 列：
+            - 序号
+            - 权重
+            - 文本预览
+    '''
     
     console = Console()
     table = Table(title="ZincNya Quotes")
@@ -238,13 +445,24 @@ def quoteUIRenderer(entries: List[dict] , selectedIndex:int=-1 , prevHeight:int=
 
 
 async def editQuoteViaEditor(initialTextEscaped: str , initialWeight: float = 1.0) -> Optional[str]:
-    """
-    同步版本：在临时文件中打开系统编辑器（$EDITOR 或 vi/nano）。
-    编辑器中显示 initial_text_escaped 的真实换行（把 "\\n" -> "\n"）。
-    保存后把文件内容读取并把真实换行转换回 "\\n"（用于存储）。
-    返回转码后的文本（字符串），或者 None 表示未保存/中断。
-    （这是同步阻塞函数；上层会通过 asyncio.to_thread 调用以避免阻塞主循环）
-    """
+    '''
+    编辑器辅助 editQuoteViaEditor()，用于编辑选中的 ZincNyaQuote。
+        当对项（无论是常规项还是 (+) 项）使用 Enter 键时，函数通过 tmpfile 新建一个临时文件，
+        并调用 utils/fileEditor.py 使用 prompt_toolkit 的 TextArea 编辑并保存。
+
+    文件有标准格式：
+
+        # weight: 1.0
+        <TEXT>
+
+            其中 weight: float 决定 json 中的各条语录会以多大的权重被取得，
+            <TEXT>: str 则是语录的内容
+
+        在按下^S 保存并退出界面后，文件头 # weight: 后的数字和下方的文字分别会被以浮点数和字符串类型读取，存入 weight 和 text 中
+        若未能检测到合乎格式的权重，将按照默认权重 1.0 保存。
+        
+        编辑时的换行将被保存为 \n，在读取时替换回换行
+    '''
 
     initialText = initialTextEscaped.replace("\\n", "\n")
 
@@ -285,6 +503,22 @@ async def editQuoteViaEditor(initialTextEscaped: str , initialWeight: float = 1.
 
 
 async def quoteMenuController():
+    '''
+    quoteMenuController() 用于键盘监听，并执行对应的逻辑。
+
+    在控制台使用 /nya --edit / -e 时进入函数
+
+    它使用 prompt_toolkit 包，支持读取 ↑、↓、Enter、Esc、Delete 键，其中：
+        - ↑ 键：     让选中项上移一项，即令 selectedIndex 减去 1
+        - ↓ 键：     让选中项下移一项，即令 selectedIndex 加上 1
+        - Del键：   删除列表中的选中项，即调用 userOperation() 中的 "delete"
+        - Enter键： 确认选中列表中选中项，且有：
+            · 当选中的项为第 0 项，即项 (+) 时，在 json 中新建一项，并启用 editQuoteViaEditor 函数进行编辑
+            · 当选中的项为常规的语录项时，直接启用 editQuoteViaEditor 进行编辑
+    
+    进行操作后，调用内嵌的 redraw() 函数进行表格的重绘。
+    当退出时，清除残留的 UI。
+    '''
 
     # 先留一个空行占位，防止覆盖用户输入
     print()
