@@ -38,11 +38,11 @@ async def findSticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 构建用户互动界面（信息和按钮）
     messageText = (
-        f"找到了喵！\n"
+        "找到了喵！\n"
         f"表情包名：{stickerSet.title}\n"
         f"表情代号：{setName}\n"
         f"表情数量：{len(stickerSet.stickers)}\n\n"
-        f"点下面的按钮，就可以下载哦——"
+        "点下面的按钮，就可以下载哦——"
     )
 
     keyboard = InlineKeyboardMarkup([
