@@ -125,7 +125,7 @@ quoteUIRenderer() 将 collectWhitelistViewModel 生成的 entries 渲染为 Rich
             其中 weight: float 决定 json 中的各条语录会以多大的权重被取得，
             <TEXT>: str 则是语录的内容
 
-        在按下^S 保存并退出界面后，文件头 # weight: 后的数字和下方的文字分别会被以浮点数和字符串类型读取，存入 weight 和 text 中
+        在按下 ^S 保存并退出界面后，文件头 # weight: 后的数字和下方的文字分别会被以浮点数和字符串类型读取，存入 weight 和 text 中
         若未能检测到合乎格式的权重，将按照默认权重 1.0 保存。
         
         编辑时的换行将被保存为 \n，在读取时替换回换行
