@@ -2,10 +2,9 @@
 log/
 download/
 *.log
+*.exe
 
-
-ffmpeg/ffmpeg.exe
-
+ZincNya_bot.code-workspace
 
 __pycache__/
 handlers/__pycache__/
