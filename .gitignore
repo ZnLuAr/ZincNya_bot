@@ -1,6 +1,6 @@
-.vscode/
-log/
-download/
+/.vscode/
+/log/
+/download/
 *.log
 *.exe
 
