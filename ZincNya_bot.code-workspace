@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../webDevelopmentTest"
+		},
+		{
+			"path": "../../LCFEditor/LCFEditor_Restructure"
 		}
 	],
 	"settings": {}
