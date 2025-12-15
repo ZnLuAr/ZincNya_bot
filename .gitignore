@@ -4,7 +4,7 @@ download/
 *.log
 
 
-*.exe
+ffmpeg/ffmpeg.exe
 
 
 __pycache__/
