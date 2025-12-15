@@ -4,6 +4,9 @@ download/
 *.log
 
 
+ffmpeg/ffmpeg.exe
+
+
 __pycache__/
 handlers/__pycache__/
 utils/__pycache__/
