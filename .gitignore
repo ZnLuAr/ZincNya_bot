@@ -1,9 +1,11 @@
 /.vscode/
 /log/
 /download/
+/.venv/
 *.log
 *.exe
 
+ffmpeg/*.exe
 ZincNya_bot.code-workspace
 
 __pycache__/
