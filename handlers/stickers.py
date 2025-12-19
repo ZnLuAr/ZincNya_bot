@@ -1,3 +1,4 @@
+import time
 import asyncio
 from telegram import Update , InlineKeyboardButton , InlineKeyboardMarkup
 from telegram.ext import (
@@ -8,11 +9,16 @@ from telegram.ext import (
 
 from utils.downloader import createStickerZip, deleteLater
 from utils.logger import logAction
-from config import DELETE_DELAY , DEFAULT_READ_TIMEOUT , DEFAULT_WRITE_TIMEOUT
+from config import (
+    CACHE_TTL,
+    DELETE_DELAY,
+    DEFAULT_READ_TIMEOUT,
+    DEFAULT_WRITE_TIMEOUT,
+)
 
 
 # 保存 sticker 信息临时缓存
-stickerCache: dict[str , object] = {}
+stickerCache: dict[str , tuple[object , float]] = {}
 
 
 
@@ -40,7 +46,7 @@ async def findSticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     stickerSet = await context.bot.get_sticker_set(setName)
-    stickerCache[setName] = stickerSet
+    setCachedSticker(setName , stickerSet)
 
 
     # 构建用户互动界面（信息和按钮）
@@ -83,7 +89,7 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     _ , setName , action = query.data.split("|" , 2)
-    stickerSet = stickerCache.get(setName)
+    stickerSet = getCachedSticker(setName)
 
     if not stickerSet:
         await query.edit_message_text(
@@ -139,17 +145,18 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stickerSuffix
     )
 
-    sent = await context.bot.send_document(
-        read_timeout=DEFAULT_READ_TIMEOUT,
-        write_timeout=DEFAULT_WRITE_TIMEOUT,
-        chat_id=query.message.chat.id,
-        document=open(zipPath , "rb"),
-        caption=(
-            f"@{query.from_user.username or query.from_user.first_name} 様——\n"
-            f"表情包 {setName}，\n"
-            "就发出来啦，请查收喵——\n"
-        ),
-    )
+    with open(zipPath , "rb") as f:
+        sent = await context.bot.send_document(
+            read_timeout=DEFAULT_READ_TIMEOUT,
+            write_timeout=DEFAULT_WRITE_TIMEOUT,
+            chat_id=query.message.chat.id,
+            document=f,
+            caption=(
+                f"@{query.from_user.username or query.from_user.first_name} 様——\n"
+                f"表情包 {setName}，\n"
+                "就发出来啦，请查收喵——\n"
+            ),
+        )
 
     await logAction(
         None,
@@ -162,6 +169,25 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         deleteLater(context, sent.chat_id, sent.message_id, zipPath, DELETE_DELAY)
     )
 
+
+
+
+def getCachedSticker(setName: str):
+    if setName in stickerCache:
+        data , timestamp = stickerCache[setName]
+        if time.time() - timestamp < CACHE_TTL:
+            return data
+        del stickerCache[setName]
+    return None
+
+
+def setCachedSticker(setName: str , stickerSet):
+    now = time.time()
+    expired = [k for k, (_ , ts) in stickerCache.items() if (now - ts > CACHE_TTL)]
+    for k in expired:
+        del stickerCache[k]
+    
+    stickerCache[setName] = (stickerSet , now)
 
 
 

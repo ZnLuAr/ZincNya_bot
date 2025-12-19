@@ -8,7 +8,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN" , "7770221224:AAGvij0WepiklXbqXDqB7RHa7k-9Y6ny
 
 # /findsticker 功能相关常量
 DATA_DIR = "download"
-DELETE_DELAY = 180              # 秒
+CACHE_TTL = 300                 # 表情包缓存 5 分钟过期
+DELETE_DELAY = 180
 MAX_CONCURRENT_DOWNLOADS = 5    # 最大并发下载 Stickers 数量
 MAX_DOWNLOADS_ATTEMPTS = 3      # 最大尝试下载次数
 MAX_GIF_FPS = 24                # 下载的最大 gif 帧数
