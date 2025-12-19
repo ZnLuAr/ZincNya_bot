@@ -11,9 +11,9 @@ import sys
 
 # 以下是项目内的模块名
 from loader import loadHandlers
-from config import *
+from config import BOT_TOKEN
 from utils.logger import initLogger
-from handlers.cli import *
+from handlers.cli import handleConsoleCommand
 
 
 

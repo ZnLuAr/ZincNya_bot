@@ -17,12 +17,20 @@ from config import (
 
 
 if sys.platform == "win32":
-    FFMEPG = os.path.abspath("ffmpeg/ffmpeg.exe")
+    FFMPEG = os.path.abspath("ffmpeg/ffmpeg.exe")
 else:
-    FFMEPG = os.path.abspath("ffmpeg/ffmpeg")
+    FFMPEG = os.path.abspath("ffmpeg/ffmpeg")
 
-if not os.path.isfile(FFMEPG):
-    raise RuntimeError(f"缺失 ffmpeg 喵：{FFMEPG}")
+if not os.path.isfile(FFMPEG):
+    raise RuntimeError(f"缺失 ffmpeg 喵：{FFMPEG}")
+
+
+_downloadSemaphore: asyncio.Semaphore|None = None
+def _getSemaphore():
+    global _downloadSemaphore
+    if _downloadSemaphore is None:
+        _downloadSemaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+    return _downloadSemaphore
 
 
 
@@ -85,7 +93,7 @@ async def createStickerZip(
 # 单张 Sticker 的下载 + 转换 (可选)
 async def downLoadEachOne(bot , fileID , outPath , stickerSuffix="webp"):
 
-    async with asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS):
+    async with _getSemaphore():
         for attempt in range(1 , MAX_DOWNLOADS_ATTEMPTS + 1):
             try:
                 file = await bot.get_file(fileID)
@@ -107,7 +115,6 @@ async def downLoadEachOne(bot , fileID , outPath , stickerSuffix="webp"):
                 elif mimeType == "image/webp":
                     pass
 
-
                 # 若用户选择 gif 格式，则进行转换
                 converted = False
                 if stickerSuffix == "gif":
@@ -120,7 +127,7 @@ async def downLoadEachOne(bot , fileID , outPath , stickerSuffix="webp"):
                     "ok": True,
                     "converted": converted,
                 }
-            
+
             except (TelegramError , NetworkError , OSError) as e:
                 if attempt < MAX_DOWNLOADS_ATTEMPTS:
                     # 指数级退避等待，防止 Tg API 限速
@@ -150,7 +157,7 @@ async def convertToGif(rawInputPath: str) -> str:
     # 判断 Sticker 是否为静态 WebP，若是，则将帧率设为 1
     if ext == ".webp":
         probe = await asyncio.create_subprocess_exec(
-            FFMEPG,
+            FFMPEG,
             "-v", "error",
             "-select_streams", "v:0",
             "-show_entries", "frame=pkt_pts_time",
@@ -166,7 +173,7 @@ async def convertToGif(rawInputPath: str) -> str:
     # 获取 Sticker 尺寸，决定抖动策略
     # 若为小尺寸 Sticker，则采用更激进的抖动策略，提升观感
     probe = await asyncio.create_subprocess_exec(
-        FFMEPG,
+        FFMPEG,
         "-v", "error",
         "-select_streams", "v:0",
         "-show_entries", "stream=width,height",
@@ -202,7 +209,7 @@ async def convertToGif(rawInputPath: str) -> str:
 
         # 在转换 GIF 前，获取临时调色盘
         proc1 = await asyncio.create_subprocess_exec(
-            FFMEPG,
+            FFMPEG,
             "-y",
             "-i", inputPath,
             "-vf", vfPalette,
@@ -217,7 +224,7 @@ async def convertToGif(rawInputPath: str) -> str:
             raise RuntimeError(err1.decode(errors="ignore"))
         
         proc2 = await asyncio.create_subprocess_exec(
-            FFMEPG,
+            FFMPEG,
             "-y",
             "-i", inputPath,
             "-i", palettePath,
@@ -245,7 +252,7 @@ async def deleteLater(context, chatId, messageId, filePath, deleteDelay):
     await asyncio.sleep(deleteDelay)
     try:
        await context.bot.delete_message(chatId, message_id=messageId)
-    except Exception:
+    except Exception as e:
         pass
 
     try:
