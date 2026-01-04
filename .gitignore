@@ -71,6 +71,8 @@ tmp/
 data/whitelist.json
 data/chatID.json
 data/ZincNyaQuotes.json
+# 但保留 .gitkeep 占位文件
+!data/.gitkeep
 
 
 # ============================================================
