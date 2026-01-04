@@ -4,7 +4,8 @@ from handlers.cli import parseArgsTokens
 from utils.whitelistManager import (
     userOperation,
     whitelistUIRenderer,
-    collectWhitelistViewModel)
+    collectWhitelistViewModel,
+    whitelistMenuController)
 from utils.logger import logAction
 
 
@@ -79,8 +80,8 @@ async def execute(app , args):
 
 
     if listFlag is not None or listFlag == "NoValue":
-        entries = await collectWhitelistViewModel(bot)
-        whitelistUIRenderer(entries)
+        # 使用交互式选择器浏览白名单
+        await whitelistMenuController(bot , app)
         return
     
 

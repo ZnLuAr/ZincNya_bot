@@ -1,3 +1,139 @@
+"""
+utils/downloader.py
+
+Telegram 表情包下载与格式转换模块。
+
+该模块负责从 Telegram 下载完整的表情包（Sticker Sets），并提供格式转换功能，
+支持将 WebP/WebM 格式的贴纸转换为 GIF 格式。
+
+
+================================================================================
+核心功能
+
+1. createStickerZip(bot, stickerSet, setName, stickerSuffix, outputDir)
+    - 下载并打包完整的表情包
+    - 支持并发下载多个贴纸（通过 Semaphore 控制并发数）
+    - 自动生成 UUID 避免文件名冲突
+    - 打包为 .zip 文件
+    - 下载完成后自动清理临时目录
+
+2. downloadEachOne(bot, fileID, outPath, stickerSuffix)
+    - 下载单个贴纸
+    - 自动检测文件的真实格式（通过 python-magic）
+    - 支持 WebP、WebM、TGS 三种格式
+    - 可选 GIF 转换
+    - 内置重试机制（指数退避）
+
+3. convertToGif(rawInputPath)
+    - 将 WebP/WebM 格式转换为 GIF
+    - 使用 FFmpeg 进行高质量转换
+    - 自动检测静态/动态贴纸，调整帧率
+    - 根据贴纸尺寸选择最佳抖动算法
+    - 生成优化的调色板
+
+4. deleteLater(context, chatId, messageId, filePath, deleteDelay)
+    - 延迟删除 Telegram 消息和本地文件
+    - 用于定时清理下载的表情包，防止占用空间
+
+
+================================================================================
+并发控制
+
+使用全局单例 Semaphore 控制并发下载数：
+    - _downloadSemaphore: 全局信号量
+    - _getSemaphore(): 延迟初始化，确保在正确的事件循环中创建
+    - 最大并发数由 config.MAX_CONCURRENT_DOWNLOADS 控制
+
+
+================================================================================
+格式支持
+
+支持的输入格式：
+    - image/webp        静态或动态 WebP 图片
+    - video/webm        WebM 视频格式
+    - application/x-tgsticker    Telegram Lottie 动画（.tgs）
+
+支持的输出格式：
+    - WebP/WebM        保持原格式
+    - GIF              转换为 GIF（仅支持 WebP 和 WebM）
+
+注意：
+    - .tgs 格式是 Lottie 动画，FFmpeg 无法直接转换
+    - 转换为 GIF 时会有质量损失和体积增大
+
+
+================================================================================
+GIF 转换流程
+
+1. 检测静态/动态
+    - 使用 FFmpeg probe 检测帧数
+    - 静态图片：fps = 1
+    - 动态图片：fps = MAX_GIF_FPS（默认 24）
+
+2. 获取尺寸并选择抖动算法
+    - 小尺寸 (≤256x256)：bayer:bayer_scale=3（更激进）
+    - 大尺寸：sierra2_4a（更平滑）
+
+3. 生成调色板
+    - 使用 Lanczos 缩放到 512px 宽度
+    - palettegen 生成优化的 256 色调色板
+
+4. 应用调色板转换
+    - 使用 paletteuse 滤镜
+    - 应用选定的抖动算法
+    - 设置 alpha_threshold=128 处理透明度
+
+
+================================================================================
+错误处理
+
+下载重试机制：
+    - 最大尝试次数：MAX_DOWNLOADS_ATTEMPTS
+    - 指数退避：每次重试延迟时间翻倍
+    - 捕获的异常：TelegramError、NetworkError、OSError
+
+转换错误：
+    - 不支持的格式会抛出 ValueError
+    - FFmpeg 执行失败会抛出 RuntimeError
+
+
+================================================================================
+使用示例
+
+# 下载并打包表情包为 WebP
+zipPath = await createStickerZip(
+    bot=context.bot,
+    stickerSet=stickerSet,
+    setName="cute_cats",
+    stickerSuffix="webp"
+)
+
+# 下载并打包表情包为 GIF
+zipPath = await createStickerZip(
+    bot=context.bot,
+    stickerSet=stickerSet,
+    setName="cute_cats",
+    stickerSuffix="gif"
+)
+
+# 延迟删除文件和消息
+asyncio.create_task(
+    deleteLater(context, chatId, messageId, zipPath, 180)
+)
+
+
+================================================================================
+依赖项
+
+外部依赖：
+    - python-magic: MIME 类型检测
+    - FFmpeg: 视频/图像转换（需要二进制文件）
+
+FFmpeg 路径：
+    - Windows: ffmpeg/ffmpeg.exe
+    - Linux/macOS: ffmpeg/ffmpeg
+"""
+
 import os
 import sys
 import uuid
@@ -58,7 +194,7 @@ async def createStickerZip(
             outPath = os.path.join(tmpDir , f"{i}.webp")
             downloadTasks.append(
                 asyncio.create_task(
-                    downLoadEachOne(bot , s.file_id , outPath , stickerSuffix)
+                    downloadEachOne(bot , s.file_id , outPath , stickerSuffix)
                 )
             )
 
@@ -72,7 +208,7 @@ async def createStickerZip(
         await logAction(
             None,
             "下载完成喵 (as GIF)" if stickerSuffix == "gif" else "下载完成喵 (as WebP/WebM)",
-            f"成功 {converted if stickerSuffix == "gif" else ok} 张，失败 {failed} 张",
+            f"成功 {converted if stickerSuffix == 'gif' else ok} 张，失败 {failed} 张",
             "childWithChild"
         )
 
@@ -91,7 +227,7 @@ async def createStickerZip(
 
 
 # 单张 Sticker 的下载 + 转换 (可选)
-async def downLoadEachOne(bot , fileID , outPath , stickerSuffix="webp"):
+async def downloadEachOne(bot , fileID , outPath , stickerSuffix="webp"):
 
     async with _getSemaphore():
         for attempt in range(1 , MAX_DOWNLOADS_ATTEMPTS + 1):
@@ -147,9 +283,14 @@ async def convertToGif(rawInputPath: str) -> str:
     inputPath = os.path.abspath(rawInputPath)
     ext = os.path.splitext(inputPath)[1].lower()
 
+    # .tgs 是 Telegram Lottie 动画格式，FFmpeg 不直接支持
+    # 暂时抛出友好的错误提示
+    if ext == ".tgs":
+        raise ValueError(f"暂不支持将 .tgs 格式转换为 GIF 喵……\n这是 Lottie 动画格式，需要特殊处理……")
+
     if ext not in [".webp" , ".webm"]:
         raise ValueError(f"不支持的格式喵：{ext}")
-    
+
     outputPath = inputPath.rsplit("." , 1)[0] + ".gif"
 
     fps = MAX_GIF_FPS
@@ -237,10 +378,7 @@ async def convertToGif(rawInputPath: str) -> str:
 
         _ , err2 = await proc2.communicate()
         if proc2.returncode != 0:
-            raise RuntimeError(
-                "GIF 转换失败喵：",
-                err = err2.decode(errors="ignore")
-            )
+            raise RuntimeError(f"GIF 转换失败喵：{err2.decode(errors='ignore')}")
 
     return outputPath
 
@@ -255,8 +393,9 @@ async def deleteLater(context, chatId, messageId, filePath, deleteDelay):
     except Exception as e:
         pass
 
-    try:
-        if os.path.exists(filePath):
-            os.remove(filePath)
-    except Exception:
-        pass
+    if filePath:  # 添加 None 检查
+        try:
+            if os.path.exists(filePath):
+                os.remove(filePath)
+        except Exception:
+            pass

@@ -20,7 +20,7 @@ async def execute(app , args: list[str]):
     editMatch = parsed["edit"]
     
     if editMatch == "NoValue":
-        await quoteMenuController()
+        await quoteMenuController(app)
         return
 
     # 当不存在参数 -e/--edit 时，从语录里选一句输出

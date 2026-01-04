@@ -1,0 +1,22 @@
+# ============================================================
+# ZincNya Bot 依赖列表
+# ============================================================
+
+# Telegram Bot API
+python-telegram-bot==21.9
+
+# 环境变量管理
+python-dotenv==1.0.0
+
+# 异步控制台输入
+aioconsole==0.8.1
+
+# 富文本终端输出
+rich==13.9.4
+
+# 交互式终端 UI
+prompt-toolkit==3.0.48
+
+# 文件类型检测
+python-magic==0.4.27
+python-magic-bin==0.4.14; platform_system == "Windows"
