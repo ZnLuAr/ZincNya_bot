@@ -1,6 +1,6 @@
-# FFmpeg 配置说明喵
+# FFmpeg 配置说明
 
-这个文件夹是用来放 FFmpeg 可执行文件的喵，Bot 需要用它来处理媒体文件喵～
+这个文件夹是用来放 FFmpeg 可执行文件的喵，Bot 需要用它来处理媒体文件喵
 
 ## 为什么这个文件夹是空的喵？
 
@@ -38,7 +38,7 @@ FFmpeg 的可执行文件体积太大了（约 170MB），不适合提交到 Git
    # 验证
    ffmpeg -version
    ```
-   包管理器安装最方便了喵～
+   包管理器安装最方便了——
 
 2. **或者手动下载**
    - 访问官网：https://ffmpeg.org/download.html
@@ -49,7 +49,7 @@ FFmpeg 的可执行文件体积太大了（约 170MB），不适合提交到 Git
 
 ## 预期文件结构喵
 
-配置完成后，这个文件夹应该是这样的喵：
+配置完成后，这个文件夹应该是这样的：
 
 ```
 ffmpeg/
@@ -74,17 +74,17 @@ python scripts/setup_ffmpeg.py
 python3 scripts/setup_ffmpeg.py
 ```
 
-脚本会帮你自动下载并配置好一切喵～
+脚本会帮你自动下载并配置好一切喵。
 
 ---
 
 ## 常见问题
 
 **Q: Bot 启动时提示找不到 ffmpeg ？**
-A: 请确保 `ffmpeg.exe`（Windows）或 `ffmpeg`（Linux）在这个文件夹里，而且有执行权限喵！
+A: 请确保 `ffmpeg.exe`（Windows）或 `ffmpeg`（Linux）在这个文件夹里，而且有执行权限；
 
 **Q: 我可以使用系统已经安装的 ffmpeg 吗？**
-A: 当然可以喵！如果你的系统 PATH 中已经有 ffmpeg 了，Bot 会自动使用它的喵～
+A: 当然可以喵！如果你的系统 PATH 中已经有 ffmpeg 了，Bot 会自动使用它的——
 
 **Q: 下载太慢了怎么办喵？**
 A: 可以试试用国内的镜像源，或者手动下载后放到这个文件夹里喵～
