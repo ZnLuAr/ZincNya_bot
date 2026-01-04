@@ -21,7 +21,7 @@ async def execute(app , args):
                 continue
             fileName = file[:-3]
             # （实现命令的）模块的路径，将目录路径 utils/command 转化为 utils.command
-            moudlePath = f"{COMMAND_DIR.replace('/' , ".")}.{fileName}"
+            moudlePath = f"{COMMAND_DIR.replace('/' , '.')}.{fileName}"
             try:
                 mod = importlib.import_module(moudlePath)
                 if hasattr(mod , "getHelp"):
@@ -72,7 +72,7 @@ def getHelp():
 
         "name": "/help",
 
-        "description": "获取 ZincNya bot 的命令帮助喵",
+        "description": "提供 ZincNya bot 命令的帮助信息",
 
         "usage": "/help [<command>]",
 
