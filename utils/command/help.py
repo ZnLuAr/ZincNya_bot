@@ -21,7 +21,7 @@ async def execute(app , args):
                 continue
             fileName = file[:-3]
             # （实现命令的）模块的路径，将目录路径 utils/command 转化为 utils.command
-            moudlePath = f"{COMMAND_DIR.replace('/' , ".")}.{fileName}"
+            moudlePath = f"{COMMAND_DIR.replace('/' , '.')}.{fileName}"
             try:
                 mod = importlib.import_module(moudlePath)
                 if hasattr(mod , "getHelp"):

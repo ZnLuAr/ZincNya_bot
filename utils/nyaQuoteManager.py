@@ -378,6 +378,44 @@ def bol():          sys.stdout.write("\x1b[G")          # 返回第一行
 def crt():          sys.stdout.write("\r")              # 光标移回句首
 
 
+
+def _calculateVisibleWindow(entries: List[dict], selectedIndex: int, terminalHeight: int) -> Tuple[List[dict], int, dict]:
+    """
+    计算在终端高度限制下应该显示的条目窗口
+
+    返回：
+        - visibleEntries: 应该显示的条目列表
+        - windowStart: 窗口起始索引
+        - hasMore: {"up": bool, "down": bool} 是否有更多项
+    """
+    # 预留空间：标题(3) + 表头(2) + 表尾(1) + 提示行(2) = 8 行
+    RESERVED_LINES = 8
+    maxVisibleRows = max(5, terminalHeight - RESERVED_LINES)
+
+    if len(entries) <= maxVisibleRows:
+        # 全部显示
+        return entries, 0, {"up": False, "down": False}
+
+    # 居中显示选中项
+    halfWindow = maxVisibleRows // 2
+    windowStart = max(0, selectedIndex - halfWindow)
+    windowEnd = min(len(entries), windowStart + maxVisibleRows)
+
+    # 调整窗口确保填满
+    if windowEnd - windowStart < maxVisibleRows:
+        windowStart = max(0, windowEnd - maxVisibleRows)
+
+    visibleEntries = entries[windowStart:windowEnd]
+
+    hasMore = {
+        "up": windowStart > 0,
+        "down": windowEnd < len(entries)
+    }
+
+    return visibleEntries, windowStart, hasMore
+
+
+
 def quoteUIRenderer(entries: List[dict] , selectedIndex:int=-1 , prevHeight:int=0) -> int:
     '''
     quoteUIRenderer() 将 collectWhitelistViewModel 生成的 entries 渲染为 Rich 表格，
@@ -394,16 +432,31 @@ def quoteUIRenderer(entries: List[dict] , selectedIndex:int=-1 , prevHeight:int=
             - 序号
             - 权重
             - 文本预览
+
+        当表格高度超过终端高度时，只显示选中项周围的窗口，并添加 ↑/↓ 更多提示
     '''
-    
+
     console = Console()
+
+    # 获取终端高度
+    try:
+        import shutil
+        terminalSize = shutil.get_terminal_size()
+        terminalHeight = terminalSize.lines
+    except:
+        terminalHeight = 24  # 默认高度
+
+    # 计算可见窗口
+    visibleEntries, windowStart, hasMore = _calculateVisibleWindow(entries, selectedIndex, terminalHeight)
+
     table = Table(title="ZincNya Quotes")
     table.add_column("No." , justify="right")
     table.add_column("Weight" , justify= "right")
     table.add_column("Preview" , justify="left")
 
-    for i , e in enumerate(entries , start=0):
-        isSelected: bool = (i == selectedIndex)
+    for localIdx , e in enumerate(visibleEntries):
+        globalIdx = windowStart + localIdx  # 全局索引
+        isSelected: bool = (globalIdx == selectedIndex)
         preview = e.get("preview" , "")
 
         weight = e.get("weight" , None)
@@ -412,17 +465,32 @@ def quoteUIRenderer(entries: List[dict] , selectedIndex:int=-1 , prevHeight:int=
 
         if isSelected:
             table.add_row(
-                f"[bold yellow]> {i}[/]",
+                f"[bold yellow]> {globalIdx}[/]",
                 f"[bold yellow]{weightStr}[/]",
                 f"[bold yellow]{preview}[/]"
             )
         else:
-            table.add_row(str(i) , weightStr , preview)
+            table.add_row(str(globalIdx) , weightStr , preview)
 
     with console.capture() as capture:
         console.print(table)
     rendered = capture.get()
     lines = rendered.splitlines()
+
+    # 添加 ↑/↓ 更多提示
+    if hasMore["up"] or hasMore["down"]:
+        extraLines = []
+        if hasMore["up"]:
+            extraLines.append(f"[dim]↑ 更多 {windowStart} 项[/dim]")
+        if hasMore["down"]:
+            remainingDown = len(entries) - (windowStart + len(visibleEntries))
+            extraLines.append(f"[dim]↓ 更多 {remainingDown} 项[/dim]")
+
+        with console.capture() as capture:
+            for line in extraLines:
+                console.print(line)
+        extraRendered = capture.get()
+        lines.extend(extraRendered.splitlines())
 
     if prevHeight and prevHeight > 0:
         cuu(prevHeight)
@@ -436,7 +504,7 @@ def quoteUIRenderer(entries: List[dict] , selectedIndex:int=-1 , prevHeight:int=
         clr()
         crt()
         print(ln)
-    
+
     sys.stdout.flush()
 
     return len(lines)
@@ -502,7 +570,7 @@ async def editQuoteViaEditor(initialTextEscaped: str , initialWeight: float = 1.
 
 
 
-async def quoteMenuController():
+async def quoteMenuController(app=None):
     '''
     quoteMenuController() 用于键盘监听，并执行对应的逻辑。
 
@@ -515,7 +583,7 @@ async def quoteMenuController():
         - Enter键： 确认选中列表中选中项，且有：
             · 当选中的项为第 0 项，即项 (+) 时，在 json 中新建一项，并启用 editQuoteViaEditor 函数进行编辑
             · 当选中的项为常规的语录项时，直接启用 editQuoteViaEditor 进行编辑
-    
+
     进行操作后，调用内嵌的 redraw() 函数进行表格的重绘。
     当退出时，清除残留的 UI。
     '''
@@ -523,106 +591,119 @@ async def quoteMenuController():
     # 先留一个空行占位，防止覆盖用户输入
     print()
 
-    selected = 0
-    prevHeight = 0
-    
+    # 如果传入了 app，设置交互模式标志，让 consoleListener 让步
+    # 保存原始值，以便在 finally 中恢复
+    prevInteractiveMode = None
+    if app:
+        prevInteractiveMode = app.bot_data["state"]["interactiveMode"]
+        app.bot_data["state"]["interactiveMode"] = True
 
-    def redraw():
-        nonlocal selected , prevHeight
-        entries , meta = collectQuoteViewModel(selectedIndex=selected)
-        prevHeight = quoteUIRenderer(entries , selectedIndex=selected , prevHeight=prevHeight)
+    try:
+        selected = 0
+        prevHeight = 0
 
-    # 初次绘制
-    redraw()
 
-    kb = KeyBindings()
+        def redraw():
+            nonlocal selected , prevHeight
+            entries , _ = collectQuoteViewModel(selectedIndex=selected)
+            prevHeight = quoteUIRenderer(entries , selectedIndex=selected , prevHeight=prevHeight)
 
-    @kb.add("up")
-    def _up(event):
-        nonlocal selected
-        selected = max(0, selected - 1)
+        # 初次绘制
         redraw()
 
-    @kb.add("down")
-    def _down(event):
-        nonlocal selected
-        entries, meta = collectQuoteViewModel(selectedIndex=selected)
-        selected = min(len(entries) - 1, selected + 1)
-        redraw()
+        kb = KeyBindings()
 
-    @kb.add("delete")
-    def _del(event):
-        nonlocal selected
-        entries, meta = collectQuoteViewModel(selectedIndex=selected)
-
-        if selected == 0:
-            return  # 添加项不能删除
-
-        raw = entries[selected].get("raw")
-        if raw is None:
-            return
-
-        quotes = loadQuoteFile()
-        try:
-            idx = quotes.index(raw)
-            userOperation("delete", index=idx)
-        except ValueError:
-            return
-
-        # 保持选中位置有效
-        entries2, meta2 = collectQuoteViewModel(selectedIndex=selected)
-        selected = min(selected, len(entries2) - 1)
-
-        redraw()
-
-    @kb.add("enter")
-    async def _enter(event):
-        nonlocal selected
-        entries, meta = collectQuoteViewModel(selectedIndex=selected)
-
-        # 新建
-        if selected == 0:
-            res = await editQuoteViaEditor("", 1.0)
-            if res:
-                t, w = res
-                userOperation("add", payload={"text": t, "weight": w})
+        @kb.add("up")
+        def _up(event):
+            nonlocal selected
+            selected = max(0, selected - 1)
             redraw()
-            return
 
-        # 编辑已有项
-        raw = entries[selected].get("raw")
-        if not raw:
-            return
+        @kb.add("down")
+        def _down(event):
+            nonlocal selected
+            entries, _ = collectQuoteViewModel(selectedIndex=selected)
+            selected = min(len(entries) - 1, selected + 1)
+            redraw()
 
-        quotes = loadQuoteFile()
-        try:
-            idx = quotes.index(raw)
-        except ValueError:
-            return
+        @kb.add("delete")
+        def _del(event):
+            nonlocal selected
+            entries, _ = collectQuoteViewModel(selectedIndex=selected)
 
-        res = await editQuoteViaEditor(raw.get("text", ""), raw.get("weight", 1.0))
-        if res:
-            newT, newW = res
-            userOperation("set", index=idx, payload={"text": newT, "weight": newW})
+            if selected == 0:
+                return  # 添加项不能删除
 
-        redraw()
+            raw = entries[selected].get("raw")
+            if raw is None:
+                return
 
-    @kb.add("escape")
-    def _esc(event):
-        event.app.exit()
+            quotes = loadQuoteFile()
+            try:
+                idx = quotes.index(raw)
+                userOperation("delete", index=idx)
+            except ValueError:
+                return
 
-    app = Application(
-        layout=Layout(TextArea(text="", focus_on_click=False)),
-        key_bindings=kb,
-        full_screen=False,
-    )
+            # 保持选中位置有效
+            entries2, _ = collectQuoteViewModel(selectedIndex=selected)
+            selected = min(selected, len(entries2) - 1)
 
-    await app.run_async()
+            redraw()
 
-    # 清理残留 UI
-    if prevHeight:
-        cuu(prevHeight + 1)
-        for _ in range(prevHeight + 1):
-            clr()
-            print()
-        cuu(prevHeight + 1)
+        @kb.add("enter")
+        async def _enter(event):
+            nonlocal selected
+            entries, _ = collectQuoteViewModel(selectedIndex=selected)
+
+            # 新建
+            if selected == 0:
+                res = await editQuoteViaEditor("", 1.0)
+                if res:
+                    t, w = res
+                    userOperation("add", payload={"text": t, "weight": w})
+                redraw()
+                return
+
+            # 编辑已有项
+            raw = entries[selected].get("raw")
+            if not raw:
+                return
+
+            quotes = loadQuoteFile()
+            try:
+                idx = quotes.index(raw)
+            except ValueError:
+                return
+
+            res = await editQuoteViaEditor(raw.get("text", ""), raw.get("weight", 1.0))
+            if res:
+                newT, newW = res
+                userOperation("set", index=idx, payload={"text": newT, "weight": newW})
+
+            redraw()
+
+        @kb.add("escape")
+        def _esc(event):
+            event.app.exit()
+
+        ptApp = Application(
+            layout=Layout(TextArea(text="", focus_on_click=False)),
+            key_bindings=kb,
+            full_screen=False,
+        )
+
+        await ptApp.run_async()
+
+        # 清理残留 UI
+        if prevHeight:
+            cuu(prevHeight + 1)
+            for _ in range(prevHeight + 1):
+                clr()
+                print()
+            cuu(prevHeight + 1)
+
+    finally:
+        # 恢复原始的交互模式状态
+        if app:
+            app.bot_data["state"]["interactiveMode"] = prevInteractiveMode

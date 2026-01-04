@@ -1,8 +1,21 @@
 import os
+from dotenv import load_dotenv
+
+# 加载 .env 文件中的环境变量
+load_dotenv()
 
 
 
-BOT_TOKEN = os.getenv("BOT_TOKEN" , "7770221224:AAGvij0WepiklXbqXDqB7RHa7k-9Y6nyzJs")
+
+# Telegram Bot Token（从环境变量读取）
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError(
+        "❌ BOT_TOKEN 环境变量未设置喵！\n"
+        "请创建 .env 文件并添加：BOT_TOKEN=your_token_here\n"
+        "参考 .env.example 文件了解配置格式。"
+    )
+
 
 
 
@@ -38,7 +51,5 @@ HELP_LIST_DIR = os.path.join(os.path.dirname(__file__) , "data" , "helpList.csv"
 
 
 
-# Sudoers 列表
-SUDOER_LIST = ["ZincPhos"]
-SUDOER_ID = ["7767386015"]
+
 WHITELIST_DIR = os.path.join(os.path.dirname(__file__) , "data" , "whitelist.json")

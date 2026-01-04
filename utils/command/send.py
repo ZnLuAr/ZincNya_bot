@@ -79,9 +79,7 @@ from telegram.error import Forbidden , BadRequest
 
 from handlers.cli import parseArgsTokens
 from utils.logger import logAction
-from utils.whitelistManager import (
-    whitelistUIRenderer,
-    collectWhitelistViewModel,)
+from utils.whitelistManager import whitelistMenuController
 
 
 
@@ -133,32 +131,10 @@ async def execute(app , args):
 async def chatIDList(app , bot):
     print("\n存下来的 UID 列表喵——\n")
 
-    entries = await collectWhitelistViewModel(bot)
-    whitelistUIRenderer(entries)
+    # 使用交互式选择器
+    selectedUID = await whitelistMenuController(bot , app)
 
-    print("输入编号来选择目标喵……或者直接输入ID也行——\n")
-
-    while True:
-        userInput = await asyncio.to_thread(input , ">> ")
-
-        i = userInput.strip()
-        if not i:
-            print("退出喵——\n")
-            return None
-    
-        # 若输入数字编号
-        if i.isdigit():
-            idx = int(i)
-            if 1 <= idx <= len(entries):
-                return str(entries[idx-1]["uid"])
-            else:
-                print("呜喵……？没有这个编号哦……\n")
-                continue
-
-        if i.lstrip("-").isdigit():
-            return str(i)
-        
-        print("ムリー！这样输入是不行的喵……再试试吧——\n")
+    return selectedUID
 
 
 
