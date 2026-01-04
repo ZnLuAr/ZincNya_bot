@@ -17,6 +17,7 @@ git clone <your-repo-url>
 cd ZincNya_bot
 ```
 
+
 ### 2. 安装依赖
 
 然后，给咱装上需要的工具喵——
@@ -24,6 +25,7 @@ cd ZincNya_bot
 ```bash
 pip install -r requirements.txt
 ```
+
 
 ### 3. 配置环境变量
 
@@ -44,6 +46,7 @@ BOT_TOKEN=your_bot_token_here
 > 2. 发送 `/newbot` ，或者使用 Open 根据指引创建一个新的 bot 
 > 3. 把获得的 token 复制下来就好了——
 
+
 ### 4. 配置 FFmpeg（必需喵！）
 
 咱需要 FFmpeg 来处理媒体文件的……
@@ -60,6 +63,7 @@ python scripts/setup_ffmpeg.py
 
 如果你想自己动手的话，可以看看 [ffmpeg/README.md](ffmpeg/README.md) 里的详细步骤哦
 
+
 ### 5. 启动 Bot
 
 一切准备就绪，喵的一声，就启动啦——
@@ -69,6 +73,7 @@ python bot.py
 ```
 
 ---
+
 
 ## 项目结构喵
 
@@ -107,6 +112,7 @@ ZincNya_bot/
 
 ---
 
+
 ## 可用命令喵
 
 启动 Bot 之后，在控制台输入这些命令就能控制咱喵～
@@ -124,9 +130,11 @@ ZincNya_bot/
 
 ---
 
+
 ## 开发说明喵
 
 想给咱添加新功能的话，请看这里——
+
 
 ### 添加新命令
 
@@ -146,7 +154,8 @@ ZincNya_bot/
 
 ---
 
-## 部署到新环境喵
+
+## 部署到新环境
 
 要把咱搬到新服务器的话，按照这个步骤来喵：
 
@@ -158,7 +167,8 @@ ZincNya_bot/
 
 ---
 
-## 故障排除喵
+
+## 故障排除
 
 遇到问题了的话，看看这里能不能帮到你喵：
 
@@ -178,6 +188,7 @@ ZincNya_bot/
 有什么解决不了的问题，可以提 Issue 喵！
 
 ---
+
 
 ## 许可证
 
