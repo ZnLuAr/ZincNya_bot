@@ -1,10 +1,11 @@
-# ZincNya Bot 喵——
+# ZincNya Bot
 
 一个基于 Python-telegram-bot 的 Telegram Bot 项目喵！
 
 由 Zinc Phos 创造的机器人，说是……
 
 ---
+
 
 ## 快速开始
 
@@ -13,7 +14,7 @@
 需要使用以下的指令把代码克隆到本地——
 
 ```bash
-git clone <your-repo-url>
+git clone git@github.com:ZnLuAr/ZincNya_bot.git
 cd ZincNya_bot
 ```
 
@@ -41,7 +42,7 @@ cp .env.example .env
 BOT_TOKEN=your_bot_token_here
 ```
 
-> **如何获取 Bot Token 喵？**
+> **如何获取 Bot Token？**
 > 1. 在 Telegram 里找到这位 [@BotFather](https://t.me/BotFather) 大佬；
 > 2. 发送 `/newbot` ，或者使用 Open 根据指引创建一个新的 bot 
 > 3. 把获得的 token 复制下来就好了——
@@ -183,7 +184,7 @@ ZincNya_bot/
 
 ### 其他问题
 
-查看 `log/` 文件夹中的日志文件，看看详细的错误信息喵～
+查看 `log/` 文件夹中的日志文件，看看详细的错误信息；
 
 有什么解决不了的问题，可以提 Issue 喵！
 
@@ -192,7 +193,7 @@ ZincNya_bot/
 
 ## 许可证
 
-MIT License 喵～
+MIT License 喵
 
 ---
 

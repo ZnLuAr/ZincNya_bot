@@ -70,10 +70,7 @@ tmp/
 # 用户数据和白名单（包含敏感的用户 ID）
 data/whitelist.json
 data/chatID.json
-
-# 如果语录内容是私人的，也可以忽略
-# data/ZincNyaQuotes.json
-# data/ZincNyaQuotes.csv
+data/ZincNyaQuotes.json
 
 
 # ============================================================
