@@ -181,7 +181,7 @@ ZincNya_bot/
 
 ## 许可证
 
-MIT License 喵～（或者根据你的需要修改喵）
+MIT License 喵～
 
 ---
 
