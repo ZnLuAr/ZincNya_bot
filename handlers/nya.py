@@ -7,6 +7,8 @@ from utils.nyaQuoteManager import loadQuoteFile , getRandomQuote
 from utils.logger import logAction
 
 
+
+
 # 响应来自 Telegram 的 /nya 指令，随机从语录中挑一句发送出去
 async def sendNya(update:Update , context:ContextTypes.DEFAULT_TYPE):
     quotes = loadQuoteFile()
@@ -35,4 +37,8 @@ async def sendNya(update:Update , context:ContextTypes.DEFAULT_TYPE):
 
 
 def register():
-    return [CommandHandler("nya" , sendNya)]
+    return {
+        "handlers": [CommandHandler("nya", sendNya)],
+        "name": "Nya 语录",
+        "description": "随机发送 ZincNya 语录",
+    }

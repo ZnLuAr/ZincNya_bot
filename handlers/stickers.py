@@ -191,8 +191,13 @@ def setCachedSticker(setName: str , stickerSet):
 
 
 
+
 def register():
-    return [
-        CommandHandler("findSticker", findSticker),
-        CallbackQueryHandler(onDownloadPressed)
-    ]
+    return {
+        "handlers": [
+            CommandHandler("findSticker", findSticker),
+            CallbackQueryHandler(onDownloadPressed)
+        ],
+        "name": "表情包下载",
+        "description": "查找并下载 Telegram 表情包",
+    }
