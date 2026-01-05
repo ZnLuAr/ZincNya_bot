@@ -54,7 +54,7 @@ async def main():
     }
 
     initLogger()                            # 初始化日志
-    loadHandlers(app)                       # 注册 handlers 的功能（我迟早得把它优化了）
+    loadHandlers(app)                       # 动态加载 Telegram handlers
 
 
     # ========================================================================
