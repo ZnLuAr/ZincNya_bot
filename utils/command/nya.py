@@ -30,7 +30,8 @@ async def execute(app , args: list[str]):
               "\n…………",
               "\n呜喵……？说不出话来……\n")
         return
-    print(selectedQuote , "\n")
+    for _ in selectedQuote:
+        print(_ , "\n")
 
 
 

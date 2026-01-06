@@ -7,7 +7,7 @@ from telegram.ext import (
     filters,
 )
 import asyncio
-import sys
+from aioconsole import ainput
 
 # 以下是项目内的模块名
 from loader import loadHandlers
@@ -20,7 +20,6 @@ from handlers.cli import handleConsoleCommand
 
 async def consoleListener(app):
     print("控制台命令可用喵。输入 /help 查看帮助。\n")
-    loop = asyncio.get_event_loop()
 
     while True:
         # 如果有其它功能需要夺取交互权，则转让输入权给内层的其它功能
@@ -28,16 +27,24 @@ async def consoleListener(app):
             await asyncio.sleep(0.1)
             continue
 
-        # 在异步环境中读取标准输入
-        command = await loop.run_in_executor(None , sys.stdin.readline)
-        command = command.strip()
-        if not command:
-            continue
-        
-        # 调用 CLI 处理器
-        commandResult = await handleConsoleCommand(app , command)
-        if commandResult == "SHUTDOWN":
+        try:
+            # 使用 aioconsole.ainput 统一异步读取方式（与 chatScreen 一致）
+            command = await ainput("")
+            command = command.strip()
+            if not command:
+                continue
+
+            # 调用 CLI 处理器
+            commandResult = await handleConsoleCommand(app , command)
+            if commandResult == "SHUTDOWN":
+                return "SHUTDOWN"
+
+        except EOFError:
+            # 处理 stdin 关闭的情况
             return "SHUTDOWN"
+        except Exception as e:
+            print(f"控制台读取出错喵：{e}")
+            continue
             
 
 
