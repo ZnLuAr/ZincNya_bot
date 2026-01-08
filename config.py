@@ -16,6 +16,10 @@ if not BOT_TOKEN:
         "参考 .env.example 文件了解配置格式。"
     )
 
+# Telegram Bot 代理配置（可选）
+# 用于连接 Telegram 服务器，格式: http://host:port
+TELEGRAM_PROXY = os.getenv("TELEGRAM_PROXY", None)
+
 
 
 
@@ -53,3 +57,17 @@ HELP_LIST_DIR = os.path.join(os.path.dirname(__file__) , "data" , "helpList.csv"
 
 
 WHITELIST_DIR = os.path.join(os.path.dirname(__file__) , "data" , "whitelist.json")
+
+
+
+
+# /book 书籍搜索功能相关常量
+BOOK_SEARCH_API = "https://openlibrary.org/search.json"     # Open Library 搜索 API
+BOOK_WORKS_API = "https://openlibrary.org/works"            # Open Library 作品详情 API
+BOOK_COVERS_API = "https://covers.openlibrary.org/b/id"     # Open Library 封面图片 API
+BOOK_ITEMS_PER_PAGE = 5                                     # 每页显示书籍数量
+BOOK_MAX_ITEMS_PER_PAGE = 10                                # 每页最大书籍数量
+BOOK_REQUEST_TIMEOUT = 30                                   # API 请求超时（秒）- 增加以应对慢速网络
+BOOK_DESCRIPTION_MAX_LENGTH = 500                           # 书籍简介最大长度
+BOOK_QUERY_HASH_LENGTH = 8                                  # 搜索词哈希长度（用于 callback_data）
+BOOK_HTTP_PROXY = os.getenv("BOOK_HTTP_PROXY", None)        # HTTP 代理（可选），格式: "http://host:port"

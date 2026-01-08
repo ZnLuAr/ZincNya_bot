@@ -7,11 +7,11 @@ from telegram.ext import (
     filters,
 )
 import asyncio
-from aioconsole import ainput
+import sys
 
 # 以下是项目内的模块名
 from loader import loadHandlers
-from config import BOT_TOKEN
+from config import BOT_TOKEN , TELEGRAM_PROXY
 from utils.logger import initLogger
 from handlers.cli import handleConsoleCommand
 
@@ -20,6 +20,7 @@ from handlers.cli import handleConsoleCommand
 
 async def consoleListener(app):
     print("控制台命令可用喵。输入 /help 查看帮助。\n")
+    loop = asyncio.get_event_loop()
 
     while True:
         # 如果有其它功能需要夺取交互权，则转让输入权给内层的其它功能
@@ -28,19 +29,18 @@ async def consoleListener(app):
             continue
 
         try:
-            # 使用 aioconsole.ainput 统一异步读取方式（与 chatScreen 一致）
-            command = await ainput("")
+            # 在异步环境中读取标准输入
+            command = await loop.run_in_executor(None, sys.stdin.readline)
             command = command.strip()
             if not command:
                 continue
 
             # 调用 CLI 处理器
-            commandResult = await handleConsoleCommand(app , command)
+            commandResult = await handleConsoleCommand(app, command)
             if commandResult == "SHUTDOWN":
                 return "SHUTDOWN"
 
         except EOFError:
-            # 处理 stdin 关闭的情况
             return "SHUTDOWN"
         except Exception as e:
             print(f"控制台读取出错喵：{e}")
@@ -52,7 +52,10 @@ async def consoleListener(app):
 async def main():
 
     # 初始化应用
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    builder = ApplicationBuilder().token(BOT_TOKEN)
+    if TELEGRAM_PROXY:
+        builder = builder.proxy(TELEGRAM_PROXY).get_updates_proxy(TELEGRAM_PROXY)
+    app = builder.build()
     
     # 定义 bot 的一些运行状况，挂载在 app.bot_data 上
     app.bot_data["state"] = {
