@@ -97,12 +97,14 @@ import os
 from telegram import Bot
 from datetime import datetime
 from aioconsole import ainput
-from telegram.error import Forbidden , BadRequest
+from telegram.error import Forbidden
 
 
 from handlers.cli import parseArgsTokens
 from utils.logger import logAction
 from utils.whitelistManager import whitelistMenuController
+from utils.terminalUI import cls, smcup, rmcup
+from utils.chatHistory import saveMessage, loadHistory
 
 
 def _resetTerminal():
@@ -170,7 +172,6 @@ async def execute(app , args):
 
 
 async def chatIDList(app , bot):
-    print("\n存下来的 UID 列表喵——\n")
 
     # 使用交互式选择器
     selectedUID = await whitelistMenuController(bot , app)
@@ -215,12 +216,31 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         app.bot_data["state"]["interactiveMode"] = False
         return
 
+    # 切换到备用屏幕缓冲区
+    smcup()
+    sys.stdout.flush()
+
 
     # ========================================================================
-    async def receiverLoop(bot: Bot , chatID: str):
+    def displayHistory():
+        """显示历史聊天记录"""
+        history = loadHistory(targetChatID, limit=30)
+        if history:
+            print(f"─────── 历史记录 ───────\n")
+            for msg in history:
+                ts = msg["timestamp"].strftime("%H:%M:%S") if msg["timestamp"] else "??:??:??"
+                sender = msg["sender"] or "Unknown"
+                content = msg["content"]
+                if msg["direction"] == "outgoing":
+                    print(f"[{ts}] <{sender}> {content}")
+                else:
+                    print(f"[{ts}] <{sender}> {content}")
+            print(f"<以上 {len(history)} 条>")
+            print("\n─────── 实时聊天 ───────\n")
+
+
+    async def receiverLoop():
     # 后台协程：持续监听对方发来的消息并展示，形成一个类聊天窗口的界面
-    # （其实就是不断从全局队列中读取消息，
-    # 若消息属于当前聊天对象，则打印出来
 
         while app.bot_data["state"]["interactiveMode"] == "SendChatScreenMode":
 
@@ -232,28 +252,33 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
                 if str(msg.chat.id) != str(targetChatID):
                     continue
 
+                # 保存消息到加密存储
+                sender = msg.from_user.username or msg.from_user.first_name or "Unknown"
+                content = msg.text or ""
+                saveMessage(targetChatID, "incoming", sender, content)
+
                 printMessage("incomingMessage" , msg)
-            
+
             except asyncio.CancelledError:
                 break
 
             except Exception:
                 # 忽略零星的单次读取异常，继续循环
-                pass    
+                pass
 
 
-    async def inputLoop(queue):
+    async def inputLoop():
         while True:
             userInput = await ainput(">> ")
 
-            # 清除用户的原始输入，即不显示命令行的回显“>> text”
+            # 清除用户的原始输入，即不显示命令行的回显">> text"
             sys.stdout.write("\033[F")      # 光标上移一行
             sys.stdout.write("\033[K")      # 清除整行
             sys.stdout.flush()
 
             return userInput
 
-    
+
     def printMessage(mode , msg):
         match mode:
             case "incomingMessage":
@@ -270,42 +295,46 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
     # ========================================================================
 
 
-    receiverTask = asyncio.create_task(receiverLoop(bot , targetChatID))
+    receiverTask = asyncio.create_task(receiverLoop())
 
     # 主循环，从控制台读取输入并发送消息
     try:
-
+        cls()  # 清屏
         print(
-            "\n已进入聊天界面喵",
+            "已进入聊天界面喵",
             f"\n与 {targetChatID} 的实时聊天已连接",
             "\n发送文字即可直接发出；输入 ':q' 退出\n",
             "=" * 64,
-            "\n\n"
+            "\n"
         )
 
+        # 显示历史记录
+        displayHistory()
+
         while True:
-            userInput = await inputLoop(queue)
+            userInput = await inputLoop()
 
             if userInput is None:
                 continue
 
             if userInput.strip() == ":q":
-                print(
-                    "\n\n",
-                    "=" * 64,
-                    "\n退出聊天界面喵——\n\n"
-                )
                 break
 
             try:
                 printMessage("selfMessage" , userInput)
                 await bot.send_message(chat_id=targetChatID , text=userInput)
+                # 保存发送的消息到加密存储
+                saveMessage(targetChatID, "outgoing", "ZincNya~", userInput)
             except Forbidden:
                 print(f"    被 Forbidden 了……这可能是对方还没有跟咱开始聊天的缘故哦")
             except Exception as e:
                 print(f"    呜喵……发送失败了喵…… | {e}\n")
 
     finally:
+        # 切回主屏幕缓冲区
+        rmcup()
+        sys.stdout.flush()
+
         app.bot_data["state"]["interactiveMode"] = False
         receiverTask.cancel()
         try:
@@ -315,6 +344,8 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
 
         # 重置终端到正常模式（修复 ainput 可能遗留的终端状态问题）
         _resetTerminal()
+
+        print("退出聊天界面喵——\n")
 
 
 

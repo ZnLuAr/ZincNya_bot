@@ -151,6 +151,7 @@ from prompt_toolkit.widgets import TextArea
 
 from config import WHITELIST_DIR
 from utils.logger import logAction
+from utils.terminalUI import cls, smcup, rmcup
 
 
 
@@ -264,13 +265,6 @@ async def collectWhitelistViewModel(bot: Bot , selectedIndex: int = -1) -> Tuple
     return entries, meta
 
 
-def cuu(n: int):    sys.stdout.write(f"\x1b[{n}A")
-def cud(n: int):    sys.stdout.write(f"\x1b[{n}B")
-def clr():          sys.stdout.write("\x1b[2K")
-def bol():          sys.stdout.write("\x1b[G")
-def crt():          sys.stdout.write("\r")
-
-
 def _calculateVisibleWindow(entries: List[dict] , selectedIndex: int , terminalHeight: int) -> Tuple[List[dict] , int , dict]:
     # 预留空间给标题、表头、提示行等
     RESERVED_LINES = 8
@@ -348,18 +342,11 @@ def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: in
         extraRendered = capture.get()
         lines.extend(extraRendered.splitlines())
 
-    # 擦除上一次渲染的内容（精准局部擦除，避免闪烁）
-    if prevHeight and prevHeight > 0:
-        cuu(prevHeight)
-        for _ in range(prevHeight):
-            clr()
-            sys.stdout.write("\n")
-        cuu(prevHeight)
+    # 清屏重绘
+    cls()
 
     # 输出新的表格
     for ln in lines:
-        clr()
-        crt()
         print(ln)
     sys.stdout.flush()
 
@@ -371,6 +358,10 @@ def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: in
 async def whitelistMenuController(bot: Bot , app=None) -> Optional[str]:
     # 先留一个空行，防止覆盖用户输入
     print()
+
+    # 切换到备用屏幕缓冲区
+    smcup()
+    sys.stdout.flush()
 
     # 如果传入了 app，设置交互模式标志，让 consoleListener 让步
     # 保存原始值，以便在 finally 中恢复
@@ -425,14 +416,6 @@ async def whitelistMenuController(bot: Bot , app=None) -> Optional[str]:
         ptApp = Application(layout=Layout(TextArea(text="" , focus_on_click=False)) , key_bindings=kb , full_screen=False)
         await ptApp.run_async()
 
-        # 清理残留 UI
-        if prevHeight:
-            cuu(prevHeight + 1)
-            for _ in range(prevHeight + 1):
-                clr()
-                print()
-            cuu(prevHeight + 1)
-
         # 用户按 Esc 取消选择
         if selected == -1:
             return None
@@ -444,6 +427,10 @@ async def whitelistMenuController(bot: Bot , app=None) -> Optional[str]:
         return None
 
     finally:
+        # 切回主屏幕缓冲区
+        rmcup()
+        sys.stdout.flush()
+
         # 恢复原始的交互模式状态
         if app:
             app.bot_data["state"]["interactiveMode"] = prevInteractiveMode
