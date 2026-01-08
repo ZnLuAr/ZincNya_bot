@@ -3,10 +3,29 @@ utils/command/send.py
 
 用于实现 /send 命令的逻辑模块，负责从控制台发送消息，或进入与某个用户的实时本地聊天界面。
 
-本模块大致可分为三个部分：
+本模块大致可分为四个部分：
+    - 终端状态管理（_resetTerminal）
     - 参数解析与入口函数（execute）
     - 普通消息发送逻辑（sendMsg）
     - 本地交互式聊天界面（chatScreen）
+
+
+================================================================================
+终端状态管理
+为 _resetTerminal() 工具函数
+
+_resetTerminal()
+    用于在退出聊天界面后重置终端到正常模式。
+
+    背景：
+        chatScreen 使用 aioconsole.ainput() 读取用户输入，
+        该库可能会修改终端设置（如切换到 raw mode），
+        退出时若未正确恢复，会导致外层的 sys.stdin.readline() 无法正常工作。
+
+    实现：
+        - 在 Linux/macOS 上使用 termios 恢复 ECHO 和 ICANON 标志
+        - 在 Windows 上跳过（Windows 终端处理方式不同）
+        - 静默处理异常，避免在非 TTY 环境下报错
 
 
 ================================================================================
@@ -38,7 +57,7 @@ sendMsg(bot, idList, atUser, text)
 本地交互式聊天界面（核心功能）
 包含 chatScreen() 及其内部的 receiverLoop() / inputLoop() / printMessage()
 
-chatScreen(app , bot: Bot , targetChatID: str) 
+chatScreen(app , bot: Bot , targetChatID: str)
     用于进入与某一 chatID 的实时聊天界面。
 
 其操作模式为 CLI 聊天窗口：
@@ -47,15 +66,18 @@ chatScreen(app , bot: Bot , targetChatID: str)
     · 输入 ":q" 退出界面
 
 内部结构：
-    - 设置 app.bot_data["state"]["interactiveMode"] 为 "SendChatScreen"，暂停外层 CLI
+    - 设置 app.bot_data["state"]["interactiveMode"] 为 "SendChatScreenMode"，暂停外层 CLI
         （"interactiveMode" 一般情况下为 False）
     - receiverLoop() 后台读取 messageQueue 中的消息，并筛选属于当前 chatID 的部分打印到屏幕
-    - inputLoop() 等待用户输入并自动清理输入行的回显，使界面更简洁
+    - inputLoop() 使用 aioconsole.ainput() 等待用户输入，并自动清理输入行的回显
     - printMessage() 用于统一格式化输出聊天内容
 
     正常情况下，用户输入 ":q" 退出函数
 
-最终会恢复 interactiveMode 并关闭内部协程。
+退出时的清理工作（finally 块）：
+    1. 恢复 interactiveMode 为 False
+    2. 取消 receiverTask 协程
+    3. 调用 _resetTerminal() 重置终端状态
 
 
 ================================================================================
@@ -71,6 +93,7 @@ chatScreen(app , bot: Bot , targetChatID: str)
 
 import sys
 import asyncio
+import os
 from telegram import Bot
 from datetime import datetime
 from aioconsole import ainput
@@ -80,6 +103,24 @@ from telegram.error import Forbidden , BadRequest
 from handlers.cli import parseArgsTokens
 from utils.logger import logAction
 from utils.whitelistManager import whitelistMenuController
+
+
+def _resetTerminal():
+    """
+    重置终端到正常模式
+    在 Linux/macOS 上使用 termios，Windows 上跳过
+    """
+    try:
+        if os.name == 'posix':
+            import termios
+            # 获取当前终端设置并恢复到正常模式
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            # 恢复到 canonical 模式（正常行编辑模式）
+            old_settings[3] = old_settings[3] | termios.ECHO | termios.ICANON
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    except Exception:
+        pass  # 静默失败，避免在非 TTY 环境下报错
 
 
 
@@ -271,6 +312,9 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
             await receiverTask
         except Exception:
             pass
+
+        # 重置终端到正常模式（修复 ainput 可能遗留的终端状态问题）
+        _resetTerminal()
 
 
 

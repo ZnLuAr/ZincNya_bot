@@ -8,6 +8,9 @@ python-telegram-bot==21.9
 # 环境变量管理
 python-dotenv==1.0.0
 
+# 异步 HTTP 请求（书籍搜索 API）
+aiohttp==3.11.11
+
 # 异步控制台输入
 aioconsole==0.8.1
 
