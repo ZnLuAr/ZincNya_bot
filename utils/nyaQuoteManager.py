@@ -181,6 +181,7 @@ from prompt_toolkit.widgets import TextArea
 
 from config import QUOTES_DIR
 from utils.fileEditor import editFile
+from utils.terminalUI import cls, smcup, rmcup
 
 
 
@@ -438,18 +439,6 @@ def collectQuoteViewModel(selectedIndex: int=-1) -> Tuple[List[dict] , int]:
     return entries , meta
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ANSI 工具（相对光标移动）
-# ─────────────────────────────────────────────────────────────────────────────
-
-def cuu(n: int):    sys.stdout.write(f"\x1b[{n}A")      # 光标上移
-def cud(n: int):    sys.stdout.write(f"\x1b[{n}B")      # 光标下移
-def clr():          sys.stdout.write("\x1b[2K")         # 清除本行
-def bol():          sys.stdout.write("\x1b[G")          # 返回第一行
-def crt():          sys.stdout.write("\r")              # 光标移回句首
-
-
-
 def _calculateVisibleWindow(entries: List[dict], selectedIndex: int, terminalHeight: int) -> Tuple[List[dict], int, dict]:
     """
     计算在终端高度限制下应该显示的条目窗口
@@ -487,7 +476,7 @@ def _calculateVisibleWindow(entries: List[dict], selectedIndex: int, terminalHei
 
 
 
-def quoteUIRenderer(entries: List[dict] , selectedIndex:int=-1 , prevHeight:int=0) -> int:
+def quoteUIRenderer(entries: List[dict] , selectedIndex:int=-1) -> int:
     '''
     quoteUIRenderer() 将 collectWhitelistViewModel 生成的 entries 渲染为 Rich 表格，
             并在重绘前使用几个 ANSI 功能函数对屏幕进行擦除等操作
@@ -511,8 +500,8 @@ def quoteUIRenderer(entries: List[dict] , selectedIndex:int=-1 , prevHeight:int=
 
     # 获取终端高度
     try:
-        import shutil
-        terminalSize = shutil.get_terminal_size()
+        import shutil as _shutil
+        terminalSize = _shutil.get_terminal_size()
         terminalHeight = terminalSize.lines
     except:
         terminalHeight = 24  # 默认高度
@@ -563,19 +552,12 @@ def quoteUIRenderer(entries: List[dict] , selectedIndex:int=-1 , prevHeight:int=
         extraRendered = capture.get()
         lines.extend(extraRendered.splitlines())
 
-    if prevHeight and prevHeight > 0:
-        cuu(prevHeight)
-        for _ in range(prevHeight):
-            clr()
-            sys.stdout.write("\n")
-        # 逐行擦除后再把光标移回块顶
-        cuu(prevHeight)
+    # 清屏重绘（使用备用屏幕时效果更好）
+    cls()
 
+    # 输出新的表格
     for ln in lines:
-        clr()
-        crt()
         print(ln)
-
     sys.stdout.flush()
 
     return len(lines)
@@ -662,6 +644,10 @@ async def quoteMenuController(app=None):
     # 先留一个空行占位，防止覆盖用户输入
     print()
 
+    # 切换到备用屏幕缓冲区
+    smcup()
+    sys.stdout.flush()
+
     # 如果传入了 app，设置交互模式标志，让 consoleListener 让步
     # 保存原始值，以便在 finally 中恢复
     prevInteractiveMode = None
@@ -671,13 +657,11 @@ async def quoteMenuController(app=None):
 
     try:
         selected = 0
-        prevHeight = 0
-
 
         def redraw():
-            nonlocal selected , prevHeight
+            nonlocal selected
             entries , _ = collectQuoteViewModel(selectedIndex=selected)
-            prevHeight = quoteUIRenderer(entries , selectedIndex=selected , prevHeight=prevHeight)
+            quoteUIRenderer(entries , selectedIndex=selected)
 
         # 初次绘制
         redraw()
@@ -766,15 +750,11 @@ async def quoteMenuController(app=None):
 
         await ptApp.run_async()
 
-        # 清理残留 UI
-        if prevHeight:
-            cuu(prevHeight + 1)
-            for _ in range(prevHeight + 1):
-                clr()
-                print()
-            cuu(prevHeight + 1)
-
     finally:
+        # 切回主屏幕缓冲区
+        rmcup()
+        sys.stdout.flush()
+
         # 恢复原始的交互模式状态
         if app:
             app.bot_data["state"]["interactiveMode"] = prevInteractiveMode
