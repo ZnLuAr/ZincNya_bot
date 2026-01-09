@@ -76,6 +76,6 @@ BOOK_HTTP_PROXY = os.getenv("BOOK_HTTP_PROXY", None)        # HTTP 代理（可�
 
 
 # 聊天记录保存相关常量
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")     # 聊天记录保存路径
-DB_PATH = os.path.join(DATA_DIR, "chatHistory.db")                             # 聊天记录保存文件名
-KEY_PATH = os.path.join(DATA_DIR, ".chatKey")                                  # 密钥文件路径
+CHAT_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")                 # 聊天记录保存路径
+DB_PATH = os.path.join(CHAT_DATA_DIR, "chatHistory.db")                        # 聊天记录保存文件名
+KEY_PATH = os.path.join(CHAT_DATA_DIR, ".chatKey")                             # 密钥文件路径
