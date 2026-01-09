@@ -227,13 +227,21 @@ def userOperation(operation , userID:str|None=None , comment=None) -> bool | dic
 
 
 async def checkChatAvailable(bot: Bot , uid: str):
+    """
+    检查是否能与用户通信。
+
+    使用 send_chat_action 而非 get_chat，
+    因为 get_chat 即使用户屏蔽了 Bot 也可能成功。
+    """
     try:
-        await bot.get_chat(uid)
+        await bot.send_chat_action(chat_id=uid, action="typing")
         return True
-    except (Forbidden , BadRequest) as e:
-        return e
+    except Forbidden as e:
+        return ("Forbidden", e)
+    except BadRequest as e:
+        return ("NotFound", e)
     except Exception as e:
-        return e
+        return ("Error", e)
 
 
 
@@ -256,8 +264,33 @@ async def collectWhitelistViewModel(bot: Bot , selectedIndex: int = -1) -> Tuple
     results = await asyncio.gather(*[checkChatAvailable(bot , uid) for uid in uids])
 
     # 组装为带有可用性标记的完整条目
-    for (uid , status , comment) , available in zip(raw , results):
-        entries.append({"uid": uid , "status": status , "comment": comment , "available": available})
+    for (uid , listStatus , comment) , available in zip(raw , results):
+        # 确定显示状态
+        if available is True:
+            displayStatus = listStatus  # "Allowed" 或 "Suspended"
+        elif isinstance(available, tuple):
+            errorType, _ = available
+            match errorType:
+                case "Forbidden":
+                    displayStatus = "Forbidden"
+                case "NotFound":
+                    displayStatus = "Not Found"
+                case _:
+                    displayStatus = "Error"
+        else:
+            displayStatus = "Unknown"
+
+        # 颜色：Allowed 且可用为小麦色，其他情况为灰色
+        colour = "wheat1" if (available is True and listStatus == "Allowed") else "grey70"
+
+        entries.append({
+            "uid": uid,
+            "listStatus": listStatus,
+            "displayStatus": displayStatus,
+            "colour": colour,
+            "comment": comment,
+            "available": available is True
+        })
 
     # 确保选中索引在有效范围内
     meta = {"selected": max(0 , min(selectedIndex , len(entries) - 1)) if entries else 0 , "count": len(entries)}
@@ -313,14 +346,15 @@ def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: in
         globalIdx = windowStart + localIdx
         isSelected = (globalIdx == selectedIndex)
         uid = e["uid"]
-        colour = "wheat1" if e["available"] is True else "grey70"
+        colour = e["colour"]
+        displayStatus = e["displayStatus"]
         comment = e["comment"] or ""
         commentPreview = "" if comment.strip() == "" else comment[:15] + ("..." if len(comment) > 15 else "")
         if isSelected:
-            table.add_row(f"[bold yellow]> {globalIdx + 1}[/]" , f"[bold yellow]{uid}[/]" , f"[bold yellow]{e['status']}[/]" , f"[bold yellow]{commentPreview}[/]")
+            table.add_row(f"[bold yellow]> {globalIdx + 1}[/]" , f"[bold yellow]{uid}[/]" , f"[bold yellow]{displayStatus}[/]" , f"[bold yellow]{commentPreview}[/]")
         else:
             uidRendered = f"[{colour}]{uid}[/]"
-            table.add_row(str(globalIdx + 1) , uidRendered , e["status"] , commentPreview)
+            table.add_row(str(globalIdx + 1) , uidRendered , displayStatus , commentPreview)
 
     with console.capture() as capture:
         console.print(table)

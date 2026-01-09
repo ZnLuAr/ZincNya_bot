@@ -58,7 +58,7 @@ from datetime import datetime
 from typing import List, Optional
 from cryptography.fernet import Fernet
 
-from config import DATA_DIR , DB_PATH , KEY_PATH
+from config import CHAT_DATA_DIR , DB_PATH , KEY_PATH
 
 
 
@@ -69,7 +69,7 @@ from config import DATA_DIR , DB_PATH , KEY_PATH
 
 def _ensureDataDir():
     """确保 data 目录存在"""
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(CHAT_DATA_DIR, exist_ok=True)
 
 
 def _loadOrCreateKey() -> bytes:
@@ -167,6 +167,7 @@ def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
 
         conn.commit()
         conn.close()
+        print(f"[DEBUG] 消息已保存 (chatID={chatID}, direction={direction})")
         return True
 
     except Exception as e:
@@ -211,7 +212,11 @@ def loadHistory(chatID: str, limit: int = 50, offset: int = 0) -> List[dict]:
         rows = cursor.fetchall()
         conn.close()
 
+        # 调试信息：显示数据库中的记录数
+        print(f"[DEBUG] 从数据库查询到 {len(rows)} 条记录 (chatID={chatID})")
+
         messages = []
+        skippedCount = 0
         for row in rows:
             try:
                 decryptedContent = fernet.decrypt(row["content"]).decode("utf-8")
@@ -221,9 +226,13 @@ def loadHistory(chatID: str, limit: int = 50, offset: int = 0) -> List[dict]:
                     "content": decryptedContent,
                     "timestamp": datetime.fromisoformat(row["timestamp"]) if row["timestamp"] else None
                 })
-            except Exception:
-                # 解密失败的消息跳过
+            except Exception as e:
+                # 解密失败的消息跳过（可能是密钥已更改）
+                skippedCount += 1
                 continue
+
+        if skippedCount > 0:
+            print(f"⚠️ 有 {skippedCount} 条消息因解密失败被跳过（密钥可能已更改）")
 
         # 反转列表，让最旧的消息在前面
         messages.reverse()
