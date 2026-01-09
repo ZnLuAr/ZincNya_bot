@@ -55,19 +55,23 @@ sendMsg(bot, idList, atUser, text)
 
 ================================================================================
 本地交互式聊天界面（核心功能）
-包含 chatScreen() 及其内部的 receiverLoop() / inputLoop() / printMessage()
+包含 chatScreen() 及其内部的 receiverLoop() / inputLoop() / printMessage() / displayHistory()
 
 chatScreen(app , bot: Bot , targetChatID: str)
     用于进入与某一 chatID 的实时聊天界面。
 
 其操作模式为 CLI 聊天窗口：
+    · 使用 terminalUI 的备用屏幕缓冲区（smcup/rmcup），不污染主终端
+    · 进入时显示历史聊天记录（从 chatHistory 模块加载）
     · 上方自动展示来自对方的消息（telegram -> bot -> 全局 messageQueue）
     · 底部由用户以 ">> " 输入并发送消息
+    · 收发的消息会自动保存到加密数据库（chatHistory 模块）
     · 输入 ":q" 退出界面
 
 内部结构：
     - 设置 app.bot_data["state"]["interactiveMode"] 为 "SendChatScreenMode"，暂停外层 CLI
         （"interactiveMode" 一般情况下为 False）
+    - displayHistory() 进入时显示历史聊天记录
     - receiverLoop() 后台读取 messageQueue 中的消息，并筛选属于当前 chatID 的部分打印到屏幕
     - inputLoop() 使用 aioconsole.ainput() 等待用户输入，并自动清理输入行的回显
     - printMessage() 用于统一格式化输出聊天内容
@@ -75,16 +79,18 @@ chatScreen(app , bot: Bot , targetChatID: str)
     正常情况下，用户输入 ":q" 退出函数
 
 退出时的清理工作（finally 块）：
-    1. 恢复 interactiveMode 为 False
-    2. 取消 receiverTask 协程
-    3. 调用 _resetTerminal() 重置终端状态
+    1. 切回主屏幕缓冲区（rmcup）
+    2. 恢复 interactiveMode 为 False
+    3. 取消 receiverTask 协程
+    4. 调用 _resetTerminal() 重置终端状态
 
 
 ================================================================================
 
 本模块不直接与 whitelist.json 交互，
-仅通过 whitelistManager 提供的 collectWhitelistViewModel() 与 whitelistUIRenderer()
-来显示 UID 列表（用于选择聊天对象）。
+仅通过 whitelistManager 提供的 whitelistMenuController() 来选择聊天对象。
+
+聊天记录通过 chatHistory 模块进行加密存储和读取。
 
 """
 
