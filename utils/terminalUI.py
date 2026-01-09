@@ -50,7 +50,7 @@ from typing import Tuple
 # 平台兼容性初始化
 # ============================================================================
 
-def _enable_ansi_on_windows():
+def enableAnsiOnWindows():
     """
     在 Windows 上启用 ANSI 转义序列支持。
 
@@ -75,7 +75,7 @@ def _enable_ansi_on_windows():
 
 
 # 模块导入时自动启用 Windows ANSI 支持
-_enable_ansi_on_windows()
+enableAnsiOnWindows()
 
 
 # ============================================================================
