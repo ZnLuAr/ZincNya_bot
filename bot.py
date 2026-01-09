@@ -30,13 +30,13 @@ async def consoleListener(app):
 
         try:
             # 在异步环境中读取标准输入
-            command = await loop.run_in_executor(None, sys.stdin.readline)
+            command = await loop.run_in_executor(None , sys.stdin.readline)
             command = command.strip()
             if not command:
                 continue
 
             # 调用 CLI 处理器
-            commandResult = await handleConsoleCommand(app, command)
+            commandResult = await handleConsoleCommand(app , command)
             if commandResult == "SHUTDOWN":
                 return "SHUTDOWN"
 

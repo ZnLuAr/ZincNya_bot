@@ -58,14 +58,9 @@ from datetime import datetime
 from typing import List, Optional
 from cryptography.fernet import Fernet
 
+from config import DATA_DIR , DB_PATH , KEY_PATH
 
-# ============================================================================
-# 路径配置
-# ============================================================================
 
-_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-_DB_PATH = os.path.join(_DATA_DIR, "chat_history.db")
-_KEY_PATH = os.path.join(_DATA_DIR, ".chat_key")
 
 
 # ============================================================================
@@ -74,7 +69,7 @@ _KEY_PATH = os.path.join(_DATA_DIR, ".chat_key")
 
 def _ensureDataDir():
     """确保 data 目录存在"""
-    os.makedirs(_DATA_DIR, exist_ok=True)
+    os.makedirs(DATA_DIR, exist_ok=True)
 
 
 def _loadOrCreateKey() -> bytes:
@@ -86,13 +81,13 @@ def _loadOrCreateKey() -> bytes:
     """
     _ensureDataDir()
 
-    if os.path.exists(_KEY_PATH):
-        with open(_KEY_PATH, "rb") as f:
+    if os.path.exists(KEY_PATH):
+        with open(KEY_PATH, "rb") as f:
             return f.read()
 
     # 生成新密钥
     key = Fernet.generate_key()
-    with open(_KEY_PATH, "wb") as f:
+    with open(KEY_PATH, "wb") as f:
         f.write(key)
 
     return key
@@ -104,6 +99,8 @@ def _getFernet() -> Fernet:
     return Fernet(key)
 
 
+
+
 # ============================================================================
 # 数据库初始化
 # ============================================================================
@@ -112,7 +109,7 @@ def _initDB():
     """初始化数据库表结构"""
     _ensureDataDir()
 
-    conn = sqlite3.connect(_DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -137,6 +134,8 @@ def _initDB():
 _initDB()
 
 
+
+
 # ============================================================================
 # 消息存储与读取
 # ============================================================================
@@ -158,7 +157,7 @@ def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
         fernet = _getFernet()
         encryptedContent = fernet.encrypt(content.encode("utf-8"))
 
-        conn = sqlite3.connect(_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
         cursor.execute(
@@ -171,7 +170,7 @@ def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
         return True
 
     except Exception as e:
-        print(f"保存消息失败: {e}")
+        print(f"保存消息失败喵: {e}")
         return False
 
 
@@ -194,7 +193,7 @@ def loadHistory(chatID: str, limit: int = 50, offset: int = 0) -> List[dict]:
     try:
         fernet = _getFernet()
 
-        conn = sqlite3.connect(_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -246,7 +245,7 @@ def getChatList() -> List[dict]:
             - last_message_time: datetime
     """
     try:
-        conn = sqlite3.connect(_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -290,7 +289,7 @@ def clearHistory(chatID: Optional[str] = None) -> bool:
         成功返回 True，失败返回 False
     """
     try:
-        conn = sqlite3.connect(_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
         if chatID:
@@ -318,7 +317,7 @@ def getMessageCount(chatID: Optional[str] = None) -> int:
         消息数量
     """
     try:
-        conn = sqlite3.connect(_DB_PATH)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
         if chatID:
