@@ -60,7 +60,6 @@ parseArgsTokens() 是通用参数解析器，供各指令模块调用。
 
 
 
-from telegram import Bot
 import shlex
 import importlib
 import inspect

@@ -71,3 +71,11 @@ BOOK_REQUEST_TIMEOUT = 30                                   # API 请求超时�
 BOOK_DESCRIPTION_MAX_LENGTH = 500                           # 书籍简介最大长度
 BOOK_QUERY_HASH_LENGTH = 8                                  # 搜索词哈希长度（用于 callback_data）
 BOOK_HTTP_PROXY = os.getenv("BOOK_HTTP_PROXY", None)        # HTTP 代理（可选），格式: "http://host:port"
+
+
+
+
+# 聊天记录保存相关常量
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")     # 聊天记录保存路径
+DB_PATH = os.path.join(DATA_DIR, "chatHistory.db")                             # 聊天记录保存文件名
+KEY_PATH = os.path.join(DATA_DIR, ".chatKey")                                  # 密钥文件路径
