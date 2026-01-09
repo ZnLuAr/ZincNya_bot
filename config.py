@@ -44,7 +44,6 @@ QUOTES_DIR = os.path.join(os.path.dirname(__file__) , "data" , "ZincNyaQuotes.js
 
 # 日志相关常量
 LOG_DIR = os.path.join(os.path.dirname(__file__) , "log")
-LOG_FILE_TEMPLATE = "log_{date}_{index:02d}.log"  # 日志文件名模板
 
 
 

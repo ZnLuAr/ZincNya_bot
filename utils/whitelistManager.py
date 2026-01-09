@@ -55,12 +55,12 @@ userOperation() 是统一的白名单操作入口。
         - "addUser":        添加用户到 allowed
         - "deleteUser":     将用户从 allowed 中移除
         - "suspendUser":    将用户从 allowed 移入 suspended，体现为用户权限被挂起
-        - "listUser":       返回完整的白名单结构（ -> dict ）
+        - "listUsers":      返回完整的白名单结构（ -> dict ）
         - "setComment":     添加 / 修改用户备注
 
     函数的返回值视操作而定：
         - bool: True / False    表示操作是否成功
-        - dict                  在 listUser 时返回白名单完整结构
+        - dict                  在 listUsers 时返回白名单完整结构
 
 
 UI 相关的函数——
@@ -70,7 +70,7 @@ checkChatAvailable() 用于检测白名单中的用户是否可以进行聊天�
     通常被 collectWhitelistViewModel() 调用并异步运行。
     函数视情况返回两种类型的值：
         - 当可以向用户发送信息时，返回布尔值 True
-        - 当遇见 Forbidden、BadRequest 及其它原因时返回 Exception: str
+        - 当遇见 Forbidden、BadRequest 及其它原因时返回元组 (errorType, exception)
     返回值通常被 collectWhitelistViewModel() 调用，来判断与用户的聊天界面是否可用
 
 
@@ -88,15 +88,16 @@ collectWhitelistViewModel() 一般用于构建 whitelistUIRenderer 所需的数�
 
     entries 列表中的每一项形如：
     {
-        "uid":          "12345",
-        "status":       "Allowed" 或 "Suspended",
-        "comment":      "备注文本",
-        "available":    True / False
+        "uid":           "12345",
+        "listStatus":    "Allowed" 或 "Suspended"（原始列表状态）,
+        "displayStatus": "Allowed" / "Suspended" / "Forbidden" / "Not Found" / "Error",
+        "colour":        "wheat1" 或 "grey70"（Allowed 且可用为小麦色，其他为灰色）,
+        "comment":       "备注文本",
+        "available":     True / False
     }
 
 
-whitelistUIRenderer() 将 collectWhitelistViewModel 生成的 entries 渲染为 Rich 表格，
-    并在重绘前使用 ANSI 功能函数对屏幕进行擦除等操作
+whitelistUIRenderer() 将 collectWhitelistViewModel 生成的 entries 渲染为 Rich 表格
 
     函数接受：
         - entries: List[dict]            格式化的表格信息
@@ -107,8 +108,8 @@ whitelistUIRenderer() 将 collectWhitelistViewModel 生成的 entries 渲染为 
 
     显示的内容包括：
         - 序号
-        - UID          当 Available 时高亮，其他情况下为灰色；选中项以黄色高亮
-        - 状态          Allowed / Suspended
+        - UID          Allowed 且可用时为小麦色，其他情况为灰色；选中项以黄色高亮
+        - 状态          Allowed / Suspended / Forbidden / Not Found 等
         - 备注预览
 
     当表格高度超过终端高度时，只显示选中项周围的窗口，并添加 ↑/↓ 更多提示
@@ -117,6 +118,7 @@ whitelistUIRenderer() 将 collectWhitelistViewModel 生成的 entries 渲染为 
 whitelistMenuController() 交互式白名单选择器
 
     在控制台使用 /whitelist --list 或 /send --chat 时进入函数
+    使用 terminalUI 的备用屏幕缓冲区（smcup/rmcup），不污染主终端
 
     使用 prompt_toolkit 包，支持读取 ↑、↓、Enter、Esc 键：
         - ↑ 键：        让选中项上移一项
