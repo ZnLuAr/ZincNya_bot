@@ -85,30 +85,51 @@ ZincNya_bot/
 ├── bot.py                  # Bot 主程序
 ├── config.py               # 配置文件
 ├── loader.py               # 功能加载器
-├── .env                    # 环境变量（不会被提交到 git ）
+├── .env                    # 环境变量（不会被提交到 git）
 ├── .env.example            # 环境变量模板
 ├── requirements.txt        # Python 依赖
 │
 ├── data/                   # 数据文件喵
 │   ├── whitelist.json      # 白名单（不会被提交）
-│   ├── chatID.json         # 聊天 ID（不会被提交）
+│   ├── chatHistory.db      # 加密聊天记录（不会被提交）
+│   ├── .chatKey            # 聊天记录加密密钥（不会被提交）
 │   └── ZincNyaQuotes.json  # 语录数据喵
 │
 ├── ffmpeg/                 # FFmpeg 可执行文件
 │   └── README.md           # FFmpeg 配置说明
 │
 ├── handlers/               # Telegram 消息处理器
+│   ├── cli.py              # 控制台命令处理
+│   ├── stickers.py         # 表情包搜索与下载
+│   ├── nya.py              # /nya 语录功能
+│   └── book.py             # /book 书籍搜索
 │
 ├── utils/                  # 工具模块
 │   ├── command/            # CLI 命令
-│   ├── whitelistManager.py # 白名单管理
-│   ├── nyaQuoteManager.py  # 语录管理
-│   └── logger.py           # 日志工具
+│   │   ├── help.py         # /help 帮助
+│   │   ├── whitelist.py    # /whitelist 白名单管理
+│   │   ├── send.py         # /send 发送消息与聊天界面
+│   │   ├── nya.py          # /nya 语录管理
+│   │   ├── log.py          # /log 日志管理
+│   │   ├── clear.py        # /clear 清屏
+│   │   └── shutdown.py     # /shutdown 关闭
+│   │
+│   ├── whitelistManager.py # 白名单管理与交互式选择器
+│   ├── nyaQuoteManager.py  # 语录管理与交互式编辑器
+│   ├── chatHistory.py      # 聊天记录加密存储
+│   ├── bookSearchAPI.py    # Open Library API 封装
+│   ├── downloader.py       # 表情包下载与格式转换
+│   ├── fileEditor.py       # TUI 文本编辑器
+│   ├── terminalUI.py       # 终端 UI 工具（备用屏幕、ANSI）
+│   ├── errorHandler.py     # 错误处理与日志
+│   └── logger.py           # 树状日志系统
 │
 ├── scripts/                # 辅助脚本喵
 │   └── setup_ffmpeg.py     # FFmpeg 自动配置脚本
 │
 └── log/                    # 日志文件（不会被提交）
+    ├── log_YYYY-MM-DD.log  # 操作日志（每天一个）
+    └── error_YYYY-MM-DD.log # 错误日志（每天一个）
 ```
 
 ---
@@ -122,10 +143,19 @@ ZincNya_bot/
 |------|------|
 | `/help` | 查看帮助信息 |
 | `/whitelist` | 管理白名单 |
-| `/send` | 发送消息 |
+| `/send` | 发送消息或进入聊天界面 |
 | `/nya` | 语录相关功能 |
+| `/log` | 管理日志文件 |
 | `/clear` | 清理控制台 |
 | `/shutdown` | 关闭 Bot |
+
+在 Telegram 里，用户可以使用这些命令喵～
+
+| 命令 | 说明 |
+|------|------|
+| `/findsticker` | 搜索和下载表情包 |
+| `/book <关键词>` | 搜索书籍 |
+| `/nya` | 获取一条随机语录 |
 
 想知道更详细的用法，就输入 `/help <command>` 喵！
 
@@ -148,9 +178,11 @@ ZincNya_bot/
 这些文件包含敏感信息，不会被提交到 git：
 - `.env` - Bot token 等环境变量喵
 - `data/whitelist.json` - 用户白名单喵
-- `data/chatID.json` - 聊天 ID 列表喵
+- `data/chatHistory.db` - 加密的聊天记录喵
+- `data/.chatKey` - 聊天记录加密密钥喵
 
-第一次部署的时候需要手动创建这些文件，
+第一次部署的时候需要手动创建 `.env` 文件，
+其他数据文件会在使用时自动生成喵——
 它们是属于你的秘密，请注意保护好它们喵——
 
 ---

@@ -7,15 +7,15 @@ utils/chatHistory.py
     - 自动生成并管理加密密钥
     - 加密存储聊天消息
     - 按 chatID 查询历史记录
-    - 导出聊天记录
+    - 清空聊天记录
 
 
 ================================================================================
 数据存储
 ================================================================================
 
-数据库文件：data/chat_history.db
-密钥文件：data/.chat_key（自动生成，请勿删除或泄露）
+数据库文件：data/chatHistory.db
+密钥文件：data/.chatKey（自动生成，请勿删除或泄露）
 
 数据库表结构 messages：
     - id:           INTEGER PRIMARY KEY
@@ -46,6 +46,9 @@ getChatList()
 
 clearHistory(chatID=None)
     清空指定聊天的记录，若 chatID 为 None 则清空全部
+
+getMessageCount(chatID=None)
+    获取消息数量
 
 """
 
@@ -167,7 +170,6 @@ def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
 
         conn.commit()
         conn.close()
-        print(f"[DEBUG] 消息已保存 (chatID={chatID}, direction={direction})")
         return True
 
     except Exception as e:
@@ -211,9 +213,6 @@ def loadHistory(chatID: str, limit: int = 50, offset: int = 0) -> List[dict]:
 
         rows = cursor.fetchall()
         conn.close()
-
-        # 调试信息：显示数据库中的记录数
-        print(f"[DEBUG] 从数据库查询到 {len(rows)} 条记录 (chatID={chatID})")
 
         messages = []
         skippedCount = 0
