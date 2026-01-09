@@ -14,6 +14,7 @@ from loader import loadHandlers
 from config import BOT_TOKEN , TELEGRAM_PROXY
 from utils.logger import initLogger
 from handlers.cli import handleConsoleCommand
+from utils.errorHandler import initErrorHandler , setupAsyncioErrorHandler
 
 
 
@@ -64,8 +65,12 @@ async def main():
     }
 
     initLogger()                            # 初始化日志
+    initErrorHandler(app)                   # 初始化错误处理
     loadHandlers(app)                       # 动态加载 Telegram handlers
 
+    # 设置 asyncio 异常处理器
+    loop = asyncio.get_event_loop()
+    setupAsyncioErrorHandler(loop)
 
     # ========================================================================
     async def messageCollector(update , context):
