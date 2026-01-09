@@ -14,13 +14,15 @@ TreeLogger 是单例模式的日志记录器，负责管理日志文件的创建
 
 主要功能：
     1. 初始化日志系统（initialize）
-        - 自动按日期创建日志文件，每天的第 N 次启动会生成 log_YYYY-MM-DD_NN.log
-        - 在控制台和文件中记录启动时间戳
+        - 每天一个日志文件：log_YYYY-MM-DD.log
+        - 不同启动之间用分隔线区分
+        - 空启动（没有任何操作）不会写入日志
 
     2. 记录日志（log）
         - 接受用户对象、操作描述、操作结果、子节点类型
         - 根据子节点类型格式化为树状结构输出
         - 异步写入文件，避免阻塞主线程
+        - 首次写入时自动添加启动分隔符
 
     3. 提取用户名（_extractUserName）
         - 支持多种输入类型：Telegram User 对象、字符串、字典、None
@@ -118,13 +120,13 @@ import os
 from datetime import datetime
 from enum import Enum
 import asyncio
-from config import LOG_DIR, LOG_FILE_TEMPLATE
+from config import LOG_DIR
 
 
 
 
 
-class LogChildType(str, Enum):
+class LogChildType(str , Enum):
     """日志子节点类型"""
     NONE = "none"                                               # 无子节点，打印空行
     WITH_CHILD = "with_child"                                   # 有子节点
@@ -144,33 +146,48 @@ class TreeLogger:
 
     def __init__(self):
         self._logPath = None
+        self._startupTime = None          # 启动时间
+        self._startupWritten = False      # 本次启动是否已写入日志
+        self._hasContent = False          # 本次启动是否有实际内容
 
 
     def initialize(self):
-        """初始化日志系统（主程序启动时调用）"""
-        self._logPath = self._getTodayLogPath()
+        """
+        初始化日志系统（主程序启动时调用）
 
-        with open(self._logPath , "a" , encoding="utf-8") as f:
-            f.write(f"[{datetime.now().strftime('%H:%M:%S')}] ZincNya Bot—— 喵的一声，就启动啦——\n")
+        注意：不再立即写入启动信息，而是延迟到首次有实际日志时才写入。
+        这样可以避免空启动（没有任何操作）污染日志文件。
+        """
+        self._logPath = self._getTodayLogPath()
+        self._startupTime = datetime.now()
+        self._startupWritten = False
+        self._hasContent = False
 
         print(f"\n\n锌酱、现在就要创建日志了喵——✍\n   · {self._logPath}，\nこれからですよにゃー\n")
 
 
     def _getTodayLogPath(self):
-        """生成当天的日志文件路径，并计算本次开机为本日第几次开机"""
+        """生成当天的日志文件路径（每天一个文件）"""
         os.makedirs(LOG_DIR , exist_ok=True)
         today = datetime.now().strftime("%Y-%m-%d")
+        return os.path.join(LOG_DIR , f"log_{today}.log")
 
-        # 找出今天已经有多少个日志
-        existingLogs = [
-            f for f in os.listdir(LOG_DIR)
-            if f.startswith(f"log_{today}")
-        ]
 
-        index = len(existingLogs) + 1
-        logFileName = LOG_FILE_TEMPLATE.format(date=today , index=index)
+    def _writeStartupHeader(self):
+        """写入启动分隔符和启动信息（仅在首次有实际日志时调用）"""
+        if self._startupWritten:
+            return
 
-        return os.path.join(LOG_DIR , logFileName)
+        self._startupWritten = True
+        timestamp = self._startupTime.strftime("%H:%M:%S")
+
+        # 检查文件是否已存在且有内容（决定是否需要分隔符）
+        needSeparator = os.path.exists(self._logPath) and os.path.getsize(self._logPath) > 0
+
+        with open(self._logPath, "a", encoding="utf-8") as f:
+            if needSeparator:
+                f.write(f"\n\n{'─' * 60}\n\n")
+            f.write(f"[{timestamp}] ZincNya Bot—— 喵的一声，就启动啦——\n")
 
 
     async def log(self , user , action , result , childType: LogChildType|str , writeInLog=True):
@@ -199,7 +216,7 @@ class TreeLogger:
         userName = self._extractUserName(user)
 
         # 格式化控制台输出
-        consoleText = self._formatConsoleText(timestamp, userName, action, result, childType)
+        consoleText = self._formatConsoleText(timestamp , userName , action , result , childType)
 
         # 格式化日志文件输出
         logLine = f"[{timestamp}] @{userName}：{action}\n[{timestamp}] @锌酱：Result：{result}\n"
@@ -213,7 +230,7 @@ class TreeLogger:
             print(consoleText)
 
 
-    def _formatConsoleText(self, timestamp, userName, action, result, childType: LogChildType):
+    def _formatConsoleText(self , timestamp , userName , action , result , childType: LogChildType):
         """根据子节点类型格式化控制台输出"""
         match childType:
             case LogChildType.NONE:
@@ -238,7 +255,7 @@ class TreeLogger:
                 return f"                   └─┤ {result}"
 
 
-    def _convertLegacyChildType(self, oldType: str) -> LogChildType:
+    def _convertLegacyChildType(self , oldType: str) -> LogChildType:
         """将旧的字符串类型转换为新的枚举类型（向后兼容）"""
         mapping = {
             "False": LogChildType.NONE,
@@ -249,30 +266,33 @@ class TreeLogger:
             "lastChild": LogChildType.LAST_CHILD,
             "True": LogChildType.ONLY_RESULT,
         }
-        return mapping.get(oldType, LogChildType.NONE)
+        return mapping.get(oldType , LogChildType.NONE)
 
 
-    def _writeLogSync(self, consoleText, logLine):
+    def _writeLogSync(self , consoleText , logLine):
         """同步写入日志"""
+        # 首次写入时，先写入启动分隔符和启动信息
+        self._writeStartupHeader()
+
         with open(self._logPath, "a", encoding="utf-8") as f:
             f.write(logLine)
         print(consoleText)
 
 
-    def _extractUserName(self, user):
+    def _extractUserName(self , user):
         """提取用户名（支持多种输入类型）"""
         if user is None:
             return "Bot"
-        if isinstance(user, str):
+        if isinstance(user , str):
             return user.strip() or "Unknown"
-        if isinstance(user, dict):
+        if isinstance(user , dict):
             return user.get("username") or user.get("first_name") or "Unknown"
 
-        userName = getattr(user, "username", None)
+        userName = getattr(user , "username" , None)
         if userName:
             return userName
 
-        first = getattr(user, "first_name", None)
+        first = getattr(user , "first_name" , None)
         if first:
             return first
 
@@ -294,7 +314,7 @@ def initLogger():
 
 
 
-async def logAction(user, action, result, child, writeInLog=True):
+async def logAction(user , action , result , child , writeInLog=True):
     """
     记录操作日志（向后兼容的函数接口）
 
@@ -305,4 +325,4 @@ async def logAction(user, action, result, child, writeInLog=True):
         child: 子节点类型（支持旧字符串或新枚举）
         writeInLog: 是否写入日志文件
     """
-    await _logger.log(user, action, result, child, writeInLog)
+    await _logger.log(user , action , result , child , writeInLog)
