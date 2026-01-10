@@ -80,8 +80,8 @@ async def execute(app , args):
 
 
     if listFlag is not None or listFlag == "NoValue":
-        # 使用交互式选择器浏览白名单
-        await whitelistMenuController(bot , app)
+        # 使用交互式选择器管理白名单
+        await whitelistMenuController(bot , app , mode="manage")
         return
     
 

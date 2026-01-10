@@ -4,28 +4,9 @@ utils/command/send.py
 用于实现 /send 命令的逻辑模块，负责从控制台发送消息，或进入与某个用户的实时本地聊天界面。
 
 本模块大致可分为四个部分：
-    - 终端状态管理（_resetTerminal）
     - 参数解析与入口函数（execute）
     - 普通消息发送逻辑（sendMsg）
     - 本地交互式聊天界面（chatScreen）
-
-
-================================================================================
-终端状态管理
-为 _resetTerminal() 工具函数
-
-_resetTerminal()
-    用于在退出聊天界面后重置终端到正常模式。
-
-    背景：
-        chatScreen 使用 aioconsole.ainput() 读取用户输入，
-        该库可能会修改终端设置（如切换到 raw mode），
-        退出时若未正确恢复，会导致外层的 sys.stdin.readline() 无法正常工作。
-
-    实现：
-        - 在 Linux/macOS 上使用 termios 恢复 ECHO 和 ICANON 标志
-        - 在 Windows 上跳过（Windows 终端处理方式不同）
-        - 静默处理异常，避免在非 TTY 环境下报错
 
 
 ================================================================================
@@ -82,7 +63,7 @@ chatScreen(app , bot: Bot , targetChatID: str)
     1. 切回主屏幕缓冲区（rmcup）
     2. 恢复 interactiveMode 为 False
     3. 取消 receiverTask 协程
-    4. 调用 _resetTerminal() 重置终端状态
+    4. 重置终端状态（resetTerminal）
 
 
 ================================================================================
@@ -109,26 +90,8 @@ from telegram.error import Forbidden
 from handlers.cli import parseArgsTokens
 from utils.logger import logAction
 from utils.whitelistManager import whitelistMenuController
-from utils.terminalUI import cls, smcup, rmcup
+from utils.terminalUI import cls, smcup, rmcup, resetTerminal
 from utils.chatHistory import saveMessage, loadHistory
-
-
-def _resetTerminal():
-    """
-    重置终端到正常模式
-    在 Linux/macOS 上使用 termios，Windows 上跳过
-    """
-    try:
-        if os.name == 'posix':
-            import termios
-            # 获取当前终端设置并恢复到正常模式
-            fd = sys.stdin.fileno()
-            old_settings = termios.tcgetattr(fd)
-            # 恢复到 canonical 模式（正常行编辑模式）
-            old_settings[3] = old_settings[3] | termios.ECHO | termios.ICANON
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    except Exception:
-        pass  # 静默失败，避免在非 TTY 环境下报错
 
 
 
@@ -348,8 +311,8 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         except Exception:
             pass
 
-        # 重置终端到正常模式（修复 ainput 可能遗留的终端状态问题）
-        _resetTerminal()
+        # 重置终端状态
+        resetTerminal()
 
         print("退出聊天界面喵——\n")
 
