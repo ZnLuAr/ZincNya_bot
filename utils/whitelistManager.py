@@ -298,9 +298,11 @@ async def collectWhitelistViewModel(bot: Bot , selectedIndex: int = -1 , include
 
     # 组装为带有可用性标记的完整条目
     for (uid , listStatus , comment) , available in zip(raw , results):
-        # 确定显示状态
-        if available is True:
-            displayStatus = listStatus  # "Allowed" 或 "Suspended"
+        # 确定显示状态：Suspended 优先显示，Allowed 用户显示实际可用性
+        if listStatus == "Suspended":
+            displayStatus = "Suspended"
+        elif available is True:
+            displayStatus = "Allowed"
         elif isinstance(available, tuple):
             errorType, _ = available
             match errorType:
@@ -313,8 +315,8 @@ async def collectWhitelistViewModel(bot: Bot , selectedIndex: int = -1 , include
         else:
             displayStatus = "Unknown"
 
-        # 颜色：Allowed 且可用为小麦色，其他情况为灰色
-        colour = "wheat1" if (available is True and listStatus == "Allowed") else "grey70"
+        # 颜色：可用为小麦色，不可用为灰色
+        colour = "wheat1" if (available is True) else "grey70"
 
         entries.append({
             "uid": uid,
