@@ -55,6 +55,7 @@ userOperation() 是统一的白名单操作入口。
         - "addUser":        添加用户到 allowed
         - "deleteUser":     将用户从 allowed 中移除
         - "suspendUser":    将用户从 allowed 移入 suspended，体现为用户权限被挂起
+        - "unsuspendUser":  将用户从 suspended 移回 allowed，恢复用户权限
         - "listUsers":      返回完整的白名单结构（ -> dict ）
         - "setComment":     添加 / 修改用户备注
 
@@ -115,19 +116,30 @@ whitelistUIRenderer() 将 collectWhitelistViewModel 生成的 entries 渲染为 
     当表格高度超过终端高度时，只显示选中项周围的窗口，并添加 ↑/↓ 更多提示
 
 
-whitelistMenuController() 交互式白名单选择器
+whitelistMenuController() 交互式白名单控制器
 
     在控制台使用 /whitelist --list 或 /send --chat 时进入函数
     使用 terminalUI 的备用屏幕缓冲区（smcup/rmcup），不污染主终端
 
-    使用 prompt_toolkit 包，支持读取 ↑、↓、Enter、Esc 键：
-        - ↑ 键：        让选中项上移一项
-        - ↓ 键：        让选中项下移一项
+    支持两种模式（通过 mode 参数控制）：
+
+    选择模式（mode="select"，默认）：
+        用于 /send --chat，选择聊天对象
+        - ↑/↓ 键：      移动选中项
         - Enter键：     确认选中并返回选中的 UID
         - Esc键：       取消选择，返回 None
 
+    管理模式（mode="manage"）：
+        用于 /whitelist --list，管理白名单
+        - ↑/↓ 键：      移动选中项
+        - ←/→ 键：      切换 Allowed/Suspended 状态
+        - Enter键：     在 (+) 行添加新用户，在普通行编辑备注
+        - Del键：       删除用户（需要确认）
+        - Esc键：       退出管理界面
+
     返回：
-        - 选中的 UID (str) 或 None（用户按 Esc 取消）
+        - 选择模式：返回选中的 UID (str) 或 None
+        - 管理模式：始终返回 None
 
 """
 
@@ -153,7 +165,7 @@ from prompt_toolkit.widgets import TextArea
 
 from config import WHITELIST_DIR
 from utils.logger import logAction
-from utils.terminalUI import cls, smcup, rmcup
+from utils.terminalUI import cls, smcup, rmcup, resetTerminal
 
 
 
@@ -209,6 +221,13 @@ def userOperation(operation , userID:str|None=None , comment=None) -> bool | dic
                 return True
             return False
 
+        case "unsuspendUser":
+            if userID in data["suspended"]:
+                data["allowed"][userID] = data["suspended"].pop(userID)
+                saveWhitelistFile(data)
+                return True
+            return False
+
         case "listUsers":
             return dict(data)
 
@@ -248,11 +267,23 @@ async def checkChatAvailable(bot: Bot , uid: str):
 
 
 
-async def collectWhitelistViewModel(bot: Bot , selectedIndex: int = -1) -> Tuple[List[dict], dict]:
+async def collectWhitelistViewModel(bot: Bot , selectedIndex: int = -1 , includeAddRow: bool = False) -> Tuple[List[dict], dict]:
 
     whitelistData = loadWhitelistFile()
     entries = []
     raw = []
+
+    # 如果是管理模式，添加 (+) 行
+    if includeAddRow:
+        entries.append({
+            "uid": "(+)",
+            "listStatus": None,
+            "displayStatus": "添加新用户",
+            "colour": "cyan",
+            "comment": "",
+            "available": None,
+            "isAddRow": True
+        })
 
     # 先收集所有 allowed 和 suspended 的用户
     for uid , obj in whitelistData.get("allowed" , {}).items():
@@ -291,7 +322,8 @@ async def collectWhitelistViewModel(bot: Bot , selectedIndex: int = -1) -> Tuple
             "displayStatus": displayStatus,
             "colour": colour,
             "comment": comment,
-            "available": available is True
+            "available": available is True,
+            "isAddRow": False
         })
 
     # 确保选中索引在有效范围内
@@ -324,7 +356,7 @@ def _calculateVisibleWindow(entries: List[dict] , selectedIndex: int , terminalH
     return visibleEntries , windowStart , hasMore
 
 
-def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: int = 0) -> int:
+def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: int = 0 , showHelpLine: bool = False) -> int:
     console = Console()
 
     # 获取终端高度以计算可见窗口
@@ -351,12 +383,21 @@ def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: in
         colour = e["colour"]
         displayStatus = e["displayStatus"]
         comment = e["comment"] or ""
-        commentPreview = "" if comment.strip() == "" else comment[:15] + ("..." if len(comment) > 15 else "")
-        if isSelected:
-            table.add_row(f"[bold yellow]> {globalIdx + 1}[/]" , f"[bold yellow]{uid}[/]" , f"[bold yellow]{displayStatus}[/]" , f"[bold yellow]{commentPreview}[/]")
+        isAddRow = e.get("isAddRow", False)
+
+        # "(+)" 行特殊处理
+        if isAddRow:
+            if isSelected:
+                table.add_row("[bold yellow]>[/]" , "[bold yellow](+)[/]" , "[bold yellow]添加新用户[/]" , "")
+            else:
+                table.add_row("" , "[cyan](+)[/]" , "[dim]添加新用户[/]" , "")
         else:
-            uidRendered = f"[{colour}]{uid}[/]"
-            table.add_row(str(globalIdx + 1) , uidRendered , displayStatus , commentPreview)
+            commentPreview = "" if comment.strip() == "" else comment[:15] + ("..." if len(comment) > 15 else "")
+            if isSelected:
+                table.add_row(f"[bold yellow]> {globalIdx}[/]" , f"[bold yellow]{uid}[/]" , f"[bold yellow]{displayStatus}[/]" , f"[bold yellow]{commentPreview}[/]")
+            else:
+                uidRendered = f"[{colour}]{uid}[/]"
+                table.add_row(str(globalIdx) , uidRendered , displayStatus , commentPreview)
 
     with console.capture() as capture:
         console.print(table)
@@ -378,6 +419,13 @@ def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: in
         extraRendered = capture.get()
         lines.extend(extraRendered.splitlines())
 
+    # 添加快捷键帮助行
+    if showHelpLine:
+        with console.capture() as capture:
+            console.print("\n[dim]←→ 切换状态 | Enter 编辑备注 | Del 删除 | Esc 退出[/dim]")
+        helpRendered = capture.get()
+        lines.extend(helpRendered.splitlines())
+
     # 清屏重绘
     cls()
 
@@ -391,7 +439,23 @@ def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: in
 
 
 
-async def whitelistMenuController(bot: Bot , app=None) -> Optional[str]:
+async def whitelistMenuController(bot: Bot , app=None , mode: str = "select") -> Optional[str]:
+    """
+    交互式白名单控制器
+
+    参数：
+        bot: Bot 实例
+        app: Application 实例（用于设置交互模式）
+        mode: 模式
+            - "select": 选择模式，用于 /send --chat，Enter 返回选中的 UID
+            - "manage": 管理模式，用于 /whitelist -l，支持增删改操作
+
+    返回：
+        - 选择模式：返回选中的 UID 或 None
+        - 管理模式：始终返回 None
+    """
+    from aioconsole import ainput
+
     # 先留一个空行，防止覆盖用户输入
     print()
 
@@ -406,66 +470,210 @@ async def whitelistMenuController(bot: Bot , app=None) -> Optional[str]:
         prevInteractiveMode = app.bot_data["state"]["interactiveMode"]
         app.bot_data["state"]["interactiveMode"] = True
 
+    isManageMode = (mode == "manage")
+
     try:
         # 预先获取白名单数据，避免在键盘回调中调用异步函数
-        entries , _ = await collectWhitelistViewModel(bot , selectedIndex=0)
+        entries , _ = await collectWhitelistViewModel(bot , selectedIndex=0 , includeAddRow=isManageMode)
 
+        # 管理模式下即使为空也显示 (+) 行；选择模式下为空则退出
         if not entries:
-            print("白名单为空喵……")
-            return None
+            if not isManageMode:
+                print("白名单为空喵……")
+                return None
 
         selected = 0
         prevHeight = 0
+        pendingAction = None  # 用于存储需要在事件循环外执行的异步操作
+
+        async def refreshEntries():
+            nonlocal entries
+            entries , _ = await collectWhitelistViewModel(bot , selectedIndex=selected , includeAddRow=isManageMode)
 
         def redraw():
             nonlocal selected , prevHeight
-            # 只操作已缓存的数据，不再调用异步函数
-            prevHeight = whitelistUIRenderer(entries , selectedIndex=selected , prevHeight=prevHeight)
+            prevHeight = whitelistUIRenderer(entries , selectedIndex=selected , prevHeight=prevHeight , showHelpLine=isManageMode)
 
         # 初次绘制
         redraw()
 
         # 绑定键盘事件
         kb = KeyBindings()
+
         @kb.add("up")
         def _up(event):
             nonlocal selected
             selected = max(0 , selected - 1)
             redraw()
+
         @kb.add("down")
         def _down(event):
             nonlocal selected
-            # 直接操作缓存的 entries，不再重新获取
             selected = min(len(entries) - 1 , selected + 1)
             redraw()
-        @kb.add("enter")
-        def _enter(event):
-            event.app.exit()
+
         @kb.add("escape")
         def _esc(event):
             nonlocal selected
-            # 将 selected 设为 -1 表示用户取消
             selected = -1
+            print("退出白名单列表喵——\n\n")
             event.app.exit()
 
-        # 创建并运行 prompt_toolkit 应用
-        ptApp = Application(layout=Layout(TextArea(text="" , focus_on_click=False)) , key_bindings=kb , full_screen=False)
-        await ptApp.run_async()
+        if isManageMode:
+            # 管理模式的键绑定
 
-        # 用户按 Esc 取消选择
-        if selected == -1:
-            return None
+            @kb.add("left")
+            def _left(event):
+                nonlocal pendingAction
+                if selected < len(entries) and not entries[selected].get("isAddRow"):
+                    pendingAction = ("toggle", "left")
+                    event.app.exit()
 
-        # 返回选中的 UID（使用已缓存的 entries）
-        if entries and 0 <= selected < len(entries):
-            return entries[selected]["uid"]
+            @kb.add("right")
+            def _right(event):
+                nonlocal pendingAction
+                if selected < len(entries) and not entries[selected].get("isAddRow"):
+                    pendingAction = ("toggle", "right")
+                    event.app.exit()
 
-        return None
+            @kb.add("delete")
+            def _del(event):
+                nonlocal pendingAction
+                if selected < len(entries) and not entries[selected].get("isAddRow"):
+                    pendingAction = ("delete",)
+                    event.app.exit()
+
+            @kb.add("enter")
+            def _enter(event):
+                nonlocal pendingAction
+                if selected < len(entries):
+                    if entries[selected].get("isAddRow"):
+                        pendingAction = ("add",)
+                    else:
+                        pendingAction = ("edit_comment",)
+                    event.app.exit()
+
+        else:
+            # 选择模式：Enter 直接返回
+            @kb.add("enter")
+            def _enter(event):
+                event.app.exit()
+
+        # 主循环
+        while True:
+            ptApp = Application(layout=Layout(TextArea(text="" , focus_on_click=False)) , key_bindings=kb , full_screen=False)
+            await ptApp.run_async()
+
+            # 用户按 Esc 取消
+            if selected == -1:
+                return None
+
+            # 选择模式：直接返回 UID
+            if not isManageMode:
+                if entries and 0 <= selected < len(entries):
+                    return entries[selected]["uid"]
+                return None
+
+            # 管理模式：处理操作
+            if pendingAction is None:
+                continue
+
+            actionType = pendingAction[0]
+
+            if actionType == "toggle":
+                # 切换 Allowed/Suspended 状态
+                entry = entries[selected]
+                uid = entry["uid"]
+                currentStatus = entry["listStatus"]
+
+                if currentStatus == "Allowed":
+                    userOperation("suspendUser" , uid)
+                elif currentStatus == "Suspended":
+                    userOperation("unsuspendUser" , uid)
+
+                await refreshEntries()
+                pendingAction = None
+                redraw()
+
+            elif actionType == "delete":
+                # 删除用户（需要确认）
+                entry = entries[selected]
+                uid = entry["uid"]
+
+                # 切回主屏幕显示确认提示
+                rmcup()
+                sys.stdout.flush()
+
+                try:
+                    confirm = await ainput(f"确认删除 {uid} 吗？(y/N): ")
+                    if confirm.lower() == "y":
+                        userOperation("deleteUser" , uid)
+                        # 调整选中位置
+                        await refreshEntries()
+                        selected = min(selected , len(entries) - 1)
+                finally:
+                    # 切回备用屏幕
+                    smcup()
+                    sys.stdout.flush()
+
+                pendingAction = None
+                redraw()
+
+            elif actionType == "add":
+                # 添加新用户
+                rmcup()
+                sys.stdout.flush()
+
+                try:
+                    newUid = await ainput("输入新用户的 Chat ID: ")
+                    newUid = newUid.strip()
+                    if newUid:
+                        ok = userOperation("addUser" , newUid)
+                        if ok:
+                            print(f"已添加 {newUid} 到白名单")
+                        else:
+                            print(f"{newUid} 已在白名单中")
+                        await asyncio.sleep(0.5)
+                        await refreshEntries()
+                finally:
+                    smcup()
+                    sys.stdout.flush()
+
+                pendingAction = None
+                redraw()
+
+            elif actionType == "edit_comment":
+                # 编辑备注
+                entry = entries[selected]
+                uid = entry["uid"]
+                currentComment = entry.get("comment" , "")
+
+                rmcup()
+                sys.stdout.flush()
+
+                try:
+                    prompt = f"编辑 {uid} 的备注"
+                    if currentComment:
+                        prompt += f" (当前: {currentComment})"
+                    prompt += ": "
+                    newComment = await ainput(prompt)
+                    # 允许清空备注
+                    userOperation("setComment" , uid , newComment)
+                    await refreshEntries()
+                finally:
+                    smcup()
+                    sys.stdout.flush()
+
+                pendingAction = None
+                redraw()
 
     finally:
         # 切回主屏幕缓冲区
         rmcup()
         sys.stdout.flush()
+
+        # 重置终端状态
+        resetTerminal()
 
         # 恢复原始的交互模式状态
         if app:
