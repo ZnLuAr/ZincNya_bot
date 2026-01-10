@@ -181,7 +181,7 @@ from prompt_toolkit.widgets import TextArea
 
 from config import QUOTES_DIR
 from utils.fileEditor import editFile
-from utils.terminalUI import cls, smcup, rmcup
+from utils.terminalUI import cls, smcup, rmcup, resetTerminal
 
 
 
@@ -754,6 +754,9 @@ async def quoteMenuController(app=None):
         # 切回主屏幕缓冲区
         rmcup()
         sys.stdout.flush()
+
+        # 重置终端状态
+        resetTerminal()
 
         # 恢复原始的交互模式状态
         if app:

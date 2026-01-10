@@ -69,7 +69,7 @@ def _listLogs():
     files = _getLogFiles()
 
     if not files:
-        print("没有找到任何日志文件喵～")
+        print("…… …… ないですニャー\n")
         return
 
     print("\n日志文件列表：")
@@ -83,7 +83,7 @@ def _listLogs():
 
         # 标记空日志
         emptyMark = " (空)" if _isEmptyLog(name) else ""
-        print(f"  {i:3}. {name:<30} {lines:>4} 行  [{typeStr}]{emptyMark}")
+        print(f"  {i:3}. {name:<30} {lines:>4} 行  [{typeStr}]{emptyMark}\n")
 
     print("─" * 50)
     print(f"共 {len(files)} 个日志文件\n")
@@ -94,11 +94,11 @@ def _viewLog(index: int):
     files = _getLogFiles()
 
     if not files:
-        print("没有找到任何日志文件喵～")
+        print("没有找到任何日志文件喵……\n")
         return
 
     if index < 1 or index > len(files):
-        print(f"序号无效喵！请输入 1 到 {len(files)} 之间的数字")
+        print(f"序号无效喵！请输入 1 到 {len(files)} 之间的数字\n")
         return
 
     filename = files[index - 1][0]
@@ -112,7 +112,7 @@ def _viewLog(index: int):
         print(content)
         print(f"\n═══ EOF ═══\n")
     except Exception as e:
-        print(f"读取日志失败喵：{e}")
+        print(f"读取日志失败喵：{e}\n")
 
 
 def _cleanEmptyLogs():
@@ -130,16 +130,16 @@ def _cleanEmptyLogs():
                 pass
 
     if deleted > 0:
-        print(f"已清理 {deleted} 个空日志文件喵～")
+        print(f"已清理 {deleted} 个空日志文件喵——\n")
     else:
-        print("没有找到空日志文件喵～")
+        print("没有找到空日志文件喵……\n")
 
 
 def _clearAllLogs(confirmed: bool = False):
     """清空所有日志"""
     if not confirmed:
         print("⚠️ 这将删除所有日志文件！")
-        print("如果确定要清空，请输入：/log -c --all --confirm")
+        print("如果确定要清空，请输入：/log -c --all --confirm\n")
         return
 
     files = _getLogFiles()
@@ -153,7 +153,7 @@ def _clearAllLogs(confirmed: bool = False):
         except Exception:
             pass
 
-    print(f"清空 {deleted} 个日志文件喵……")
+    print(f"清空 {deleted} 个日志文件喵……\n")
 
 
 def _deleteLog(index: int):
@@ -161,11 +161,11 @@ def _deleteLog(index: int):
     files = _getLogFiles()
 
     if not files:
-        print("没有找到任何日志文件喵……")
+        print("あっ …… ないですニャー……\n")
         return
 
     if index < 1 or index > len(files):
-        print(f"序号无效喵——\n请输入 1 到 {len(files)} 之间的数字")
+        print(f"序号无效喵——\n要输入 1 到 {len(files)} 之间的数字——\n")
         return
 
     filename = files[index - 1][0]
@@ -173,9 +173,9 @@ def _deleteLog(index: int):
 
     try:
         os.remove(path)
-        print(f"已删除 {filename} 喵～")
+        print(f"已删除 {filename} 喵——\n")
     except Exception as e:
-        print(f"删除失败喵：{e}")
+        print(f"删除失败喵：{e}\n")
 
 
 
@@ -205,7 +205,7 @@ async def execute(app, args):
             index = int(parsed["type"])
             _viewLog(index)
         except ValueError:
-            print("请提供有效的日志序号喵……就像 /log -t 1 这样的啦……")
+            print("请提供有效的日志序号喵……就像 /log -t 1 这样的啦……\n")
         return
 
     # 删除指定日志
@@ -214,7 +214,7 @@ async def execute(app, args):
             index = int(parsed["del"])
             _deleteLog(index)
         except ValueError:
-            print("请提供有效的日志序号喵……就像 /log -d 1 这样的啦……")
+            print("请提供有效的日志序号喵……就像 /log -d 1 这样的啦……\n")
         return
 
     # 清理日志
