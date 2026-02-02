@@ -165,7 +165,8 @@ from prompt_toolkit.widgets import TextArea
 
 from config import WHITELIST_DIR
 from utils.logger import logAction
-from utils.terminalUI import cls, smcup, rmcup, resetTerminal
+from utils.terminalUI import cls , smcup , rmcup
+from utils.inputHelper import asyncInput
 
 
 
@@ -456,7 +457,6 @@ async def whitelistMenuController(bot: Bot , app=None , mode: str = "select") ->
         - 选择模式：返回选中的 UID 或 None
         - 管理模式：始终返回 None
     """
-    from aioconsole import ainput
 
     # 先留一个空行，防止覆盖用户输入
     print()
@@ -466,10 +466,7 @@ async def whitelistMenuController(bot: Bot , app=None , mode: str = "select") ->
     sys.stdout.flush()
 
     # 如果传入了 app，设置交互模式标志，让 consoleListener 让步
-    # 保存原始值，以便在 finally 中恢复
-    prevInteractiveMode = None
     if app:
-        prevInteractiveMode = app.bot_data["state"]["interactiveMode"]
         app.bot_data["state"]["interactiveMode"] = True
 
     isManageMode = (mode == "manage")
@@ -607,7 +604,7 @@ async def whitelistMenuController(bot: Bot , app=None , mode: str = "select") ->
                 sys.stdout.flush()
 
                 try:
-                    confirm = await ainput(f"确认删除 {uid} 吗？(y/N): ")
+                    confirm = await asyncInput(f"确认删除 {uid} 吗？(y/N): ")
                     if confirm.lower() == "y":
                         userOperation("deleteUser" , uid)
                         # 调整选中位置
@@ -627,7 +624,7 @@ async def whitelistMenuController(bot: Bot , app=None , mode: str = "select") ->
                 sys.stdout.flush()
 
                 try:
-                    newUid = await ainput("输入新用户的 Chat ID: ")
+                    newUid = await asyncInput("输入新用户的 Chat ID: ")
                     newUid = newUid.strip()
                     if newUid:
                         ok = userOperation("addUser" , newUid)
@@ -658,7 +655,7 @@ async def whitelistMenuController(bot: Bot , app=None , mode: str = "select") ->
                     if currentComment:
                         prompt += f" (当前: {currentComment})"
                     prompt += ": "
-                    newComment = await ainput(prompt)
+                    newComment = await asyncInput(prompt)
                     # 允许清空备注
                     userOperation("setComment" , uid , newComment)
                     await refreshEntries()
@@ -674,12 +671,9 @@ async def whitelistMenuController(bot: Bot , app=None , mode: str = "select") ->
         rmcup()
         sys.stdout.flush()
 
-        # 重置终端状态
-        resetTerminal()
-
-        # 恢复原始的交互模式状态
+        # 恢复交互模式状态
         if app:
-            app.bot_data["state"]["interactiveMode"] = prevInteractiveMode
+            app.bot_data["state"]["interactiveMode"] = False
 
 
 

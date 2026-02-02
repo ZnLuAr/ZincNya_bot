@@ -7,31 +7,32 @@ from telegram.ext import (
     filters,
 )
 import asyncio
-import sys
 
-# 以下是项目内的模块名
 from loader import loadHandlers
 from config import BOT_TOKEN , TELEGRAM_PROXY
 from utils.logger import initLogger
 from handlers.cli import handleConsoleCommand
 from utils.errorHandler import initErrorHandler , setupAsyncioErrorHandler
-
-
+from utils.inputHelper import asyncInput
 
 
 async def consoleListener(app):
     print("控制台命令可用喵。输入 /help 查看帮助。\n")
-    loop = asyncio.get_event_loop()
 
     while True:
         # 如果有其它功能需要夺取交互权，则转让输入权给内层的其它功能
-        if app.bot_data["state"]["interactiveMode"] is not False:
+        if app.bot_data["state"]["interactiveMode"]:
             await asyncio.sleep(0.1)
             continue
 
         try:
-            # 在异步环境中读取标准输入
-            command = await loop.run_in_executor(None , sys.stdin.readline)
+            # 使用 prompt_toolkit 的异步输入
+            command = await asyncInput("")
+
+            # 如果在读取期间进入了交互模式，丢弃这次读取的内容
+            if app.bot_data["state"]["interactiveMode"]:
+                continue
+
             command = command.strip()
             if not command:
                 continue

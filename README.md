@@ -82,54 +82,55 @@ python bot.py
 
 ```
 ZincNya_bot/
-├── bot.py                  # Bot 主程序
-├── config.py               # 配置文件
-├── loader.py               # 功能加载器
-├── .env                    # 环境变量（不会被提交到 git）
-├── .env.example            # 环境变量模板
-├── requirements.txt        # Python 依赖
+├── bot.py                      # Bot 主程序
+├── config.py                   # 配置文件
+├── loader.py                   # 功能加载器
+├── .env                        # 环境变量（不会被提交到 git）
+├── .env.example                # 环境变量模板
+├── requirements.txt            # Python 依赖
 │
-├── data/                   # 数据文件喵
-│   ├── whitelist.json      # 白名单（不会被提交）
-│   ├── chatHistory.db      # 加密聊天记录（不会被提交）
-│   ├── .chatKey            # 聊天记录加密密钥（不会被提交）
-│   └── ZincNyaQuotes.json  # 语录数据喵
+├── data/                       # 数据文件喵
+│   ├── whitelist.json          # 白名单（不会被提交）
+│   ├── chatHistory.db          # 加密聊天记录（不会被提交）
+│   ├── .chatKey                # 聊天记录加密密钥（不会被提交）
+│   └── ZincNyaQuotes.json      # 语录数据喵
 │
-├── ffmpeg/                 # FFmpeg 可执行文件
-│   └── README.md           # FFmpeg 配置说明
+├── ffmpeg/                     # FFmpeg 可执行文件
+│   └── README.md               # FFmpeg 配置说明
 │
-├── handlers/               # Telegram 消息处理器
-│   ├── cli.py              # 控制台命令处理
-│   ├── stickers.py         # 表情包搜索与下载
-│   ├── nya.py              # /nya 语录功能
-│   └── book.py             # /book 书籍搜索
+├── handlers/                   # Telegram 消息处理器
+│   ├── cli.py                  # 控制台命令处理
+│   ├── stickers.py             # 表情包搜索与下载
+│   ├── nya.py                  # /nya 语录功能
+│   └── book.py                 # /book 书籍搜索
 │
-├── utils/                  # 工具模块
-│   ├── command/            # CLI 命令
-│   │   ├── help.py         # /help 帮助
-│   │   ├── whitelist.py    # /whitelist 白名单管理
-│   │   ├── send.py         # /send 发送消息与聊天界面
-│   │   ├── nya.py          # /nya 语录管理
-│   │   ├── log.py          # /log 日志管理
-│   │   ├── clear.py        # /clear 清屏
-│   │   └── shutdown.py     # /shutdown 关闭
+├── utils/                      # 工具模块
+│   ├── command/                # CLI 命令
+│   │   ├── help.py             # /help 帮助
+│   │   ├── whitelist.py        # /whitelist 白名单管理
+│   │   ├── send.py             # /send 发送消息与聊天界面
+│   │   ├── nya.py              # /nya 语录管理
+│   │   ├── log.py              # /log 日志管理
+│   │   ├── clear.py            # /clear 清屏
+│   │   └── shutdown.py         # /shutdown 关闭
 │   │
-│   ├── whitelistManager.py # 白名单管理与交互式选择器
-│   ├── nyaQuoteManager.py  # 语录管理与交互式编辑器
-│   ├── chatHistory.py      # 聊天记录加密存储
-│   ├── bookSearchAPI.py    # Open Library API 封装
-│   ├── downloader.py       # 表情包下载与格式转换
-│   ├── fileEditor.py       # TUI 文本编辑器
-│   ├── terminalUI.py       # 终端 UI 工具（备用屏幕、ANSI）
-│   ├── errorHandler.py     # 错误处理与日志
-│   └── logger.py           # 树状日志系统
+│   ├── whitelistManager.py     # 白名单管理与交互式选择器
+│   ├── nyaQuoteManager.py      # 语录管理与交互式编辑器
+│   ├── chatHistory.py          # 聊天记录加密存储
+│   ├── bookSearchAPI.py        # Open Library API 封装
+│   ├── downloader.py           # 表情包下载与格式转换
+│   ├── fileEditor.py           # TUI 文本编辑器
+│   ├── terminalUI.py           # 终端 UI 工具（备用屏幕、ANSI）
+│   ├── errorHandler.py         # 错误处理与日志
+│   ├── inputHelper.py          # 统一异步输入工具
+│   └── logger.py               # 树状日志系统
 │
-├── scripts/                # 辅助脚本喵
-│   └── setup_ffmpeg.py     # FFmpeg 自动配置脚本
+├── scripts/                    # 辅助脚本喵
+│   └── setup_ffmpeg.py         # FFmpeg 自动配置脚本
 │
-└── log/                    # 日志文件（不会被提交）
-    ├── log_YYYY-MM-DD.log  # 操作日志（每天一个）
-    └── error_YYYY-MM-DD.log # 错误日志（每天一个）
+└── log/                        # 日志文件（不会被提交）
+    ├── log_YYYY-MM-DD.log      # 操作日志（每天一个）
+    └── error_YYYY-MM-DD.log    # 错误日志（每天一个）
 ```
 
 ---
@@ -229,4 +230,7 @@ MIT License 喵
 
 ---
 
-**Made with ❤️ by ZincPhos 喵～**
+**Made with ❤️ by ZincPhos**
+
+
+#### Written by ZincNya~

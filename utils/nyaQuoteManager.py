@@ -181,7 +181,7 @@ from prompt_toolkit.widgets import TextArea
 
 from config import QUOTES_DIR
 from utils.fileEditor import editFile
-from utils.terminalUI import cls, smcup, rmcup, resetTerminal
+from utils.terminalUI import cls, smcup, rmcup
 
 
 
@@ -649,10 +649,7 @@ async def quoteMenuController(app=None):
     sys.stdout.flush()
 
     # 如果传入了 app，设置交互模式标志，让 consoleListener 让步
-    # 保存原始值，以便在 finally 中恢复
-    prevInteractiveMode = None
     if app:
-        prevInteractiveMode = app.bot_data["state"]["interactiveMode"]
         app.bot_data["state"]["interactiveMode"] = True
 
     try:
@@ -755,9 +752,6 @@ async def quoteMenuController(app=None):
         rmcup()
         sys.stdout.flush()
 
-        # 重置终端状态
-        resetTerminal()
-
-        # 恢复原始的交互模式状态
+        # 恢复交互模式状态
         if app:
-            app.bot_data["state"]["interactiveMode"] = prevInteractiveMode
+            app.bot_data["state"]["interactiveMode"] = False
