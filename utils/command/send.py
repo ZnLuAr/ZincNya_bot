@@ -80,18 +80,17 @@ chatScreen(app , bot: Bot , targetChatID: str)
 
 import sys
 import asyncio
-import os
 from telegram import Bot
 from datetime import datetime
-from aioconsole import ainput
 from telegram.error import Forbidden
 
 
 from handlers.cli import parseArgsTokens
 from utils.logger import logAction
 from utils.whitelistManager import whitelistMenuController
-from utils.terminalUI import cls, smcup, rmcup, resetTerminal
+from utils.terminalUI import cls, smcup, rmcup
 from utils.chatHistory import saveMessage, loadHistory
+from utils.inputHelper import asyncInput
 
 
 
@@ -173,7 +172,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
     # 进入与指定 chatID 的用户/群聊的本地交互聊天界面
 
     # 设置交互模式，暂停外层 CLI 的输入读取
-    app.bot_data["state"]["interactiveMode"] = "SendChatScreenMode"
+    app.bot_data["state"]["interactiveMode"] = True
     queue: asyncio.Queue = app.bot_data["state"]["messageQueue"]
 
     # 如果用户仅输入 -c（未指定 ID），弹出白名单列表供选择
@@ -193,7 +192,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
     # ========================================================================
     def displayHistory():
         """显示历史聊天记录"""
-        history = loadHistory(targetChatID, limit=30)
+        history = loadHistory(targetChatID)
         if history:
             print(f"─────── 历史记录 ───────\n")
             for msg in history:
@@ -211,7 +210,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
     async def receiverLoop():
     # 后台协程：持续监听对方发来的消息并展示，形成一个类聊天窗口的界面
 
-        while app.bot_data["state"]["interactiveMode"] == "SendChatScreenMode":
+        while app.bot_data["state"]["interactiveMode"]:
 
             try:
                 msg = await queue.get()
@@ -238,7 +237,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
 
     async def inputLoop():
         while True:
-            userInput = await ainput(">> ")
+            userInput = await asyncInput(">> ")
 
             # 清除用户的原始输入，即不显示命令行的回显">> text"
             sys.stdout.write("\033[F")      # 光标上移一行
@@ -310,9 +309,6 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
             await receiverTask
         except Exception:
             pass
-
-        # 重置终端状态
-        resetTerminal()
 
         print("退出聊天界面喵——\n")
 

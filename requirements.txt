@@ -11,9 +11,6 @@ python-dotenv==1.0.0
 # 异步 HTTP 请求（书籍搜索 API）
 aiohttp==3.11.11
 
-# 异步控制台输入
-aioconsole==0.8.1
-
 # 富文本终端输出
 rich==13.9.4
 
