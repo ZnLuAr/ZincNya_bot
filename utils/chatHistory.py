@@ -8,6 +8,7 @@ utils/chatHistory.py
     - 加密存储聊天消息
     - 按 chatID 查询历史记录
     - 清空聊天记录
+    - 自动清理超出限制的旧消息
 
 
 ================================================================================
@@ -27,14 +28,31 @@ utils/chatHistory.py
 
 
 ================================================================================
+存储限制
+================================================================================
+
+每个聊天的消息数量上限由 config.py 中的 CHAT_HISTORY_LIMIT 控制。
+当某个聊天的消息数量超过此限制时，saveMessage 会自动删除最旧的消息。
+
+默认值：131072 条
+
+
+================================================================================
 主要接口
 ================================================================================
 
 saveMessage(chatID, direction, sender, content)
     保存一条消息到数据库（自动加密）
+    当消息数量超过 CHAT_HISTORY_LIMIT 时，自动删除最旧的消息
 
-loadHistory(chatID, limit=50, offset=0)
+loadHistory(chatID, limit=0, offset=0)
     加载指定聊天的历史记录（自动解密）
+
+    参数：
+        - chatID:   聊天对象 ID
+        - limit:    返回的最大条数（0 表示不限制，加载全部）
+        - offset:   跳过的条数（用于分页）
+
     返回 List[dict]，每个 dict 包含:
         - direction: 'incoming' / 'outgoing'
         - sender: str
@@ -61,7 +79,7 @@ from datetime import datetime
 from typing import List, Optional
 from cryptography.fernet import Fernet
 
-from config import CHAT_DATA_DIR , DB_PATH , KEY_PATH
+from config import CHAT_DATA_DIR , DB_PATH , KEY_PATH , CHAT_HISTORY_LIMIT
 
 
 
@@ -70,19 +88,19 @@ from config import CHAT_DATA_DIR , DB_PATH , KEY_PATH
 # 密钥管理
 # ============================================================================
 
-def _ensureDataDir():
+def ensureDataDir():
     """确保 data 目录存在"""
     os.makedirs(CHAT_DATA_DIR, exist_ok=True)
 
 
-def _loadOrCreateKey() -> bytes:
+def loadOrCreateKey() -> bytes:
     """
     加载或创建加密密钥。
 
     密钥存储在 data/.chat_key 文件中。
     如果文件不存在，会自动生成新密钥。
     """
-    _ensureDataDir()
+    ensureDataDir()
 
     if os.path.exists(KEY_PATH):
         with open(KEY_PATH, "rb") as f:
@@ -96,9 +114,9 @@ def _loadOrCreateKey() -> bytes:
     return key
 
 
-def _getFernet() -> Fernet:
+def getFernet() -> Fernet:
     """获取 Fernet 加密器实例"""
-    key = _loadOrCreateKey()
+    key = loadOrCreateKey()
     return Fernet(key)
 
 
@@ -108,9 +126,9 @@ def _getFernet() -> Fernet:
 # 数据库初始化
 # ============================================================================
 
-def _initDB():
+def initDB():
     """初始化数据库表结构"""
-    _ensureDataDir()
+    ensureDataDir()
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -134,7 +152,7 @@ def _initDB():
 
 
 # 模块导入时初始化数据库
-_initDB()
+initDB()
 
 
 
@@ -155,9 +173,12 @@ def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
 
     返回：
         成功返回 True，失败返回 False
+
+    注意：
+        当某个聊天的消息数量超过 CHAT_HISTORY_LIMIT 时，会自动删除最旧的消息。
     """
     try:
-        fernet = _getFernet()
+        fernet = getFernet()
         encryptedContent = fernet.encrypt(content.encode("utf-8"))
 
         conn = sqlite3.connect(DB_PATH)
@@ -166,6 +187,20 @@ def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
         cursor.execute(
             "INSERT INTO messages (chat_id, direction, sender, content) VALUES (?, ?, ?, ?)",
             (str(chatID), direction, sender, encryptedContent)
+        )
+
+        # 清理超出限制的旧消息
+        cursor.execute(
+            """
+            DELETE FROM messages
+            WHERE chat_id = ? AND id NOT IN (
+                SELECT id FROM messages
+                WHERE chat_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            )
+            """,
+            (str(chatID), str(chatID), CHAT_HISTORY_LIMIT)
         )
 
         conn.commit()
@@ -177,13 +212,13 @@ def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
         return False
 
 
-def loadHistory(chatID: str, limit: int = 50, offset: int = 0) -> List[dict]:
+def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict]:
     """
     加载指定聊天的历史记录（自动解密）。
 
     参数：
         chatID:     聊天对象 ID
-        limit:      返回的最大条数（默认 50）
+        limit:      返回的最大条数（0 表示不限制，加载全部）
         offset:     跳过的条数（用于分页）
 
     返回：
@@ -194,22 +229,33 @@ def loadHistory(chatID: str, limit: int = 50, offset: int = 0) -> List[dict]:
             - timestamp: datetime
     """
     try:
-        fernet = _getFernet()
+        fernet = getFernet()
 
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        cursor.execute(
-            """
-            SELECT direction, sender, content, timestamp
-            FROM messages
-            WHERE chat_id = ?
-            ORDER BY timestamp DESC
-            LIMIT ? OFFSET ?
-            """,
-            (str(chatID), limit, offset)
-        )
+        if limit > 0:
+            cursor.execute(
+                """
+                SELECT direction, sender, content, timestamp
+                FROM messages
+                WHERE chat_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ? OFFSET ?
+                """,
+                (str(chatID), limit, offset)
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT direction, sender, content, timestamp
+                FROM messages
+                WHERE chat_id = ?
+                ORDER BY timestamp DESC
+                """,
+                (str(chatID),)
+            )
 
         rows = cursor.fetchall()
         conn.close()
@@ -231,7 +277,7 @@ def loadHistory(chatID: str, limit: int = 50, offset: int = 0) -> List[dict]:
                 continue
 
         if skippedCount > 0:
-            print(f"⚠️ 有 {skippedCount} 条消息因解密失败被跳过（密钥可能已更改）")
+            print(f"⚠️ {skippedCount} 条消息读取失败喵……")
 
         # 反转列表，让最旧的消息在前面
         messages.reverse()

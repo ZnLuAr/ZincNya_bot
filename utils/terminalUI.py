@@ -47,63 +47,6 @@ from typing import Tuple
 
 
 # ============================================================================
-# 终端状态保存与恢复（用于修复 aioconsole/prompt_toolkit 遗留问题）
-# ============================================================================
-
-_originalTerminalSettings = None
-
-
-def saveOriginalTerminalSettings():
-    """
-    保存程序启动时的原始终端设置。
-
-    应在程序启动早期调用一次。
-    仅在 Linux/macOS 上有效，Windows 上为空操作。
-    """
-    global _originalTerminalSettings
-    if _originalTerminalSettings is not None:
-        return  # 已经保存过了
-    try:
-        if os.name == 'posix':
-            import termios
-            fd = sys.stdin.fileno()
-            _originalTerminalSettings = termios.tcgetattr(fd)
-    except Exception:
-        pass
-
-
-def resetTerminal():
-    """
-    重置终端到原始模式。
-
-    使用 saveOriginalTerminalSettings() 保存的设置进行恢复。
-    用于修复 aioconsole/prompt_toolkit 退出后可能遗留的终端状态问题。
-
-    仅在 Linux/macOS 上有效，Windows 上为空操作。
-    """
-    global _originalTerminalSettings
-    try:
-        if os.name == 'posix':
-            import termios
-            fd = sys.stdin.fileno()
-
-            if _originalTerminalSettings is not None:
-                # 恢复到程序启动时的原始设置
-                termios.tcsetattr(fd, termios.TCSADRAIN, _originalTerminalSettings)
-            else:
-                # 备用方案：强制设置 ECHO 和 ICANON
-                current = termios.tcgetattr(fd)
-                current[3] = current[3] | termios.ECHO | termios.ICANON
-                termios.tcsetattr(fd, termios.TCSADRAIN, current)
-    except Exception:
-        pass  # 静默失败，避免在非 TTY 环境下报错
-
-
-# 模块加载时自动保存原始终端设置
-saveOriginalTerminalSettings()
-
-
-# ============================================================================
 # 平台兼容性初始化
 # ============================================================================
 
