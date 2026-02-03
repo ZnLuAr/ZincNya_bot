@@ -1,11 +1,11 @@
-# sync-data.ps1
+﻿# sync-data.ps1
 # ZincNya_bot 数据同步脚本
 # 用于在本地与服务端之间同步 data/ 目录
 
 # 从 .env 文件读取配置
 $envFile = Join-Path $PSScriptRoot "..\.env"
 if (Test-Path $envFile) {
-    Get-Content $envFile | ForEach-Object {
+    Get-Content $envFile -Encoding UTF8 | ForEach-Object {
         if ($_ -match '^\s*([^#][^=]*?)\s*=\s*(.+?)\s*$') {
             Set-Variable -Name $matches[1] -Value $matches[2] -Scope Script
         }
@@ -14,7 +14,7 @@ if (Test-Path $envFile) {
 
 # 检查必要配置
 if (-not $REMOTE_HOST -or -not $REMOTE_PORT -or -not $REMOTE_PATH) {
-    Write-Host "错误: 要先在 .env 文件中配置 REMOTE_HOST, REMOTE_PORT, REMOTE_PATH 哦……" -ForegroundColor Red
+    Write-Host "错误: 要先在 .env 文件中配置 REMOTE_HOST, REMOTE_PORT, REMOTE_PATH 哦" -ForegroundColor Red
     exit 1
 }
 
@@ -46,7 +46,7 @@ function Show-Menu {
 function Confirm-Action {
     param([string]$Message)
     $confirm = Read-Host "$Message (y/N)"
-    return $confirm -eq 'y' -or $confirm -eq 'Y'
+    return ($confirm -eq 'y') -or ($confirm -eq 'Y')
 }
 
 function Invoke-Upload {
@@ -62,7 +62,7 @@ function Invoke-Upload {
         if ($rsyncAvailable) {
             rsync -avz --delete -e "ssh -p $REMOTE_PORT" "$LocalPath" "${REMOTE_HOST}:${REMOTE_PATH}"
         } else {
-            Write-Host "👀 scp 不支持删除远程多余文件，将只上传本地文件喵" -ForegroundColor Red
+            Write-Host "scp 不支持删除远程多余文件，将只上传本地文件喵" -ForegroundColor Red
             scp -P $REMOTE_PORT -r "$LocalPath*" "${REMOTE_HOST}:${REMOTE_PATH}"
         }
     } else {
@@ -88,7 +88,7 @@ function Invoke-Download {
         if ($rsyncAvailable) {
             rsync -avz --delete -e "ssh -p $REMOTE_PORT" "${REMOTE_HOST}:${REMOTE_PATH}" "$LocalPath"
         } else {
-            Write-Host "👀 scp 不支持删除本地多余文件，将只下载远程文件喵" -ForegroundColor Red
+            Write-Host "scp 不支持删除本地多余文件，将只下载远程文件喵" -ForegroundColor Red
             scp -P $REMOTE_PORT -r "${REMOTE_HOST}:${REMOTE_PATH}*" "$LocalPath"
         }
     } else {
@@ -110,13 +110,15 @@ function Invoke-RemoteBackup {
     $remoteParent = Split-Path $remoteDirName -Parent
     $remoteDirBase = Split-Path $remoteDirName -Leaf
 
-    ssh -p $REMOTE_PORT $REMOTE_HOST "cd $remoteParent && rm -rf ${remoteDirBase}.bak && cp -r $remoteDirBase ${remoteDirBase}.bak"
+    # 使用分号代替 && ，兼容旧版 PowerShell
+    $cmd = "cd $remoteParent; rm -rf ${remoteDirBase}.bak; cp -r $remoteDirBase ${remoteDirBase}.bak"
+    ssh -p $REMOTE_PORT $REMOTE_HOST $cmd
 
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "服务端备份完成喵——" -ForegroundColor Green
+        Write-Host "服务端备份完成喵" -ForegroundColor Green
         return $true
     } else {
-        Write-Host "服务端备份失败喵……" -ForegroundColor Red
+        Write-Host "服务端备份失败喵" -ForegroundColor Red
         return $false
     }
 }
@@ -132,10 +134,10 @@ function Invoke-LocalBackup {
     Copy-Item -Path $LocalPath -Destination $backupPath -Recurse
 
     if ($?) {
-        Write-Host "本地备份完成喵——" -ForegroundColor Green
+        Write-Host "本地备份完成喵" -ForegroundColor Green
         return $true
     } else {
-        Write-Host "本地备份失败喵……" -ForegroundColor Red
+        Write-Host "本地备份失败喵" -ForegroundColor Red
         return $false
     }
 }
@@ -145,13 +147,14 @@ function Show-Diff {
 
     Write-Host "`n--- 本地文件 ---" -ForegroundColor Cyan
     Get-ChildItem -Path $LocalPath -File | ForEach-Object {
-        $size = "{0,10:N0} B" -f $_.Length
+        $size = "{0:N0} B" -f $_.Length
         $time = $_.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
-        Write-Host "  $size  $time  $($_.Name)"
+        Write-Host ("  {0,12}  {1}  {2}" -f $size, $time, $_.Name)
     }
 
     Write-Host "`n--- 服务端文件 ---" -ForegroundColor Cyan
-    ssh -p $REMOTE_PORT $REMOTE_HOST "ls -lh $REMOTE_PATH 2>/dev/null | tail -n +2"
+    $cmd = "ls -lh $REMOTE_PATH 2>/dev/null | tail -n +2"
+    ssh -p $REMOTE_PORT $REMOTE_HOST $cmd
 }
 
 # 主循环
@@ -161,7 +164,7 @@ do {
 
     switch ($choice) {
         "1" {
-            if (Confirm-Action "真的要用本地数据覆盖服务端吗？") {
+            if (Confirm-Action "真的要用本地数据覆盖服务端吗") {
                 Invoke-Upload -DeleteExtra $true
             }
         }
@@ -169,14 +172,14 @@ do {
             Invoke-Upload -DeleteExtra $false
         }
         "3" {
-            if (Confirm-Action "真的要备份并覆盖服务端吗？") {
+            if (Confirm-Action "真的要备份并覆盖服务端吗") {
                 if (Invoke-RemoteBackup) {
                     Invoke-Upload -DeleteExtra $true
                 }
             }
         }
         "4" {
-            if (Confirm-Action "真的要用服务端数据覆盖本地吗？") {
+            if (Confirm-Action "真的要用服务端数据覆盖本地吗") {
                 Invoke-Download -DeleteExtra $true
             }
         }
@@ -184,7 +187,7 @@ do {
             Invoke-Download -DeleteExtra $false
         }
         "6" {
-            if (Confirm-Action "真的要备份并覆盖本地吗？") {
+            if (Confirm-Action "真的要备份并覆盖本地吗") {
                 if (Invoke-LocalBackup) {
                     Invoke-Download -DeleteExtra $true
                 }
@@ -197,7 +200,7 @@ do {
             break
         }
         default {
-            Write-Host "无效的选项喵……" -ForegroundColor Red
+            Write-Host "无效的选项喵" -ForegroundColor Red
         }
     }
 
