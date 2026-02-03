@@ -3,7 +3,7 @@ utils/command/send.py
 
 用于实现 /send 命令的逻辑模块，负责从控制台发送消息，或进入与某个用户的实时本地聊天界面。
 
-本模块大致可分为四个部分：
+本模块大致可分为三个部分：
     - 参数解析与入口函数（execute）
     - 普通消息发送逻辑（sendMsg）
     - 本地交互式聊天界面（chatScreen）
@@ -23,6 +23,8 @@ execute() 为统一的命令入口：
 
 chatIDList() 用于在 "-c" 未指定 ID 时展示 whitelist 的用户列表，
 并允许用户通过编号或直接输入 ID 来选择目标聊天对象。
+    注意：whitelistMenuController() 退出时会将 interactiveMode 设为 False，
+    因此 chatScreen() 在调用后需要重新设置为 True。
 
 
 ================================================================================
@@ -33,6 +35,7 @@ sendMsg(bot, idList, atUser, text)
     - 遍历 idList，将文字逐一发送给对应 ChatID
         - idList 为在 cli 输入的 "-id" 后的一个或若干个 ChatID
     - 当指定 -a/--at <userName> 时，会自动在消息开头加上 "@userName"
+
 
 ================================================================================
 本地交互式聊天界面（核心功能）
@@ -50,11 +53,13 @@ chatScreen(app , bot: Bot , targetChatID: str)
     · 输入 ":q" 退出界面
 
 内部结构：
-    - 设置 app.bot_data["state"]["interactiveMode"] 为 "SendChatScreenMode"，暂停外层 CLI
-        （"interactiveMode" 一般情况下为 False）
+    - 设置 app.bot_data["state"]["interactiveMode"] = True，暂停外层 CLI
     - displayHistory() 进入时显示历史聊天记录
-    - receiverLoop() 后台读取 messageQueue 中的消息，并筛选属于当前 chatID 的部分打印到屏幕
-    - inputLoop() 使用 aioconsole.ainput() 等待用户输入，并自动清理输入行的回显
+    - receiverLoop() 后台协程，持续监听 messageQueue 中的消息
+        · 使用 asyncio.wait_for() 带超时读取，避免阻塞
+        · 筛选属于当前 chatID 的消息并打印到屏幕
+        · 循环条件依赖 interactiveMode 标志
+    - inputLoop() 使用 asyncInput() 等待用户输入，并自动清理输入行的回显
     - printMessage() 用于统一格式化输出聊天内容
 
     正常情况下，用户输入 ":q" 退出函数
@@ -63,7 +68,6 @@ chatScreen(app , bot: Bot , targetChatID: str)
     1. 切回主屏幕缓冲区（rmcup）
     2. 恢复 interactiveMode 为 False
     3. 取消 receiverTask 协程
-    4. 重置终端状态（resetTerminal）
 
 
 ================================================================================
@@ -72,6 +76,7 @@ chatScreen(app , bot: Bot , targetChatID: str)
 仅通过 whitelistManager 提供的 whitelistMenuController() 来选择聊天对象。
 
 聊天记录通过 chatHistory 模块进行加密存储和读取。
+异步输入通过 inputHelper 模块的 asyncInput() 实现（基于 run_in_executor）。
 
 """
 
