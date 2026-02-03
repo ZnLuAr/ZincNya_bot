@@ -184,6 +184,9 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         app.bot_data["state"]["interactiveMode"] = False
         return
 
+    # chatIDList 会把 interactiveMode 设为 False，需要重新设为 True
+    app.bot_data["state"]["interactiveMode"] = True
+
     # 切换到备用屏幕缓冲区
     smcup()
     sys.stdout.flush()
@@ -208,12 +211,16 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
 
 
     async def receiverLoop():
-    # 后台协程：持续监听对方发来的消息并展示，形成一个类聊天窗口的界面
+        """后台协程：持续监听对方发来的消息并展示"""
 
         while app.bot_data["state"]["interactiveMode"]:
-
             try:
-                msg = await queue.get()
+                # 使用 wait_for 添加超时，避免永久阻塞
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+
                 if not msg:
                     continue
 
@@ -264,6 +271,10 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
 
 
     receiverTask = asyncio.create_task(receiverLoop())
+
+    # 等待 receiverLoop 启动
+    await asyncio.sleep(0.1)
+    print(f"[chatScreen] receiverTask 状态: {'运行中' if not receiverTask.done() else '已结束'}")
 
     # 主循环，从控制台读取输入并发送消息
     try:
