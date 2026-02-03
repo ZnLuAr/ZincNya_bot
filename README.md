@@ -126,6 +126,8 @@ ZincNya_bot/
 │   └── logger.py               # 树状日志系统
 │
 ├── scripts/                    # 辅助脚本喵
+│   ├── update_from_main.sh     # Linux 下自动与 main 分支同步
+│   ├── sync-data.ps1           # 远程服务器同步工具
 │   └── setup_ffmpeg.py         # FFmpeg 自动配置脚本
 │
 └── log/                        # 日志文件（不会被提交）
@@ -174,6 +176,8 @@ ZincNya_bot/
 2. 实现 `execute(app, args)` 函数
 3. （可选）实现 `getHelp()` 函数返回帮助信息喵
 
+也可以对 Zinc Phos. 提出 Pull Request 哦……
+
 ### 数据文件
 
 这些文件包含敏感信息，不会被提交到 git：
@@ -191,7 +195,7 @@ ZincNya_bot/
 
 ## 部署到新环境
 
-要把咱搬到新服务器的话，按照这个步骤来喵：
+要把咱搬到新服务器的话，按照这个步骤来：
 
 1. 克隆代码
 2. 安装依赖：`pip install -r requirements.txt` 
@@ -204,11 +208,11 @@ ZincNya_bot/
 
 ## 故障排除
 
-遇到问题了的话，看看这里能不能帮到你喵：
+遇到问题了的话，看看这里能不能帮到你：
 
 ### Bot 无法启动
 
-**错误：`BOT_TOKEN 环境变量未设置！`**
+**错误：`BOT_TOKEN 环境变量未设置`**
 - 确保已经创建了 `.env` 文件并填入有效的 token 喵
 
 **错误：`找不到 ffmpeg`**
@@ -233,4 +237,4 @@ MIT License 喵
 **Made with ❤️ by ZincPhos**
 
 
-#### Written by ZincNya~
+###### Written by ZincNya~
