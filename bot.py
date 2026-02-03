@@ -89,8 +89,9 @@ async def main():
     # ========================================================================
 
 
-    # 注册 MessageHandler（filters.ALL）
-    app.add_handler(MessageHandler(filters.ALL , messageCollector))
+    # 注册 MessageHandler（filters.ALL），使用 group=-1 确保它在所有其他 handler 之前执行
+    # 且不影响其他 handler 的执行
+    app.add_handler(MessageHandler(filters.ALL , messageCollector) , group=-1)
 
     print("ZincNya Bot——\n喵的一声，就启动啦——\n")
 
