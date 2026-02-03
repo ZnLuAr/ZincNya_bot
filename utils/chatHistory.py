@@ -184,9 +184,12 @@ def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
+        # 使用本地时间而非 UTC
+        localTimestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         cursor.execute(
-            "INSERT INTO messages (chat_id, direction, sender, content) VALUES (?, ?, ?, ?)",
-            (str(chatID), direction, sender, encryptedContent)
+            "INSERT INTO messages (chat_id, direction, sender, content, timestamp) VALUES (?, ?, ?, ?, ?)",
+            (str(chatID), direction, sender, encryptedContent, localTimestamp)
         )
 
         # 清理超出限制的旧消息
