@@ -23,6 +23,11 @@ TELEGRAM_PROXY = os.getenv("TELEGRAM_PROXY", None)
 
 
 
+DEFAULT_FILE_CACHE_TTL = 480  # 秒
+
+
+
+
 # /findsticker 功能相关常量
 DATA_DIR = "download"
 CACHE_TTL = 300                 # 表情包缓存 5 分钟过期
@@ -55,6 +60,7 @@ HELP_LIST_DIR = os.path.join(os.path.dirname(__file__) , "data" , "helpList.csv"
 
 
 
+# Whitelist 相关常量
 WHITELIST_DIR = os.path.join(os.path.dirname(__file__) , "data" , "whitelist.json")
 
 
@@ -79,3 +85,14 @@ CHAT_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")                 
 DB_PATH = os.path.join(CHAT_DATA_DIR, "chatHistory.db")                         # 聊天记录保存文件名
 KEY_PATH = os.path.join(CHAT_DATA_DIR, ".chatKey")                              # 密钥文件路径
 CHAT_HISTORY_LIMIT = 131072                                                     # 每个聊天保存的最大消息条数
+
+
+
+
+# 新闻抓取功能相关常量
+NEWS_SOURCE_URL = os.getenv("NEWS_SOURCE_URL", "http://naenara.com.kp/main/index/ch/first")
+NEWS_HTTP_PROXY = os.getenv("NEWS_HTTP_PROXY", None)                            # HTTP 代理（可选），格式: "http://host:port"
+NEWS_REQUEST_TIMEOUT = 30                                                       # 请求超时（秒）
+NEWS_TARGET_CHAT_ID = os.getenv("NEWS_TARGET_CHAT_ID", None)                    # 推送目标群聊 ID
+NEWS_MAX_ARTICLES = 5                                                           # 每次最多推送的文章数
+NEWS_DATA_FILE = os.path.join(CHAT_DATA_DIR, "pushedNews.json")                 # 已推送记录保存路径
