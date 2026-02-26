@@ -9,6 +9,7 @@ from telegram.ext import (
 
 from utils.downloader import createStickerZip, deleteLater
 from utils.logger import logAction
+from utils.core.stateManager import getStateManager
 from config import (
     CACHE_TTL,
     DELETE_DELAY,
@@ -16,9 +17,6 @@ from config import (
     DEFAULT_WRITE_TIMEOUT,
 )
 
-
-# 保存 sticker 信息临时缓存
-stickerCache: dict[str , tuple[object , float]] = {}
 
 
 
@@ -173,21 +171,11 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def getCachedSticker(setName: str):
-    if setName in stickerCache:
-        data , timestamp = stickerCache[setName]
-        if time.time() - timestamp < CACHE_TTL:
-            return data
-        del stickerCache[setName]
-    return None
+    return getStateManager().getCachedSticker(setName)
 
 
 def setCachedSticker(setName: str , stickerSet):
-    now = time.time()
-    expired = [k for k, (_ , ts) in stickerCache.items() if (now - ts > CACHE_TTL)]
-    for k in expired:
-        del stickerCache[k]
-    
-    stickerCache[setName] = (stickerSet , now)
+    getStateManager().setCachedSticker(setName , stickerSet)
 
 
 

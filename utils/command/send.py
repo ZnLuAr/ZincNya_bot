@@ -96,6 +96,7 @@ from utils.whitelistManager import whitelistMenuController
 from utils.terminalUI import cls, smcup, rmcup
 from utils.chatHistory import saveMessage, loadHistory
 from utils.inputHelper import asyncInput
+from utils.core.stateManager import getStateManager
 
 
 
@@ -175,10 +176,11 @@ async def sendMsg(bot: Bot , idList , atUser , text):
 
 async def chatScreen(app , bot: Bot , targetChatID: str):
     # 进入与指定 chatID 的用户/群聊的本地交互聊天界面
+    state = getStateManager()
 
     # 设置交互模式，暂停外层 CLI 的输入读取
-    app.bot_data["state"]["interactiveMode"] = True
-    queue: asyncio.Queue = app.bot_data["state"]["messageQueue"]
+    state.setInteractiveMode(True)
+    queue: asyncio.Queue = state.getMessageQueue()
 
     # 如果用户仅输入 -c（未指定 ID），弹出白名单列表供选择
     if targetChatID == "NoValue":
@@ -186,11 +188,11 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
 
     if not targetChatID:
         # 恢复外层 CLI 的命令读取
-        app.bot_data["state"]["interactiveMode"] = False
+        state.setInteractiveMode(False)
         return
 
     # chatIDList 会把 interactiveMode 设为 False，需要重新设为 True
-    app.bot_data["state"]["interactiveMode"] = True
+    state.setInteractiveMode(True)
 
     # 切换到备用屏幕缓冲区
     smcup()
@@ -218,7 +220,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
     async def receiverLoop():
         """后台协程：持续监听对方发来的消息并展示"""
 
-        while app.bot_data["state"]["interactiveMode"]:
+        while state.getInteractiveMode():
             try:
                 # 使用 wait_for 添加超时，避免永久阻塞
                 try:
@@ -319,7 +321,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         rmcup()
         sys.stdout.flush()
 
-        app.bot_data["state"]["interactiveMode"] = False
+        state.setInteractiveMode(False)
         receiverTask.cancel()
         try:
             await receiverTask
