@@ -19,12 +19,19 @@ from utils.core.tuiBase import BaseTUIController
 from .data import loadQuoteFile , saveQuoteFile , userOperation
 
 
+def _extractBaseWeight(w) -> float:
+    """从 weight 字段提取基础权重（兼容 float 和 list 格式）"""
+    if isinstance(w, list):
+        return float(w[0]) if w else 1.0
+    return float(w)
+
+
 def collectQuoteViewModel(selectedIndex: int=-1) -> Tuple[List[dict] , int]:
 
     limitPreviewChars: int = 15
 
     quotes = loadQuoteFile()
-    sortedQuotes = sorted(quotes , key=lambda x:float(x.get("weight" , 1.0)))
+    sortedQuotes = sorted(quotes , key=lambda x: _extractBaseWeight(x.get("weight" , 1.0)))
 
     if selectedIndex is None or not isinstance(selectedIndex , int):
         selectedIndex = -1
@@ -43,7 +50,7 @@ def collectQuoteViewModel(selectedIndex: int=-1) -> Tuple[List[dict] , int]:
         entries.append({
             "text": text,
             "preview": preview,
-            "weight": float(q.get("weight" , 1.0)),
+            "weight": _extractBaseWeight(q.get("weight" , 1.0)),
             "raw": q,
         })
 
@@ -112,7 +119,7 @@ def quoteUIRenderer(entries: List[dict] , selectedIndex: int = -1) -> int:
     return len(lines)
 
 
-async def editQuoteViaEditor(initialTextEscaped: str , initialWeight: float = 1.0) -> Optional[str]:
+async def editQuoteViaEditor(initialTextEscaped: str , initialWeight: float = 1.0) -> Optional[Tuple[str, float]]:
     initialText = initialTextEscaped.replace("\\n", "\n")
 
     with tempfile.NamedTemporaryFile("w+" , delete=False , suffix=".tmp" , encoding="utf-8") as tf:
@@ -215,7 +222,7 @@ class QuoteTUIController(BaseTUIController):
             except ValueError:
                 return True
 
-            res = await editQuoteViaEditor(raw.get("text", ""), raw.get("weight", 1.0))
+            res = await editQuoteViaEditor(raw.get("text", ""), _extractBaseWeight(raw.get("weight", 1.0)))
             if res:
                 newT, newW = res
                 userOperation("set", index=idx, payload={"text": newT, "weight": newW})

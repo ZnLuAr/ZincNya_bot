@@ -92,7 +92,7 @@ from telegram.error import Forbidden
 
 from handlers.cli import parseArgsTokens
 from utils.logger import logAction
-from utils.whitelistManager import whitelistMenuController
+from utils.whitelistManager.ui import whitelistMenuController
 from utils.terminalUI import cls, smcup, rmcup
 from utils.chatHistory import saveMessage, loadHistory
 from utils.inputHelper import asyncInput

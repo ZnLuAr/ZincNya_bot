@@ -1,11 +1,12 @@
 from telegram import Bot
 
 from handlers.cli import parseArgsTokens
-from utils.whitelistManager import (
-    userOperation,
+from utils.whitelistManager.data import userOperation
+from utils.whitelistManager.ui import (
     whitelistUIRenderer,
     collectWhitelistViewModel,
-    whitelistMenuController)
+    whitelistMenuController
+)
 from utils.logger import logAction
 
 
@@ -43,7 +44,7 @@ async def execute(app , args):
 
     # 参数验证
     # 当四个参数中出现超过一个（设定的规则上不能同时使用）时，报错并返回
-    if sum(bool(x) for x in [addUID , delUID , susUID , listFlag]) > 1:
+    if sum(bool(x and x != "NoValue") for x in [addUID , delUID , susUID , listFlag]) > 1:
         print(
                 "もー、/whitelist 的参数不能这样用喵——\n",
                 "详情要用 /help whitelist 来查看哦"
@@ -71,15 +72,19 @@ async def execute(app , args):
         # 值得注意的是，当 -a 与 -c 合用时，-c 的参数值只有一项
         # 即 commentList = ['<obj>']，其中 obj 将被视为 commentText
         # 也就是说，列表的第一项，即 commentList[0]，将被赋值为 commentText
-        commentUID = commentList[0] if (addUID and commentList) != "NoValue" else None
-        if commentUID is None:
-            commentText = commentList[0]
-            return commentUID , commentText
-        commentText = " ".join(commentList[1:]) if len(commentList) > 1 else None
+        if addUID:
+            # -a 和 -c 组合使用：commentList[0] 是备注文本
+            commentUID = None
+            commentText = " ".join(commentList)
+        else:
+            # -c 单独使用：commentList[0] 是 ID，后面是备注文本
+            commentUID = commentList[0]
+            commentText = " ".join(commentList[1:]) if len(commentList) > 1 else None
         return commentUID , commentText
 
 
-    if listFlag is not None or listFlag == "NoValue":
+    if listFlag:
+        # -l 是一个标志，不需要参数，"NoValue" 表示用户使用了这个标志
         # 使用交互式选择器管理白名单
         await whitelistMenuController(bot , app , mode="manage")
         return
@@ -88,7 +93,7 @@ async def execute(app , args):
     commentUID , commentText = _extractCommentList(commentList)
     
     # 当独立使用 -c/--comment 参数时
-    if commentUID and not (addUID or delUID or susUID):
+    if commentUID and not any(x and x != "NoValue" for x in [addUID, delUID, susUID]):
         if commentText is None:
             print("ムリー，备注内容不能为空喵——\n")
             return
@@ -99,8 +104,8 @@ async def execute(app , args):
         return
 
     # 以下是包含了-a、-d、-s 的使用情况
-    if (addUID or delUID or susUID or listFlag) and (addUID and delUID and susUID and listFlag) != "NoValue":
-        if addUID:
+    if any(x and x != "NoValue" for x in [addUID, delUID, susUID]):
+        if addUID and addUID != "NoValue":
             operation = "addUser"
             action = f"将 {addUID} 加入白名单……"
             if commentText:
@@ -122,12 +127,12 @@ async def execute(app , args):
                 return
             result = ["OK喵" , f"{addUID} 已在白名单喵——"]
 
-        elif delUID:
+        elif delUID and delUID != "NoValue":
             operation = "deleteUser"
             action = f"将 {delUID} 移出白名单……"
             result = ["OK喵" , f"{delUID} 不在白名单喵——"]
 
-        elif susUID:
+        elif susUID and susUID != "NoValue":
             operation = "suspendUser"
             action = f"暂停 {susUID} 的权限……"
             result = ["OK喵" , f"{susUID} 已经是暂停状态了喵……"]

@@ -61,7 +61,8 @@ function Invoke-Upload {
         $rsyncAvailable = $null -ne (Get-Command rsync -ErrorAction SilentlyContinue)
 
         if ($rsyncAvailable) {
-            rsync -avz --delete -e "ssh -p $REMOTE_PORT" "$LocalPath" "${REMOTE_HOST}:${REMOTE_PATH}"
+            # 使用 --exclude 保护 .gitkeep 文件不被删除
+            rsync -avz --delete --exclude='.gitkeep' -e "ssh -p $REMOTE_PORT" "$LocalPath" "${REMOTE_HOST}:${REMOTE_PATH}"
         } else {
             Write-Host "scp 不支持删除远程多余文件，将只上传本地文件喵" -ForegroundColor Red
             scp -P $REMOTE_PORT -r "$LocalPath*" "${REMOTE_HOST}:${REMOTE_PATH}"
@@ -87,7 +88,8 @@ function Invoke-Download {
         $rsyncAvailable = $null -ne (Get-Command rsync -ErrorAction SilentlyContinue)
 
         if ($rsyncAvailable) {
-            rsync -avz --delete -e "ssh -p $REMOTE_PORT" "${REMOTE_HOST}:${REMOTE_PATH}" "$LocalPath"
+            # 使用 --exclude 保护 .gitkeep 文件不被删除
+            rsync -avz --delete --exclude='.gitkeep' -e "ssh -p $REMOTE_PORT" "${REMOTE_HOST}:${REMOTE_PATH}" "$LocalPath"
         } else {
             Write-Host "scp 不支持删除本地多余文件，将只下载远程文件喵" -ForegroundColor Red
             scp -P $REMOTE_PORT -r "${REMOTE_HOST}:${REMOTE_PATH}*" "$LocalPath"

@@ -40,7 +40,7 @@ def saveQuoteFile(quotes: List[dict]):
 
 def getRandomQuote() -> list[str]:
     """
-    从 json 中根据权重随机挑出语录返回
+    从 json (缓存) 中根据权重随机挑出语录返回
 
     支持两种 weight 格式：
         1. 传统格式：weight: float（单条消息）

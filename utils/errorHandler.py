@@ -217,7 +217,10 @@ class ErrorHandler:
         if count > 1:
             print(f"记录了 {errorType}: {shortMessage} 喵 (今日第 {count} 次喵)")
         else:
-            print(f"刚刚发生了 {errorType}: {shortMessage} 喵")
+            print(
+                f"[{timestamp}] @锌酱：刚刚发生了错误喵\n"
+                f"      └─ 已记录 {errorType}: {shortMessage}"
+            )
 
         # 写入错误日志文件
         self.writeToLogFile(timestamp , errorType , message , exception , context)
@@ -260,7 +263,7 @@ class ErrorHandler:
                 f.write("\n".join(lines) + "\n")
         except Exception as e:
             # 日志写入失败时，至少在终端显示
-            print(f"    └─ 错误日志写入失败喵: {e}")
+            print(f"        └─ 错误日志写入失败喵: {e}")
 
 
     def handleUncaughtException(self , excType , excValue , excTraceback):

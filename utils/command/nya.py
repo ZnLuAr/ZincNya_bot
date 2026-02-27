@@ -1,5 +1,6 @@
 from handlers.cli import parseArgsTokens
-from utils.nyaQuoteManager import getRandomQuote , quoteMenuController
+from utils.nyaQuoteManager.data import getRandomQuote
+from utils.nyaQuoteManager.ui import quoteMenuController
 
 
 
