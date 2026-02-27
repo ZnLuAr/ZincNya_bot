@@ -114,8 +114,19 @@ ZincNya_bot/
 │   │   ├── clear.py            # /clear 清屏
 │   │   └── shutdown.py         # /shutdown 关闭
 │   │
-│   ├── whitelistManager.py     # 白名单管理与交互式选择器
-│   ├── nyaQuoteManager.py      # 语录管理与交互式编辑器
+│   ├── core/                   # 核心基础设施
+│   │   ├── fileCache.py        # 文件缓存系统（TTL + 修改检测）
+│   │   ├── stateManager.py     # 全局状态管理器
+│   │   └── tuiBase.py          # TUI 控制器基类
+│   │
+│   ├── whitelistManager/       # 白名单管理模块
+│   │   ├── data.py             # 数据层（IO + 业务逻辑）
+│   │   └── ui.py               # UI 层（ViewModel + TUI）
+│   │
+│   ├── nyaQuoteManager/        # 语录管理模块
+│   │   ├── data.py             # 数据层（IO + 随机选择）
+│   │   └── ui.py               # UI 层（ViewModel + TUI）
+│   │
 │   ├── chatHistory.py          # 聊天记录加密存储
 │   ├── bookSearchAPI.py        # Open Library API 封装
 │   ├── downloader.py           # 表情包下载与格式转换
@@ -161,6 +172,23 @@ ZincNya_bot/
 | `/nya` | 获取一条随机语录 |
 
 想知道更详细的用法，就输入 `/help <command>` 喵！
+
+---
+
+
+## 架构特性喵
+
+### 模块化设计
+
+咱采用了数据层和 UI 层分离的架构：
+- **数据层**（`data.py`）：负责文件 IO、缓存管理、业务逻辑
+- **UI 层**（`ui.py`）：负责 ViewModel 构建、界面渲染、用户交互
+
+### 核心基础设施
+
+- **文件缓存系统**（`core/fileCache.py`）：带 TTL 和文件修改检测的智能缓存
+- **全局状态管理器**（`core/stateManager.py`）：线程安全的状态管理
+- **TUI 基类**（`core/tuiBase.py`）：可复用的终端交互界面框架
 
 ---
 
