@@ -10,11 +10,13 @@ import asyncio
 
 from loader import loadHandlers
 from config import BOT_TOKEN , TELEGRAM_PROXY
-from utils.logger import initLogger
 from handlers.cli import handleConsoleCommand
+from utils.logger import initLogger
 from utils.errorHandler import initErrorHandler , setupAsyncioErrorHandler
 from utils.inputHelper import asyncInput
 from utils.core.stateManager import getStateManager
+
+
 
 
 async def consoleListener(app):
@@ -22,14 +24,14 @@ async def consoleListener(app):
     state = getStateManager()
 
     while True:
-        if state.getInteractiveMode():
+        if state.isInteractive():
             await asyncio.sleep(0.1)
             continue
 
         try:
             command = await asyncInput("")
 
-            if state.getInteractiveMode():
+            if state.isInteractive():
                 continue
 
             command = command.strip()

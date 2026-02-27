@@ -32,10 +32,14 @@ def saveWhitelistFile(data):
     cache.set(data)
 
 
+
+
 def whetherAuthorizedUser(userID: int | str) -> bool:
     data = loadWhitelistFile()
     userID = str(userID)
     return userID in data.get("allowed" , {}) and userID not in data.get("suspended" , {})
+
+
 
 
 def userOperation(operation , userID:str|None=None , comment=None) -> bool | dict:
@@ -87,6 +91,8 @@ def userOperation(operation , userID:str|None=None , comment=None) -> bool | dic
 
         case _:
             raise ValueError(f"未知的操作类型喵：{operation}")
+
+
 
 
 async def handleStart(update , context):

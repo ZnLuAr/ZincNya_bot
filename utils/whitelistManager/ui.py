@@ -168,27 +168,34 @@ def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: in
     return len(lines)
 
 
+
+
 class WhitelistTUIController(BaseTUIController):
 
     async def collectViewModel(self, selectedIndex: int):
         isManageMode = (self.mode == "manage")
         return await collectWhitelistViewModel(self.bot , selectedIndex=selectedIndex , includeAddRow=isManageMode)
 
+
     def renderUI(self, entries, selectedIndex):
         isManageMode = (self.mode == "manage")
         return whitelistUIRenderer(entries , selectedIndex=selectedIndex , showHelpLine=isManageMode)
 
+
     def getEmptyMessage(self):
         return "白名单为空喵……"
 
+
     def getExitMessage(self):
         return "退出白名单列表喵——\n\n"
+
 
     def getSelectedEntry(self):
         entry = super().getSelectedEntry()
         if entry:
             return entry["uid"]
         return None
+    
 
     def setupExtraKeyBindings(self, kb):
         if self.mode != "manage":
@@ -220,6 +227,7 @@ class WhitelistTUIController(BaseTUIController):
                 else:
                     self.pendingAction = ("edit_comment",)
                 event.app.exit()
+
 
     async def handlePendingAction(self):
         actionType = self.pendingAction[0]
@@ -293,6 +301,8 @@ class WhitelistTUIController(BaseTUIController):
                 sys.stdout.flush()
 
         return True
+
+
 
 
 async def whitelistMenuController(bot: Bot , app=None , mode: str = "select") -> Optional[str]:
