@@ -280,7 +280,7 @@ def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict]:
                 continue
 
         if skippedCount > 0:
-            print(f"⚠️ {skippedCount} 条消息读取失败喵……")
+            print(f"⚠️  {skippedCount} 条消息读取失败喵……")
 
         # 反转列表，让最旧的消息在前面
         messages.reverse()
