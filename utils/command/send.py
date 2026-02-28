@@ -220,7 +220,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
     async def receiverLoop():
         """后台协程：持续监听对方发来的消息并展示"""
 
-        while state.getInteractiveMode():
+        while state.isInteractive():
             try:
                 # 使用 wait_for 添加超时，避免永久阻塞
                 try:
