@@ -65,6 +65,7 @@ class BaseTUIController(ABC):
         self.prevHeight = 0
         self.entries: List[dict] = []
         self.pendingAction: Optional[tuple] = None
+        self.numberBuffer = ""
 
 
     # ========================================================================
@@ -310,11 +311,13 @@ class BaseTUIController(ABC):
 
         @kb.add("up")
         def _up(event):
+            self.numberBuffer = ""
             self.selected = max(0, self.selected - 1)
             self.redraw()
 
         @kb.add("down")
         def _down(event):
+            self.numberBuffer = ""
             self.selected = min(len(self.entries) - 1, self.selected + 1)
             self.redraw()
 
@@ -323,6 +326,22 @@ class BaseTUIController(ABC):
             self.selected = -1
             print(self.getExitMessage())
             event.app.exit()
+
+        # 数字键 0-9：实时拼接并跳转到对应序号
+        for digit in "0123456789":
+            @kb.add(digit)
+            def _digit(event, d=digit):
+                candidate = self.numberBuffer + d
+                index = int(candidate)
+                if index < len(self.entries):
+                    self.numberBuffer = candidate
+                    self.selected = index
+                    self.redraw()
+                elif int(d) < len(self.entries):
+                    # 拼接后越界，当作新一轮输入
+                    self.numberBuffer = d
+                    self.selected = int(d)
+                    self.redraw()
 
         # 选择模式的 Enter
         if not isManageMode:
