@@ -42,26 +42,26 @@ DEFAULT_WRITE_TIMEOUT = 60      # 将请求上传至 Telegram 请求体的超时
 
 
 # /nya 功能相关常量
-QUOTES_DIR = os.path.join(os.path.dirname(__file__) , "data" , "ZincNyaQuotes.json")
+QUOTES_DIR = os.path.join(os.path.dirname(__file__), "data", "ZincNyaQuotes.json")
 
 
 
 
 # 日志相关常量
-LOG_DIR = os.path.join(os.path.dirname(__file__) , "log")
+LOG_DIR = os.path.join(os.path.dirname(__file__), "log")
 
 
 
 
 # cli 相关常量
 COMMAND_DIR = "utils/command"
-HELP_LIST_DIR = os.path.join(os.path.dirname(__file__) , "data" , "helpList.csv")
+HELP_LIST_DIR = os.path.join(os.path.dirname(__file__), "data", "helpList.csv")
 
 
 
 
 # Whitelist 相关常量
-WHITELIST_DIR = os.path.join(os.path.dirname(__file__) , "data" , "whitelist.json")
+WHITELIST_DIR = os.path.join(os.path.dirname(__file__), "data", "whitelist.json")
 
 
 
@@ -85,6 +85,8 @@ CHAT_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")                 
 DB_PATH = os.path.join(CHAT_DATA_DIR, "chatHistory.db")                         # 聊天记录保存文件名
 KEY_PATH = os.path.join(CHAT_DATA_DIR, ".chatKey")                              # 密钥文件路径
 CHAT_HISTORY_LIMIT = 131072                                                     # 每个聊天保存的最大消息条数
+CHAT_EXPORT_DIR = os.path.join(CHAT_DATA_DIR, "chatExport")                      # 聊天记录导出目录
+CHAT_PREVIEW_LIMIT = 20                                                          # 默认预览条数
 
 
 
