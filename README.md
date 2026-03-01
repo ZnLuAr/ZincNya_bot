@@ -109,6 +109,7 @@ ZincNya_bot/
 │   │   ├── help.py             # /help 帮助
 │   │   ├── whitelist.py        # /whitelist 白名单管理
 │   │   ├── send.py             # /send 发送消息与聊天界面
+│   │   ├── history.py          # /history 聊天记录预览与导出
 │   │   ├── nya.py              # /nya 语录管理
 │   │   ├── log.py              # /log 日志管理
 │   │   ├── clear.py            # /clear 清屏
@@ -158,6 +159,7 @@ ZincNya_bot/
 | `/help` | 查看帮助信息 |
 | `/whitelist` | 管理白名单 |
 | `/send` | 发送消息或进入聊天界面 |
+| `/history` | 预览或导出聊天历史记录 |
 | `/nya` | 语录相关功能 |
 | `/log` | 管理日志文件 |
 | `/clear` | 清理控制台 |
@@ -213,6 +215,7 @@ ZincNya_bot/
 - `data/whitelist.json` - 用户白名单喵
 - `data/chatHistory.db` - 加密的聊天记录喵
 - `data/.chatKey` - 聊天记录加密密钥喵
+- `data/chatExport/` - 导出的聊天记录喵
 
 第一次部署的时候需要手动创建 `.env` 文件，
 其他数据文件会在使用时自动生成喵——
