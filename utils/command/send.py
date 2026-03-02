@@ -91,12 +91,13 @@ from telegram.error import Forbidden
 
 
 from handlers.cli import parseArgsTokens
+
 from utils.logger import logAction
-from utils.whitelistManager.ui import whitelistMenuController
-from utils.terminalUI import cls, smcup, rmcup
-from utils.chatHistory import saveMessage, loadHistory
 from utils.inputHelper import asyncInput
+from utils.terminalUI import cls, smcup, rmcup
 from utils.core.stateManager import getStateManager
+from utils.whitelistManager.ui import whitelistMenuController
+from utils.chatHistory import saveMessage, loadHistory, iterMessagesWithDateMarkers
 
 
 
@@ -205,14 +206,20 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         history = loadHistory(targetChatID)
         if history:
             print(f"─────── 历史记录 ───────\n")
-            for msg in history:
-                ts = msg["timestamp"].strftime("%H:%M:%S") if msg["timestamp"] else "??:??:??"
-                sender = msg["sender"] or "Unknown"
-                content = msg["content"]
-                if msg["direction"] == "outgoing":
-                    print(f"[{ts}] <{sender}> {content}")
+
+            # 使用生成器遍历消息，自动插入日期分隔符
+            for item_type, item_data in iterMessagesWithDateMarkers(history):
+                if item_type == "date":
+                    # 日期分隔行
+                    print(f"[{item_data}]")
                 else:
+                    # 消息行（时间戳简化为 HH:MM:SS）
+                    msg = item_data
+                    ts = msg["timestamp"].strftime("%H:%M:%S") if msg["timestamp"] else "??:??:??"
+                    sender = msg["sender"] or "Unknown"
+                    content = msg["content"]
                     print(f"[{ts}] <{sender}> {content}")
+
             print(f"<以上 {len(history)} 条>")
             print("\n─────── 实时聊天 ───────\n")
 
