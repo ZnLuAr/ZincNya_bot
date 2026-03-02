@@ -388,3 +388,42 @@ def getMessageCount(chatID: Optional[str] = None) -> int:
 
     except Exception:
         return 0
+
+# ============================================================================
+
+
+
+
+def iterMessagesWithDateMarkers(messages: List[dict]):
+    """
+    遍历消息列表，在日期变化时 yield 日期标记。
+
+    用于在显示/导出聊天记录时自动插入日期分隔符，提升长时间跨度记录的可读性。
+
+    参数：
+        messages: 消息列表（通常来自 loadHistory）
+
+    Yields：
+        ("date", date_str):    日期标记，格式 "YYYY/MM/DD"
+        ("message", msg_dict): 消息对象
+
+    示例：
+        for item_type, item_data in iterMessagesWithDateMarkers(messages):
+            if item_type == "date":
+                print(f"[{item_data}]")
+            else:
+                print(f"  {item_data['content']}")
+    """
+    lastDate = None
+
+    for msg in messages:
+        if msg.get("timestamp"):
+            currentDate = msg["timestamp"].date()
+
+            # 日期变化时，先 yield 日期标记
+            if currentDate != lastDate:
+                yield ("date", currentDate.strftime("%Y/%m/%d"))
+                lastDate = currentDate
+
+        # 然后 yield 消息本身
+        yield ("message", msg)

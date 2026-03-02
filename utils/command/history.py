@@ -48,11 +48,17 @@ import os
 import re
 from datetime import datetime
 
-from handlers.cli import parseArgsTokens
-from utils.logger import logAction
-from utils.chatHistory import loadHistory, getChatList, getMessageCount
 from config import CHAT_EXPORT_DIR, CHAT_PREVIEW_LIMIT
 
+from handlers.cli import parseArgsTokens
+
+from utils.logger import logAction
+from utils.chatHistory import (
+    loadHistory,
+    getChatList,
+    getMessageCount,
+    iterMessagesWithDateMarkers,
+)
 
 
 
@@ -158,11 +164,18 @@ def _previewChat(chatID: str, limit: int):
     showing = len(messages)
     print(f"\n─────── Chat {chatID} 的最近 {showing} 条消息（共 {total} 条）───────\n")
 
-    for msg in messages:
-        ts     = msg["timestamp"].strftime("%Y-%m-%d %H:%M:%S") if msg["timestamp"] else "??:??:??"
-        sender = msg["sender"] or "Unknown"
-        arrow  = "→" if msg["direction"] == "outgoing" else "←"
-        print(f"  [{ts}] {arrow} <{sender}> {msg['content']}")
+    # 使用生成器遍历消息，自动插入日期分隔符
+    for item_type, item_data in iterMessagesWithDateMarkers(messages):
+        if item_type == "date":
+            # 日期分隔行
+            print(f"  [{item_data}]")
+        else:
+            # 消息行（时间戳简化为 HH:MM:SS）
+            msg = item_data
+            ts = msg["timestamp"].strftime("%H:%M:%S") if msg["timestamp"] else "??:??:??"
+            sender = msg["sender"] or "Unknown"
+            arrow = "→" if msg["direction"] == "outgoing" else "←"
+            print(f"  [{ts}] {arrow} <{sender}> {msg['content']}")
 
     print(f"\n─────── 以上 {showing} 条 ───────")
     if total > showing:
@@ -250,12 +263,19 @@ def _writeExportFile(filepath: str, chatID: str, messages: list) -> bool:
             f.write(f"消息总数: {len(messages)} 条\n")
             f.write("=" * 64 + "\n\n")
 
-            for msg in messages:
-                ts     = msg["timestamp"].strftime("%Y-%m-%d %H:%M:%S") if msg["timestamp"] else "未知时间"
-                sender = msg["sender"] or "Unknown"
-                arrow  = "→" if msg["direction"] == "outgoing" else "←"
-                f.write(f"[{ts}] {arrow} <{sender}>\n")
-                f.write(f"  {msg['content']}\n\n")
+            # 使用生成器遍历消息，自动插入日期分隔符
+            for item_type, item_data in iterMessagesWithDateMarkers(messages):
+                if item_type == "date":
+                    # 日期分隔行
+                    f.write(f"[{item_data}]\n")
+                else:
+                    # 消息行（时间戳简化为 HH:MM:SS）
+                    msg = item_data
+                    ts = msg["timestamp"].strftime("%H:%M:%S") if msg["timestamp"] else "??:??:??"
+                    sender = msg["sender"] or "Unknown"
+                    arrow = "→" if msg["direction"] == "outgoing" else "←"
+                    f.write(f"[{ts}] {arrow} <{sender}>\n")
+                    f.write(f"  {msg['content']}\n\n")
 
         return True
 
