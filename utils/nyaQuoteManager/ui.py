@@ -19,11 +19,15 @@ from utils.core.tuiBase import BaseTUIController
 from .data import loadQuoteFile , saveQuoteFile , userOperation
 
 
+
+
 def _extractBaseWeight(w) -> float:
     """从 weight 字段提取基础权重（兼容 float 和 list 格式）"""
     if isinstance(w, list):
         return float(w[0]) if w else 1.0
     return float(w)
+
+
 
 
 def collectQuoteViewModel(selectedIndex: int=-1) -> Tuple[List[dict] , int]:
@@ -62,7 +66,9 @@ def collectQuoteViewModel(selectedIndex: int=-1) -> Tuple[List[dict] , int]:
     return entries , meta
 
 
-def quoteUIRenderer(entries: List[dict] , selectedIndex: int = -1) -> int:
+
+
+def quoteUIRenderer(entries: List[dict] , selectedIndex: int = -1 , addRowOffset: int = 1) -> int:
     console = Console()
 
     try:
@@ -84,15 +90,23 @@ def quoteUIRenderer(entries: List[dict] , selectedIndex: int = -1) -> int:
 
         weight = e.get("weight" , None)
         weightStr = "-" if weight is None else f"{weight:.3g}"
+        isAddRow = (weight is None)  # (+) 行的 weight 为 None，以此区分
+
+        # 序号显示规则：普通条目从 1 开始连续编号，(+) 行不占序号
+        # displayNo = globalIdx - addRowOffset + 1
+        # addRowOffset=1（默认）：index 1 → 显示 1，index 2 → 显示 2
+        displayNo = globalIdx - addRowOffset + 1
 
         if isSelected:
             table.add_row(
-                f"[bold yellow]> {globalIdx}[/]",
+                "[bold yellow](+)[/]" if isAddRow else f"[bold yellow]> {displayNo}[/]",
                 f"[bold yellow]{weightStr}[/]",
                 f"[bold yellow]{preview}[/]"
             )
+        elif isAddRow:
+            table.add_row("[cyan](+)[/]" , f"[dim]{weightStr}[/]" , f"[dim]{preview}[/]")
         else:
-            table.add_row(str(globalIdx) , weightStr , preview)
+            table.add_row(str(displayNo) , weightStr , preview)
 
     with console.capture() as capture:
         console.print(table)
@@ -117,6 +131,8 @@ def quoteUIRenderer(entries: List[dict] , selectedIndex: int = -1) -> int:
     sys.stdout.flush()
 
     return len(lines)
+
+
 
 
 async def editQuoteViaEditor(initialTextEscaped: str , initialWeight: float = 1.0) -> Optional[Tuple[str, float]]:
@@ -157,13 +173,20 @@ async def editQuoteViaEditor(initialTextEscaped: str , initialWeight: float = 1.
     return escaped , weight
 
 
+
+
 class QuoteTUIController(BaseTUIController):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # (+) 行固定在 index 0，数字跳转需偏移 1（输入 1 → index 1）
+        self.addRowOffset = 1
 
     async def collectViewModel(self, selectedIndex: int):
         return collectQuoteViewModel(selectedIndex=selectedIndex)
 
     def renderUI(self, entries, selectedIndex):
-        return quoteUIRenderer(entries , selectedIndex=selectedIndex)
+        return quoteUIRenderer(entries , selectedIndex=selectedIndex , addRowOffset=self.addRowOffset)
 
     def getEmptyMessage(self):
         return "语录列表为空喵……"
@@ -229,6 +252,8 @@ class QuoteTUIController(BaseTUIController):
             await self.refreshEntries()
 
         return True
+
+
 
 
 async def quoteMenuController(app=None):

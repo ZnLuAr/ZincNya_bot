@@ -67,6 +67,12 @@ class BaseTUIController(ABC):
         self.pendingAction: Optional[tuple] = None
         self.numberBuffer = ""
 
+        # 数字跳转偏移量：
+        # - select 模式（无 (+) 行）：addRowOffset = 0，用户输入 1 → index 0
+        # - manage 模式（index 0 为 (+) 行）：addRowOffset = 1，用户输入 1 → index 1
+        # 子类若有 (+) 行应将此值覆盖为 1。
+        self.addRowOffset = 0
+
 
     # ========================================================================
     # 抽象方法
@@ -327,27 +333,41 @@ class BaseTUIController(ABC):
             print(self.getExitMessage())
             event.app.exit()
 
-        # 数字键 0-9：实时拼接并跳转到对应序号
+        # 数字键 0-9：实时拼接并跳转到对应显示序号
+        #
+        # 显示规则（由各渲染器保证）：
+        #   - (+) 行（若有）不显示数字序号，不参与跳转
+        #   - 第一个普通条目显示序号 1，第二个显示 2，以此类推
+        #
+        # 跳转规则：
+        #   用户输入序号 N → 内部 index = N - 1 + self.addRowOffset
+        #   - select 模式（无 (+) 行）：addRowOffset = 0，输入 1 → index 0
+        #   - manage 模式（index 0 为 (+) 行）：addRowOffset = 1，输入 1 → index 1
+        #   输入 0 永远无效（0 - 1 + offset 在合法范围外）
         for digit in "0123456789":
             @kb.add(digit)
             def _digit(event, d=digit):
                 candidate = self.numberBuffer + d
-                index = int(candidate)
-                if index < len(self.entries):
+                index = int(candidate) - 1 + self.addRowOffset
+                if 0 <= index < len(self.entries):
                     self.numberBuffer = candidate
                     self.selected = index
                     self.redraw()
-                elif int(d) < len(self.entries):
-                    # 拼接后越界，当作新一轮输入
-                    self.numberBuffer = d
-                    self.selected = int(d)
-                    self.redraw()
+                else:
+                    # 拼接后越界，将新数字单独作为新一轮输入
+                    singleIndex = int(d) - 1 + self.addRowOffset
+                    if 0 <= singleIndex < len(self.entries):
+                        self.numberBuffer = d
+                        self.selected = singleIndex
+                        self.redraw()
 
         # 选择模式的 Enter
         if not isManageMode:
             @kb.add("enter")
             def _enter(event):
                 event.app.exit()
+
+
 
 
     def getSelectedEntry(self) -> Optional[dict]:

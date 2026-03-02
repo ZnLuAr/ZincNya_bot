@@ -98,7 +98,7 @@ async def collectWhitelistViewModel(bot: Bot , selectedIndex: int = -1 , include
     return entries, meta
 
 
-def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: int = 0 , showHelpLine: bool = False) -> int:
+def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: int = 0 , showHelpLine: bool = False , addRowOffset: int = 0) -> int:
     console = Console()
 
     try:
@@ -130,11 +130,16 @@ def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: in
                 table.add_row("" , "[cyan](+)[/]" , "[dim]添加新用户[/]" , "")
         else:
             commentPreview = "" if comment.strip() == "" else comment[:15] + ("..." if len(comment) > 15 else "")
+            # 序号显示规则：普通条目从 1 开始连续编号，(+) 行不占序号
+            # displayNo = globalIdx - addRowOffset + 1
+            #   manage 模式（addRowOffset=1）：index 1 → 显示 1，index 2 → 显示 2
+            #   select 模式（addRowOffset=0）：index 0 → 显示 1，index 1 → 显示 2
+            displayNo = globalIdx - addRowOffset + 1
             if isSelected:
-                table.add_row(f"[bold yellow]> {globalIdx}[/]" , f"[bold yellow]{uid}[/]" , f"[bold yellow]{displayStatus}[/]" , f"[bold yellow]{commentPreview}[/]")
+                table.add_row(f"[bold yellow]> {displayNo}[/]" , f"[bold yellow]{uid}[/]" , f"[bold yellow]{displayStatus}[/]" , f"[bold yellow]{commentPreview}[/]")
             else:
                 uidRendered = f"[{colour}]{uid}[/]"
-                table.add_row(str(globalIdx) , uidRendered , displayStatus , commentPreview)
+                table.add_row(str(displayNo) , uidRendered , displayStatus , commentPreview)
 
     with console.capture() as capture:
         console.print(table)
@@ -172,6 +177,12 @@ def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: in
 
 class WhitelistTUIController(BaseTUIController):
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # manage 模式下 index 0 为 (+) 行，数字跳转需偏移 1
+        if self.mode == "manage":
+            self.addRowOffset = 1
+
     async def collectViewModel(self, selectedIndex: int):
         isManageMode = (self.mode == "manage")
         return await collectWhitelistViewModel(self.bot , selectedIndex=selectedIndex , includeAddRow=isManageMode)
@@ -179,7 +190,7 @@ class WhitelistTUIController(BaseTUIController):
 
     def renderUI(self, entries, selectedIndex):
         isManageMode = (self.mode == "manage")
-        return whitelistUIRenderer(entries , selectedIndex=selectedIndex , showHelpLine=isManageMode)
+        return whitelistUIRenderer(entries , selectedIndex=selectedIndex , showHelpLine=isManageMode , addRowOffset=self.addRowOffset)
 
 
     def getEmptyMessage(self):

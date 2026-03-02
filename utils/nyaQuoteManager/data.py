@@ -12,6 +12,8 @@ from typing import List , Optional
 from config import QUOTES_DIR
 
 
+
+
 def ensureQuoteFile():
     if QUOTES_DIR:
         os.makedirs(os.path.dirname(QUOTES_DIR) , exist_ok=True)
@@ -36,6 +38,8 @@ def saveQuoteFile(quotes: List[dict]):
     ensureQuoteFile()
     cache = getQuotesCache()
     cache.set(quotes)
+
+
 
 
 def getRandomQuote() -> list[str]:
@@ -120,6 +124,8 @@ def getRandomQuote() -> list[str]:
     else:
         # 传统单条消息格式
         return [text.replace("\\n", "\n")]
+
+
 
 
 def userOperation(operation: str , index:Optional[int]=None , payload:Optional[dict]=None):
