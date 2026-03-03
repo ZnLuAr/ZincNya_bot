@@ -163,7 +163,7 @@ class TreeLogger:
         self._startupWritten = False
         self._hasContent = False
 
-        print(f"\n\n锌酱、现在就要创建日志了喵——✍\n   · {self._logPath}，\nこれからですよにゃー\n")
+        print(f"\n\n锌酱、现在就要创建日志了喵—— ✍\n   · {self._logPath}，\nこれからですよにゃー\n")
 
 
     def _getTodayLogPath(self):

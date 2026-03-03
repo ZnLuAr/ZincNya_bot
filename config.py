@@ -86,6 +86,7 @@ DB_PATH = os.path.join(CHAT_DATA_DIR, "chatHistory.db")                         
 KEY_PATH = os.path.join(CHAT_DATA_DIR, ".chatKey")                              # 密钥文件路径
 CHAT_HISTORY_LIMIT = 131072                                                     # 每个聊天保存的最大消息条数
 CHAT_EXPORT_DIR = os.path.join(CHAT_DATA_DIR, "chatExport")                      # 聊天记录导出目录
+CHAT_BACKUP_DIR = os.path.join(CHAT_DATA_DIR, "chatBackup")                      # 聊天记录自动归档目录
 CHAT_PREVIEW_LIMIT = 20                                                          # 默认预览条数
 
 

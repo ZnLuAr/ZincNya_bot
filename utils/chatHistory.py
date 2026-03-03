@@ -32,9 +32,16 @@ utils/chatHistory.py
 ================================================================================
 
 每个聊天的消息数量上限由 config.py 中的 CHAT_HISTORY_LIMIT 控制。
-当某个聊天的消息数量超过此限制时，saveMessage 会自动删除最旧的消息。
+当某个聊天的消息数量超过此限制时，saveMessage 会先将最旧的消息归档到
+data/chatBackup/，然后删除。
 
 默认值：131072 条
+
+归档文件：
+    - 格式：archive_<chatID>_<YYYYMMDD>.db
+    - 位置：data/chatBackup/
+    - 特性：同一天的多次溢出会追加到同一个归档文件中
+    - 内容：保持加密状态，使用相同的 SQLite 表结构
 
 
 ================================================================================
@@ -79,7 +86,24 @@ from datetime import datetime
 from typing import List, Optional
 from cryptography.fernet import Fernet
 
-from config import CHAT_DATA_DIR , DB_PATH , KEY_PATH , CHAT_HISTORY_LIMIT
+from config import (
+    DB_PATH,
+    KEY_PATH,
+    CHAT_DATA_DIR,
+    CHAT_BACKUP_DIR,
+    CHAT_HISTORY_LIMIT,
+)
+
+
+
+
+# ============================================================================
+# 时间戳格式常量
+# ============================================================================
+
+TIMESTAMP_FORMAT_DATE = "%Y%m%d"                # 归档文件名日期格式
+TIMESTAMP_FORMAT_DATETIME = "%Y-%m-%d %H:%M:%S" # 数据库时间戳格式
+TIMESTAMP_FORMAT_DISPLAY = "%Y/%m/%d"           # 日期分隔符显示格式
 
 
 
@@ -161,6 +185,80 @@ initDB()
 # 消息存储与读取
 # ============================================================================
 
+def _archiveOverflow(chatID: str, overflowCount: int) -> bool:
+    """
+    将即将被删除的溢出消息归档到独立的 SQLite 数据库。
+
+    参数：
+        chatID:         聊天对象 ID
+        overflowCount:  需要归档的消息数量
+
+    返回：
+        成功返回 True，失败返回 False
+
+    归档文件：
+        data/chatBackup/archive_<chatID>_<YYYYMMDD>.db
+        同一天的多次溢出会追加到同一个归档文件中。
+    """
+    try:
+        os.makedirs(CHAT_BACKUP_DIR, exist_ok=True)
+
+        dateStr = datetime.now().strftime(TIMESTAMP_FORMAT_DATE)
+        archiveFilename = f"archive_{chatID}_{dateStr}.db"
+        archivePath = os.path.join(CHAT_BACKUP_DIR, archiveFilename)
+
+        # 使用 context manager 确保连接正确关闭
+        with sqlite3.connect(DB_PATH) as mainConn:
+            mainCursor = mainConn.cursor()
+
+            mainCursor.execute(
+                """
+                SELECT id, chat_id, direction, sender, content, timestamp
+                FROM messages
+                WHERE chat_id = ?
+                ORDER BY timestamp ASC
+                LIMIT ?
+                """,
+                (str(chatID), overflowCount)
+            )
+            overflowMessages = mainCursor.fetchall()
+
+            if not overflowMessages:
+                return True
+
+            # 归档数据库使用与主数据库相同的表结构
+            with sqlite3.connect(archivePath) as archiveConn:
+                archiveCursor = archiveConn.cursor()
+
+                archiveCursor.execute("""
+                    CREATE TABLE IF NOT EXISTS messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        chat_id TEXT NOT NULL,
+                        direction TEXT NOT NULL,
+                        sender TEXT,
+                        content BLOB NOT NULL,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
+                archiveCursor.executemany(
+                    """
+                    INSERT INTO messages (chat_id, direction, sender, content, timestamp)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [(msg[1], msg[2], msg[3], msg[4], msg[5]) for msg in overflowMessages]
+                )
+
+                archiveConn.commit()
+
+        print(f"✅ 已将 Chat {chatID} 的 {overflowCount} 条旧消息归档至：{archiveFilename}")
+        return True
+
+    except Exception as e:
+        print(f"⚠️  归档消息失败喵：{e}")
+        return False
+
+
 def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
     """
     保存一条消息到数据库（自动加密）。
@@ -175,7 +273,9 @@ def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
         成功返回 True，失败返回 False
 
     注意：
-        当某个聊天的消息数量超过 CHAT_HISTORY_LIMIT 时，会自动删除最旧的消息。
+        当某个聊天的消息数量超过 CHAT_HISTORY_LIMIT 时，会先将最旧的消息归档到
+        独立的 SQLite 数据库（data/chatBackup/archive_<chatID>_<YYYYMMDD>.db），
+        然后删除。归档文件保持加密状态，使用相同的表结构。
     """
     try:
         fernet = getFernet()
@@ -185,26 +285,39 @@ def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
         cursor = conn.cursor()
 
         # 使用本地时间而非 UTC
-        localTimestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        localTimestamp = datetime.now().strftime(TIMESTAMP_FORMAT_DATETIME)
 
         cursor.execute(
             "INSERT INTO messages (chat_id, direction, sender, content, timestamp) VALUES (?, ?, ?, ?, ?)",
             (str(chatID), direction, sender, encryptedContent, localTimestamp)
         )
 
-        # 清理超出限制的旧消息
-        cursor.execute(
-            """
-            DELETE FROM messages
-            WHERE chat_id = ? AND id NOT IN (
-                SELECT id FROM messages
-                WHERE chat_id = ?
-                ORDER BY timestamp DESC
-                LIMIT ?
-            )
-            """,
-            (str(chatID), str(chatID), CHAT_HISTORY_LIMIT)
-        )
+        # 检查是否超出限制，若超出则先归档再删除
+        cursor.execute("SELECT COUNT(*) FROM messages WHERE chat_id = ?", (str(chatID),))
+        currentCount = cursor.fetchone()[0]
+
+        if currentCount > CHAT_HISTORY_LIMIT:
+            overflowCount = currentCount - CHAT_HISTORY_LIMIT
+
+            # 提交当前事务，确保新消息已保存
+            conn.commit()
+
+            # 仅当归档成功时才删除旧消息，防止数据丢失
+            if _archiveOverflow(chatID, overflowCount):
+                cursor.execute(
+                    """
+                    DELETE FROM messages
+                    WHERE chat_id = ? AND id NOT IN (
+                        SELECT id FROM messages
+                        WHERE chat_id = ?
+                        ORDER BY timestamp DESC
+                        LIMIT ?
+                    )
+                    """,
+                    (str(chatID), str(chatID), CHAT_HISTORY_LIMIT)
+                )
+            else:
+                print(f"⚠️  归档失败，保留 Chat {chatID} 的旧消息以防数据丢失")
 
         conn.commit()
         conn.close()
@@ -422,7 +535,7 @@ def iterMessagesWithDateMarkers(messages: List[dict]):
 
             # 日期变化时，先 yield 日期标记
             if currentDate != lastDate:
-                yield ("date", currentDate.strftime("%Y/%m/%d"))
+                yield ("date", currentDate.strftime(TIMESTAMP_FORMAT_DISPLAY))
                 lastDate = currentDate
 
         # 然后 yield 消息本身
