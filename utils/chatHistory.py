@@ -93,6 +93,7 @@ from config import (
     CHAT_BACKUP_DIR,
     CHAT_HISTORY_LIMIT,
 )
+from utils.logger import logSystemEvent, LogLevel
 
 
 
@@ -185,7 +186,7 @@ initDB()
 # 消息存储与读取
 # ============================================================================
 
-def _archiveOverflow(chatID: str, overflowCount: int) -> bool:
+async def _archiveOverflow(chatID: str, overflowCount: int) -> bool:
     """
     将即将被删除的溢出消息归档到独立的 SQLite 数据库。
 
@@ -251,15 +252,24 @@ def _archiveOverflow(chatID: str, overflowCount: int) -> bool:
 
                 archiveConn.commit()
 
-        print(f"✅ 已将 Chat {chatID} 的 {overflowCount} 条旧消息归档至：{archiveFilename}")
+        await logSystemEvent(
+            "聊天记录归档成功喵",
+            f"Chat {chatID}: {overflowCount} 条 → {archiveFilename}",
+            LogLevel.INFO
+        )
         return True
 
     except Exception as e:
-        print(f"⚠️  归档消息失败喵：{e}")
+        await logSystemEvent(
+            "聊天记录归档*失败*喵……",
+            f"Chat {chatID}: {str(e)}",
+            LogLevel.ERROR,
+            exception=e
+        )
         return False
 
 
-def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
+async def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
     """
     保存一条消息到数据库（自动加密）。
 
@@ -303,7 +313,7 @@ def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
             conn.commit()
 
             # 仅当归档成功时才删除旧消息，防止数据丢失
-            if _archiveOverflow(chatID, overflowCount):
+            if await _archiveOverflow(chatID, overflowCount):
                 cursor.execute(
                     """
                     DELETE FROM messages
@@ -317,18 +327,27 @@ def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
                     (str(chatID), str(chatID), CHAT_HISTORY_LIMIT)
                 )
             else:
-                print(f"⚠️  归档失败，保留 Chat {chatID} 的旧消息以防数据丢失")
+                await logSystemEvent(
+                    "归档失败喵，先保留旧消息……",
+                    f"Chat {chatID}",
+                    LogLevel.WARNING
+                )
 
         conn.commit()
         conn.close()
         return True
 
     except Exception as e:
-        print(f"保存消息失败喵: {e}")
+        await logSystemEvent(
+            "消息保存失败喵……",
+            f"Chat {chatID}: {str(e)}",
+            LogLevel.ERROR,
+            exception=e
+        )
         return False
 
 
-def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict]:
+async def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict]:
     """
     加载指定聊天的历史记录（自动解密）。
 
@@ -393,18 +412,27 @@ def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict]:
                 continue
 
         if skippedCount > 0:
-            print(f"⚠️  {skippedCount} 条消息读取失败喵……")
+            await logSystemEvent(
+                "消息解密失败喵……",
+                f"ChatID {chatID}: 有 {skippedCount} 条消息读取失败",
+                LogLevel.WARNING
+            )
 
         # 反转列表，让最旧的消息在前面
         messages.reverse()
         return messages
 
     except Exception as e:
-        print(f"加载历史记录失败: {e}")
+        await logSystemEvent(
+            "历史记录加载失败喵……",
+            f"Chat {chatID}: {str(e)}",
+            LogLevel.ERROR,
+            exception=e
+        )
         return []
 
 
-def getChatList() -> List[dict]:
+async def getChatList() -> List[dict]:
     """
     获取所有有记录的聊天列表。
 
@@ -444,11 +472,16 @@ def getChatList() -> List[dict]:
         ]
 
     except Exception as e:
-        print(f"获取聊天列表失败: {e}")
+        await logSystemEvent(
+            "聊天列表获取失败喵……",
+            str(e),
+            LogLevel.ERROR,
+            exception=e
+        )
         return []
 
 
-def clearHistory(chatID: Optional[str] = None) -> bool:
+async def clearHistory(chatID: Optional[str] = None) -> bool:
     """
     清空聊天记录。
 
@@ -472,7 +505,12 @@ def clearHistory(chatID: Optional[str] = None) -> bool:
         return True
 
     except Exception as e:
-        print(f"清空记录失败: {e}")
+        await logSystemEvent(
+            "记录清空失败喵……",
+            str(e),
+            LogLevel.ERROR,
+            exception=e
+        )
         return False
 
 

@@ -5,7 +5,7 @@ import importlib
 import difflib
 
 from config import HELP_LIST_DIR , COMMAND_DIR
-from utils.logger import logAction
+from utils.logger import logAction, LogLevel, LogChildType
 
 
 
@@ -61,7 +61,13 @@ async def execute(app , args):
             print(f"\n❌ 没找到 /{command} 命令喵。")
             print("提示：输入 /help 查看所有可用命令\n\n")
     except Exception as e:
-        await logAction(None , "执行 /help 时出错了喵……" , str(e) , "withOneChild")
+        await logAction(
+            "Console",
+            "执行 /help 时出错了喵……",
+            str(e),
+            LogLevel.ERROR,
+            LogChildType.WITH_ONE_CHILD
+        )
         raise
 
 

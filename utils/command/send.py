@@ -92,7 +92,7 @@ from telegram.error import Forbidden
 
 from handlers.cli import parseArgsTokens
 
-from utils.logger import logAction
+from utils.logger import logAction, LogLevel, LogChildType
 from utils.inputHelper import asyncInput
 from utils.terminalUI import cls, smcup, rmcup
 from utils.core.stateManager import getStateManager
@@ -170,7 +170,13 @@ async def sendMsg(bot: Bot , idList , atUser , text):
             result = f"❌ 向 {chatID} 发送失败了喵：{e}"
 
         finally:
-            await logAction("Console" , f"/send → {chatID} ┃ {text}" , result , "withOneChild")
+            await logAction(
+                "Console",
+                f"/send → {chatID} ┃ {text}",
+                result,
+                LogLevel.INFO,
+                LogChildType.WITH_ONE_CHILD
+            )
 
 
 
@@ -201,9 +207,9 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
 
 
     # ========================================================================
-    def displayHistory():
+    async def displayHistory():
         """显示历史聊天记录"""
-        history = loadHistory(targetChatID)
+        history = await loadHistory(targetChatID)
         if history:
             print(f"─────── 历史记录 ───────\n")
 
@@ -244,7 +250,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
                 # 保存消息到加密存储
                 sender = msg.from_user.username or msg.from_user.first_name or "Unknown"
                 content = msg.text or ""
-                saveMessage(targetChatID, "incoming", sender, content)
+                await saveMessage(targetChatID, "incoming", sender, content)
 
                 printMessage("incomingMessage" , msg)
 
@@ -302,7 +308,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         )
 
         # 显示历史记录
-        displayHistory()
+        await displayHistory()
 
         while True:
             userInput = await inputLoop()
@@ -317,7 +323,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
                 printMessage("selfMessage" , userInput)
                 await bot.send_message(chat_id=targetChatID , text=userInput)
                 # 保存发送的消息到加密存储
-                saveMessage(targetChatID, "outgoing", "ZincNya~", userInput)
+                await saveMessage(targetChatID, "outgoing", "ZincNya~", userInput)
             except Forbidden:
                 print(f"    被 Forbidden 了……这可能是对方还没有跟咱开始聊天的缘故哦")
             except Exception as e:

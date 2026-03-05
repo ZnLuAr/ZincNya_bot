@@ -36,6 +36,7 @@ from config import (
     NEWS_REQUEST_TIMEOUT,
     NEWS_DATA_FILE,
 )
+from utils.logger import logSystemEvent, LogLevel
 
 
 
@@ -181,7 +182,12 @@ async def pushToTelegram(bot: Bot, chat_id: str, article: NewsArticle) -> bool:
         return True
 
     except Exception as e:
-        print(f"推送失败: {e}")
+        await logSystemEvent(
+            "推送新闻失败",
+            str(e),
+            LogLevel.ERROR,
+            exception=e
+        )
         return False
 
 

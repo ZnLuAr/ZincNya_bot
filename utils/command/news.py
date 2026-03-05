@@ -26,6 +26,7 @@ from utils.newsAPI import (
     markAsPushed,
 )
 from config import NEWS_TARGET_CHAT_ID, NEWS_MAX_ARTICLES
+from utils.logger import logSystemEvent, LogLevel
 
 
 
@@ -109,7 +110,12 @@ async def testFetch():
             print()
 
     except Exception as e:
-        print(f"❌ 抓取失败喵：{e}\n")
+        await logSystemEvent(
+            "抓取新闻失败喵……",
+            str(e),
+            LogLevel.ERROR,
+            exception=e
+        )
 
 
 
@@ -154,7 +160,12 @@ async def fetchAndPush(bot: Bot, targetChatID: str):
         print(f"推送完成喵！新推送 {pushed_count} 篇，跳过 {skipped_count} 篇（已推送过）\n")
 
     except Exception as e:
-        print(f"❌ 抓取或推送失败喵：{e}\n")
+        await logSystemEvent(
+            "抓取或推送新闻失败喵",
+            str(e),
+            LogLevel.ERROR,
+            exception=e
+        )
 
 
 

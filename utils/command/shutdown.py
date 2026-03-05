@@ -1,7 +1,13 @@
-from utils.logger import logAction
+from utils.logger import logAction, LogLevel, LogChildType
 
 async def execute(app, args):
-    await logAction("锌酱" , "/shutdown" , "收到关机指令喵——" , "False")
+    await logAction(
+        "锌酱",
+        "/shutdown",
+        "收到关机指令喵——",
+        LogLevel.INFO,
+        LogChildType.NONE
+    )
     print("\n     · 锌酱、要去睡觉了喵——\n     · 期待和ごしゅじん的下一次见面——\n     · 嘿嘿……❤ 喵——\n")
     print(".\n.\n.\n    *……瞼を閉じました……= =\n")
     return "SHUTDOWN"

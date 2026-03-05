@@ -4,7 +4,7 @@ utils/logger.py
 树状日志记录系统，为 ZincNya Bot 提供统一的日志输出与文件记录能力。
 
 该模块的核心设计是以"树状结构"展示日志的层级关系，使得控制台输出更加直观易读。
-模块由两部分组成：TreeLogger 类（核心实现）与向后兼容的函数接口。
+模块由两部分组成：TreeLogger 类（核心实现）与函数接口。
 
 
 ================================================================================
@@ -42,43 +42,18 @@ TreeLogger 是单例模式的日志记录器，负责管理日志文件的创建
     LAST_CHILD            - 最后的子节点
     ONLY_RESULT           - 仅结果（二级输出）
 
-在旧版本，树状输出的格式是由字符串决定的，这样很容易发生拼写错误。
-现在把它改成了枚举。
 
 ================================================================================
-向后兼容接口
-
-模块提供了两个函数接口，保持与旧代码的兼容性：
+函数接口
 
     initLogger()
         - 初始化日志系统，在 bot.py 启动时调用
 
-    logAction(user, action, result, child, writeInLog=True)
-        - 记录操作日志
-        - child 参数支持旧的字符串格式（如 "withChild"）或新的枚举
-        - 旧字符串会自动转换为对应的 LogChildType 枚举
+    logAction(user, event, details, level, childType, writeInLog=True)
+        - 记录用户操作日志
 
-
-================================================================================
-使用示例
-
-# 方式 1：使用旧的字符串参数（向后兼容）
-await logAction(
-    update.effective_user,
-    "使用 /findsticker 寻找表情包",
-    "OK喵",
-    "withChild"
-)
-
-# 方式 2：使用新的枚举类型（推荐）
-from utils.logger import logAction, LogChildType
-
-await logAction(
-    update.effective_user,
-    "使用 /findsticker 寻找表情包",
-    "OK喵",
-    LogChildType.WITH_CHILD
-)
+    logSystemEvent(event, details, level, childType, ...)
+        - 记录系统内部事件（数据库、文件 I/O、API 等）
 
 
 ================================================================================
@@ -96,21 +71,6 @@ await logAction(
                └─┤ OK喵
                    └─┤ 开始下载
                          └─┤ 成功 42 张，失败 0 张
-
-
-================================================================================
-向后兼容映射表
-
-旧字符串参数会自动映射为新枚举：
-    "False"               -> LogChildType.NONE
-    "withChild"           -> LogChildType.WITH_CHILD
-    "withOneChild"        -> LogChildType.WITH_ONE_CHILD
-    "childWithChild"      -> LogChildType.CHILD_WITH_CHILD
-    "lastChildWithChild"  -> LogChildType.LAST_CHILD_WITH_CHILD
-    "lastChild"           -> LogChildType.LAST_CHILD
-    "True"                -> LogChildType.ONLY_RESULT
-
-这确保了现有代码无需修改即可继续正常工作。
 """
 
 
@@ -119,11 +79,18 @@ await logAction(
 import os
 from datetime import datetime
 from enum import Enum
+from typing import Optional
 import asyncio
 from config import LOG_DIR
 
 
 
+
+class LogLevel(str, Enum):
+    """日志级别"""
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
 
 
 class LogChildType(str , Enum):
@@ -190,83 +157,108 @@ class TreeLogger:
             f.write(f"[{timestamp}] ZincNya Bot—— 喵的一声，就启动啦——\n")
 
 
-    async def log(self , user , action , result , childType: LogChildType|str , writeInLog=True):
+    async def log(
+        self,
+        user,
+        event: str,           # 原 action
+        details: str,         # 原 result
+        level: LogLevel,      # 新增
+        childType: LogChildType,
+        writeInLog=True,
+        exception: Optional[Exception] = None  # 新增，用于错误日志
+    ):
         """
         记录日志
 
         Args:
             user: 用户对象或用户名字符串
-            action: 操作描述
-            result: 操作结果
+            event: 事件描述（发生了什么）
+            details: 补充信息（具体细节）
+            level: 日志级别（LogLevel.INFO/WARNING/ERROR）
             childType: 子节点类型（LogChildType 枚举或字符串）
             writeInLog: 是否写入日志文件
+            exception: 异常对象（用于错误日志双写）
         """
-        if not action and not result:
+        if not event and not details:
             return
 
         # 当不存在日志时，初始化
         if self._logPath is None:
             self.initialize()
 
-        # 兼容旧的字符串参数
-        if isinstance(childType, str):
-            childType = self._convertLegacyChildType(childType)
-
         timestamp = datetime.now().strftime("%H:%M:%S")
         userName = self._extractUserName(user)
 
-        # 格式化控制台输出
-        consoleText = self._formatConsoleText(timestamp , userName , action , result , childType)
+        # 如果有异常，追加异常信息到 details
+        if exception:
+            exceptionInfo = f"{type(exception).__name__}: {str(exception)}"
+            if details:
+                details = f"{details} ({exceptionInfo})"
+            else:
+                details = exceptionInfo
 
-        # 格式化日志文件输出
-        logLine = f"[{timestamp}] @{userName}：{action}\n[{timestamp}] @锌酱：Result：{result}\n"
+        # 格式化控制台输出（保持树状结构）
+        consoleText = self._formatConsoleText(timestamp, userName, event, details, level, childType)
+
+        # 格式化日志文件输出（单行格式）
+        logLine = self._formatLogLine(timestamp, userName, event, details, level)
 
         if writeInLog:
             try:
                 await asyncio.to_thread(self._writeLogSync, consoleText, logLine)
+
+                # 如果是 ERROR 级别且有异常对象，双写到错误日志
+                if level == LogLevel.ERROR and exception is not None:
+                    from utils.errorHandler import logError
+                    logError(
+                        errorType=type(exception).__name__,
+                        message=str(exception),
+                        exception=exception,
+                        context=f"User: {userName}, Event: {event}"
+                    )
             except Exception as e:
-                print(f"[{timestamp}] @锌酱：咦？日志写入失败了喵……？\n             └─┤ 报错在这里——{e}")
+                print(f"[{timestamp}] [{level.value}] @锌酱：咦？日志写入失败了喵……？\n             └─┤ 报错在这里——{e}")
         else:
             print(consoleText)
 
 
-    def _formatConsoleText(self , timestamp , userName , action , result , childType: LogChildType):
+    def _formatConsoleText(self, timestamp, userName, event, details, level: LogLevel, childType: LogChildType):
         """根据子节点类型格式化控制台输出"""
         match childType:
             case LogChildType.NONE:
-                return f"[{timestamp}] @{userName}：{action}\n               └─┤ {result}\n\n"
+                return f"[{timestamp}] [{level.value}] @{userName}: {event}\n                   └─┤ {details}\n\n"
 
             case LogChildType.WITH_CHILD:
-                return f"[{timestamp}] @{userName}：{action}\n               └─┤ {result}"
+                return f"[{timestamp}] [{level.value}] @{userName}: {event}\n                   └─┤ {details}"
 
             case LogChildType.WITH_ONE_CHILD:
-                return f"[{timestamp}] @{userName}：{action}\n               └─┤ {result}\n\n"
+                return f"[{timestamp}] [{level.value}] @{userName}: {event}\n                   └─┤ {details}\n\n"
 
             case LogChildType.CHILD_WITH_CHILD:
-                return f"                   └─┤ {action}\n                         └─┤ {result}"
+                return f"                   └─┤ {event}\n                         └─┤ {details}"
 
             case LogChildType.LAST_CHILD_WITH_CHILD:
-                return f"                   └─┤ {action}\n                         └─┤ {result}\n\n"
+                return f"                   └─┤ {event}\n                         └─┤ {details}\n\n"
 
             case LogChildType.LAST_CHILD:
-                return f"                   └─┤ {result}\n\n"
+                return f"                   └─┤ {details}\n\n"
 
             case LogChildType.ONLY_RESULT:
-                return f"                   └─┤ {result}"
+                return f"                   └─┤ {details}"
 
 
-    def _convertLegacyChildType(self , oldType: str) -> LogChildType:
-        """将旧的字符串类型转换为新的枚举类型（向后兼容）"""
-        mapping = {
-            "False": LogChildType.NONE,
-            "withChild": LogChildType.WITH_CHILD,
-            "withOneChild": LogChildType.WITH_ONE_CHILD,
-            "childWithChild": LogChildType.CHILD_WITH_CHILD,
-            "lastChildWithChild": LogChildType.LAST_CHILD_WITH_CHILD,
-            "lastChild": LogChildType.LAST_CHILD,
-            "True": LogChildType.ONLY_RESULT,
-        }
-        return mapping.get(oldType , LogChildType.NONE)
+    def _formatLogLine(self, timestamp, userName, event, details, level: LogLevel):
+        """生成单行日志格式"""
+        if event and details:
+            return f"[{timestamp}] [{level.value}] @{userName}: {event} → {details}\n"
+        elif event:
+            return f"[{timestamp}] [{level.value}] @{userName}: {event}\n"
+        elif details:
+            return f"[{timestamp}] [{level.value}] @{userName}: → {details}\n"
+        else:
+            return ""
+
+
 
 
     def _writeLogSync(self , consoleText , logLine):
@@ -282,7 +274,7 @@ class TreeLogger:
     def _extractUserName(self , user):
         """提取用户名（支持多种输入类型）"""
         if user is None:
-            return "Bot"
+            return "System"  # 修改：原来返回 "Bot"，现在统一为 "System"
         if isinstance(user , str):
             return user.strip() or "Unknown"
         if isinstance(user , dict):
@@ -314,15 +306,56 @@ def initLogger():
 
 
 
-async def logAction(user , action , result , child , writeInLog=True):
+async def logAction(user, event, details, level, childType, writeInLog=True):
     """
-    记录操作日志（向后兼容的函数接口）
+    记录操作日志（函数接口）
 
     Args:
         user: 用户对象或用户名
-        action: 操作描述
-        result: 操作结果
-        child: 子节点类型（支持旧字符串或新枚举）
+        event: 事件描述（发生了什么）
+        details: 补充信息（具体细节）
+        level: 日志级别（LogLevel.INFO/WARNING/ERROR）
+        childType: 子节点类型（支持旧字符串或新枚举）
         writeInLog: 是否写入日志文件
     """
-    await _logger.log(user , action , result , child , writeInLog)
+    await _logger.log(user, event, details, level, childType, writeInLog)
+
+
+
+
+async def logSystemEvent(
+    event: str,
+    details: str = "",
+    level: LogLevel = LogLevel.INFO,
+    childType: LogChildType = LogChildType.NONE,
+    writeToFile: bool = True,
+    exception: Optional[Exception] = None
+):
+    """
+    记录系统内部事件
+
+    专门用于内部系统事件（数据库操作、文件 I/O、API 调用等），
+    自动使用 user="System"，支持树状结构输出。
+
+    Args:
+        event: 事件描述（发生了什么）
+        details: 补充信息（具体细节）
+        level: 日志级别（LogLevel.INFO/WARNING/ERROR）
+        childType: 树状结构类型（默认 NONE 为单行输出）
+        writeToFile: 是否写入日志文件
+        exception: 异常对象（用于错误日志双写）
+
+    示例：
+        await logSystemEvent("聊天记录归档成功", f"Chat {chatID}: {count} 条")
+        await logSystemEvent("归档失败", f"Chat {chatID}", LogLevel.ERROR, exception=e)
+        await logSystemEvent("开始归档", "", LogLevel.INFO, LogChildType.WITH_CHILD)
+    """
+    await _logger.log(
+        user="System",
+        event=event,
+        details=details,
+        level=level,
+        childType=childType,
+        writeInLog=writeToFile,
+        exception=exception
+    )

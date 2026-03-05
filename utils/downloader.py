@@ -143,7 +143,7 @@ import asyncio
 import tempfile
 from telegram.error import TelegramError , NetworkError
 
-from utils.logger import logAction
+from utils.logger import logAction, LogLevel, LogChildType
 from config import (
     MAX_CONCURRENT_DOWNLOADS,       # 最大并发下载数量
     MAX_DOWNLOADS_ATTEMPTS,         # 最大下载尝试次数
@@ -206,16 +206,23 @@ async def createStickerZip(
         converted = sum(1 for r in results if r.get("converted"))
 
         await logAction(
-            None,
-            "下载完成喵 (as GIF)" if stickerSuffix == "gif" else "下载完成喵 (as WebP/WebM)",
+            "System",
+            "下载完成 (as GIF)" if stickerSuffix == "gif" else "下载完成 (as WebP/WebM)",
             f"成功 {converted if stickerSuffix == 'gif' else ok} 张，失败 {failed} 张",
-            "childWithChild"
+            LogLevel.INFO,
+            LogChildType.CHILD_WITH_CHILD
         )
 
         # 打包为.zip
         zipBase = os.path.join(outputDir , f"{setName}_{uniqueID}")
         zipPath = shutil.make_archive(zipBase , "zip" , tmpDir)
-        await logAction(None , "打包完毕" , "现在就要发出来喵——" , "childWithChild")
+        await logAction(
+            "System",
+            "打包完毕",
+            "现在就要发出来喵——",
+            LogLevel.INFO,
+            LogChildType.CHILD_WITH_CHILD
+        )
 
         return zipPath
 

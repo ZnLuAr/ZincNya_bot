@@ -7,7 +7,7 @@ from utils.whitelistManager.ui import (
     collectWhitelistViewModel,
     whitelistMenuController
 )
-from utils.logger import logAction
+from utils.logger import logAction, LogLevel, LogChildType
 
 
 
@@ -100,7 +100,13 @@ async def execute(app , args):
         ok = userOperation("setComment" , commentUID , commentText)
         action = f"为 {commentUID} 添加备注 '{commentText}' ……"
         result = "OK喵——" if ok else "备注添加失败喵……"
-        await logAction("Console" , action , result ,"withOneChild")
+        await logAction(
+            "Console",
+            action,
+            result,
+            LogLevel.INFO,
+            LogChildType.WITH_ONE_CHILD
+        )
         return
 
     # 以下是包含了-a、-d、-s 的使用情况
@@ -116,14 +122,33 @@ async def execute(app , args):
                 result = "OK喵" if ok else f"{addUID} 已经在白名单了喵——"
                 if not ok:
                     # 当添加 UID 不成功时，返回“已经在白名单了”——这种无意义的消息可以不出现在日志中
-                    await logAction("Console" , action , result , "withChild" , False)
+                    await logAction(
+                        "Console",
+                        action,
+                        result,
+                        LogLevel.WARNING,
+                        LogChildType.WITH_CHILD,
+                        False
+                    )
                     return
-                await logAction("Console" , action , result , "withChild")
+                await logAction(
+                    "Console",
+                    action,
+                    result,
+                    LogLevel.INFO,
+                    LogChildType.WITH_CHILD
+                )
                 # Step 2：添加备注
                 # 所以要使 comment
                 ok = userOperation("setComment" , addUID , commentText)
                 result = f"已为 {addUID} 添加备注 {commentText} 喵——" if ok else f"备注添加失败喵……"
-                await logAction("Console" , action , result , "lastChild")
+                await logAction(
+                    "Console",
+                    action,
+                    result,
+                    LogLevel.INFO,
+                    LogChildType.LAST_CHILD
+                )
                 return
             result = ["OK喵" , f"{addUID} 已在白名单喵——"]
 
@@ -147,7 +172,13 @@ async def execute(app , args):
         userID = addUID or delUID or susUID
         ok = userOperation(operation , userID)
         finalResult = result[0] if ok else result[1]
-        await logAction("Console" , action , finalResult , "withOneChild")
+        await logAction(
+            "Console",
+            action,
+            finalResult,
+            LogLevel.INFO,
+            LogChildType.WITH_ONE_CHILD
+        )
         return
 
     print("やばいー、参数错误喵——")

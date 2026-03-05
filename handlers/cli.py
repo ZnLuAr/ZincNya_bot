@@ -66,7 +66,7 @@ import inspect
 import os
 
 from config import COMMAND_DIR
-from utils.logger import logAction
+from utils.logger import logAction, LogLevel, LogChildType
 
 
 
@@ -114,7 +114,13 @@ async def handleConsoleCommand(app , commandLine: str):
             if inspect.isawaitable(result):
                 await result
         except Exception as e:
-            await logAction("Console" , f"/{commandName} {commandArgs}" , f"执行时出错了喵：{e}" , "withOneChild")
+            await logAction(
+                "Console",
+                f"/{commandName} {commandArgs}",
+                f"执行时出错了喵：{e}",
+                LogLevel.ERROR,
+                LogChildType.WITH_ONE_CHILD
+            )
     else:
             print(f"❌ やばいー/{commandName} 模块中没有定义 execute(app, args) 函数喵！\n")
 
