@@ -52,7 +52,7 @@ from config import CHAT_EXPORT_DIR, CHAT_PREVIEW_LIMIT
 
 from handlers.cli import parseArgsTokens
 
-from utils.logger import logAction
+from utils.logger import logAction, LogLevel, LogChildType, logSystemEvent
 from utils.chatHistory import (
     loadHistory,
     getChatList,
@@ -86,11 +86,23 @@ async def execute(app, args: list[str]):
     # --export 导出模式
     if doExport is not None:
         if chatID and chatID != "NoValue":
-            _exportChat(chatID)
-            await logAction("Console", f"/history --export -c {chatID}", "导出完成", "withOneChild")
+            await logAction(
+                "System",
+                f"/history --export -c {chatID}",
+                "开始导出喵",
+                LogLevel.INFO,
+                LogChildType.WITH_CHILD
+            )
+            await _exportChat(chatID)
         else:
-            _exportAll()
-            await logAction("Console", "/history --export", "全部导出完成", "withOneChild")
+            await logAction(
+                "System",
+                "/history --export",
+                "开始导出全部会话喵",
+                LogLevel.INFO,
+                LogChildType.WITH_CHILD
+            )
+            await _exportAll()
         return
 
     # -c <chatID> 预览模式
@@ -120,7 +132,8 @@ async def execute(app, args: list[str]):
 
 def _listChats():
     """列出所有有记录的会话"""
-    chats = getChatList()
+    import asyncio
+    chats = asyncio.run(getChatList())
 
     if not chats:
         print("（暂无任何聊天记录……）\n")
@@ -138,7 +151,7 @@ def _listChats():
         print(f"  {cid:<20}  {count:>8}  {ts_str}")
 
     print(f"{'─' * 56}")
-    print(f"  共 {len(chats)} 个会话，使用 -c <chatID> 预览消息喵。\n")
+    print(f"  共 {len(chats)} 个会话，使用 -c <chatID> 预览消息喵\n")
 
 
 def _sanitizeChatID(chatID: str) -> str:
@@ -149,16 +162,17 @@ def _sanitizeChatID(chatID: str) -> str:
 
 def _previewChat(chatID: str, limit: int):
     """预览指定会话的最近 N 条消息"""
+    import asyncio
     total = getMessageCount(chatID)
 
     if total == 0:
         print(f"（Chat {chatID} 暂无任何聊天记录喵……）\n")
         return
 
-    messages = loadHistory(chatID, limit=limit)
+    messages = asyncio.run(loadHistory(chatID, limit=limit))
 
     if not messages:
-        print(f"（Chat {chatID} 有 {total} 条记录但全部解密失败了喵……密钥可能已更换）\n")
+        print(f"（ChatID {chatID} 有 {total} 条记录但全部解密失败了喵……密钥可能已更换）\n")
         return
 
     showing = len(messages)
@@ -183,19 +197,28 @@ def _previewChat(chatID: str, limit: int):
     print()
 
 
-def _exportChat(chatID: str):
+async def _exportChat(chatID: str):
     """将指定会话导出为 txt 文件"""
     total = getMessageCount(chatID)
 
     if total == 0:
-        print(f"（Chat {chatID} 暂无任何聊天记录，无需导出喵……）\n")
+        await logSystemEvent(
+            "",
+            f"ChatID {chatID} 暂无任何聊天记录，无需导出喵……",
+            LogLevel.INFO,
+            LogChildType.LAST_CHILD
+        )
         return
 
-    print(f"正在加载 Chat {chatID} 的全部 {total} 条记录……")
-    messages = loadHistory(chatID)
+    messages = await loadHistory(chatID)
 
     if not messages:
-        print(f"❌ Chat {chatID} 有 {total} 条记录但全部解密失败了喵……密钥可能已更换\n")
+        await logSystemEvent(
+            f"记录全部解密失败了喵……可能是密钥已经更换",
+            f"ChatID {chatID}： {total} 条记录全部解密失败",
+            LogLevel.ERROR,
+            LogChildType.LAST_CHILD_WITH_CHILD
+        )
         return
 
     os.makedirs(CHAT_EXPORT_DIR, exist_ok=True)
@@ -205,16 +228,26 @@ def _exportChat(chatID: str):
     filename   = f"chat_{safeChatID}_{timestamp}.txt"
     filepath   = os.path.join(CHAT_EXPORT_DIR, filename)
 
-    if _writeExportFile(filepath, chatID, messages):
-        print(f"✅ 已将 Chat {chatID} 的 {len(messages)} 条消息导出至：\n   {filepath}\n")
+    if await _writeExportFile(filepath, chatID, messages):
+        await logSystemEvent(
+            f"已将 ChatID {chatID} 的 {len(messages)} 条消息导出",
+            filepath,
+            LogLevel.INFO,
+            LogChildType.LAST_CHILD_WITH_CHILD
+        )
 
 
-def _exportAll():
+async def _exportAll():
     """将所有会话导出为各自的 txt 文件"""
-    chats = getChatList()
+    chats = await getChatList()
 
     if not chats:
-        print("（暂无任何聊天记录，无需导出喵……）\n")
+        await logSystemEvent(
+            "",
+            "暂无任何聊天记录，无需导出喵……",
+            LogLevel.INFO,
+            LogChildType.LAST_CHILD
+        )
         return
 
     os.makedirs(CHAT_EXPORT_DIR, exist_ok=True)
@@ -223,14 +256,24 @@ def _exportAll():
     exported   = 0
     failed     = 0
 
-    print(f"开始导出全部 {len(chats)} 个会话……\n")
+    await logSystemEvent(
+        "",
+        f"开始导出全部 {len(chats)} 个会话……",
+        LogLevel.INFO,
+        LogChildType.ONLY_RESULT
+    )
 
     for chat in chats:
         chatID = chat["chat_id"]
-        messages = loadHistory(chatID)
+        messages = await loadHistory(chatID)
 
         if not messages:
-            print(f"  ⚠️  Chat {chatID}：解密失败，跳过")
+            await logSystemEvent(
+                "",
+                f"ChatID {chatID}：解密失败，跳过喵",
+                LogLevel.WARNING,
+                LogChildType.ONLY_RESULT
+            )
             failed += 1
             continue
 
@@ -238,17 +281,26 @@ def _exportAll():
         filename = f"chat_{safeChatID}_{timestamp}.txt"
         filepath = os.path.join(CHAT_EXPORT_DIR, filename)
 
-        if _writeExportFile(filepath, chatID, messages):
-            print(f"  ✅ Chat {chatID}：{len(messages)} 条 → {filename}")
+        if await _writeExportFile(filepath, chatID, messages):
+            await logSystemEvent(
+                "",
+                f"Chat {chatID}：{len(messages)} 条 → {filename}",
+                LogLevel.INFO,
+                LogChildType.ONLY_RESULT
+            )
             exported += 1
         else:
             failed += 1
 
-    print(f"\n导出完成喵！成功 {exported} 个，失败 {failed} 个。")
-    print(f"文件保存在：{CHAT_EXPORT_DIR}\n")
+    await logSystemEvent(
+        f"导出完成喵—— 总计成功 {exported} 个，失败 {failed} 个",
+        f"文件保存在：{CHAT_EXPORT_DIR}",
+        LogLevel.INFO,
+        LogChildType.LAST_CHILD_WITH_CHILD
+    )
 
 
-def _writeExportFile(filepath: str, chatID: str, messages: list) -> bool:
+async def _writeExportFile(filepath: str, chatID: str, messages: list) -> bool:
     """
     将消息列表写入文本文件。
 
@@ -280,7 +332,13 @@ def _writeExportFile(filepath: str, chatID: str, messages: list) -> bool:
         return True
 
     except Exception as e:
-        print(f"❌ 写入文件失败喵：{e}\n")
+        await logSystemEvent(
+            "",
+            f"写入文件失败喵：{str(e)}",
+            LogLevel.ERROR,
+            LogChildType.LAST_CHILD,
+            exception=e
+        )
         return False
 
 

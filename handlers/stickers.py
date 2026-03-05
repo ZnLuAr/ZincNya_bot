@@ -8,7 +8,7 @@ from telegram.ext import (
 )
 
 from utils.downloader import createStickerZip, deleteLater
-from utils.logger import logAction
+from utils.logger import logAction, LogLevel, LogChildType
 from utils.core.stateManager import getStateManager
 from config import (
     CACHE_TTL,
@@ -27,22 +27,35 @@ async def findSticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update.effective_user,
         "使用 /findsticker 寻找表情包",
         "OK喵",
-        "withChild"
+        LogLevel.INFO,
+        LogChildType.WITH_CHILD
     )
 
     msg = update.message
     if not msg.reply_to_message or not msg.reply_to_message.sticker:
         await update.message.reply_text("？喵\n要用/findsticker的话，得回复一个表情哦——")
-        await logAction(None , None, "但不是以回复的方式使用指令" , "lastChild")
+        await logAction(
+            update.effective_user,
+            "",
+            "但不是以回复的方式使用指令",
+            LogLevel.WARNING,
+            LogChildType.LAST_CHILD
+        )
         return
-    
+
     sticker = update.message.reply_to_message.sticker
     setName = sticker.set_name
     if not setName:
         await update.message.reply_text("ごめんなさいニャー……\n😭没有找到所属的表情包呢……")
-        await logAction(None , None , "没有找到所属的表情包……" , "lastChild")
+        await logAction(
+            "System",
+            "",
+            "没有找到所属的表情包……",
+            LogLevel.WARNING,
+            LogChildType.LAST_CHILD
+        )
         return
-    
+
     stickerSet = await context.bot.get_sticker_set(setName)
     setCachedSticker(setName , stickerSet)
 
@@ -63,7 +76,13 @@ async def findSticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ])
 
-    await logAction(None , "成功找到喵——" , f"找到表情包 {setName}" , "lastChildWithChild")
+    await logAction(
+        "System",
+        "成功找到表情包",
+        f"表情包名称：{setName}",
+        LogLevel.INFO,
+        LogChildType.LAST_CHILD_WITH_CHILD
+    )
     sent = await update.message.reply_text(text , reply_markup=keyboardFoundSticker)
 
     # 发出3分钟后删除
@@ -98,7 +117,13 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             "お家を帰る——.jpg"
         )
-        await logAction(None , None , f"找、找不到表情包 {setName} 了喵——" , "lastChild")
+        await logAction(
+            "System",
+            "",
+            f"找不到表情包：{setName}",
+            LogLevel.WARNING,
+            LogChildType.LAST_CHILD
+        )
         return
     
     if action == "gif_confirm":
@@ -126,14 +151,15 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text(
         f"收到——\n"
-        f"表情包“{stickerSet.title}”，\n"
+        f"表情包 “{stickerSet.title}”，\n"
         f"现在就给 @{query.from_user.username or query.from_user.first_name}下载喵……"
     )
     await logAction(
-        None,
-        "下载按钮被点击，现在开始下载喵……",
+        query.from_user,
+        "下载按钮被点击",
         f"开始下载 {setName} ({stickerSuffix})",
-        "withChild"
+        LogLevel.INFO,
+        LogChildType.WITH_CHILD
     )
 
     zipPath = await createStickerZip(
@@ -157,12 +183,14 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     await logAction(
-        None,
-        "表情包，成功发出了喵——",
-        f"{setName} ({stickerSuffix})",
-        "lastChildWithChild")
+        "System",
+        f"表情包 {setName} 成功发出喵——",
+        f"as {stickerSuffix} to {query.from_user}",
+        LogLevel.INFO,
+        LogChildType.LAST_CHILD_WITH_CHILD
+    )
 
-    # 删除3分钟前的相关信息
+    # 延时后删除相关信息
     asyncio.create_task(
         deleteLater(context, sent.chat_id, sent.message_id, zipPath, DELETE_DELAY)
     )

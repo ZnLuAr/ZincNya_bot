@@ -9,7 +9,7 @@ import json
 from typing import Optional
 
 from config import WHITELIST_DIR
-from utils.logger import logAction
+from utils.logger import logAction, LogLevel, LogChildType
 
 
 def ensureWhitelistFile():
@@ -103,7 +103,13 @@ async def handleStart(update , context):
 
     if not whetherAuthorizedUser(userID):
         print ("ご、ご主人様——")
-        await logAction(None , f"有不认识的人尝试访问咱了……" , f"直接拒绝喵：{name}(@{userName} / ID：{userID})" , "withOneChild")
+        await logAction(
+            update.effective_user,
+            "有不认识的人尝试访问咱了……",
+            f"直接拒绝喵：{name}(@{userName} / ID：{userID})",
+            LogLevel.WARNING,
+            LogChildType.WITH_ONE_CHILD
+        )
         return
 
     await update.message.reply_text("欢迎回来喵——")

@@ -5,7 +5,7 @@ from telegram.ext import CommandHandler, ContextTypes
 
 
 from utils.nyaQuoteManager.data import getRandomQuote
-from utils.logger import logAction
+from utils.logger import logAction, LogLevel, LogChildType
 
 
 # 多条消息之间的发送间隔（秒，精确到一位小数）
@@ -25,7 +25,13 @@ async def sendNya(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "ご主人様——快来修修你的群猫……\n"
             "@ZincPhos"
         )
-        await logAction(None, "来自 Telegram 的 /nya", "chosenQuote 缺失喵……", "withOneChild")
+        await logAction(
+            update.effective_user,
+            "来自 Telegram 的 /nya",
+            "chosenQuote 缺失喵……",
+            LogLevel.WARNING,
+            LogChildType.WITH_ONE_CHILD
+        )
         return
 
     # 发送消息（可能是单条或多条）

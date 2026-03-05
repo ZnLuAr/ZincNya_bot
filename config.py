@@ -31,7 +31,7 @@ DEFAULT_FILE_CACHE_TTL = 480  # 秒
 # /findsticker 功能相关常量
 DATA_DIR = "download"
 CACHE_TTL = 300                 # 表情包缓存 5 分钟过期
-DELETE_DELAY = 180
+DELETE_DELAY = 360              # 表情包相关信息 6 分钟后删除
 MAX_CONCURRENT_DOWNLOADS = 5    # 最大并发下载 Stickers 数量
 MAX_DOWNLOADS_ATTEMPTS = 3      # 最大尝试下载次数
 MAX_GIF_FPS = 24                # 下载的最大 gif 帧数
