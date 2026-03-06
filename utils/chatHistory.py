@@ -573,7 +573,7 @@ def iterMessagesWithDateMarkers(messages: List[dict]):
 
             # 日期变化时，先 yield 日期标记
             if currentDate != lastDate:
-                yield ("date", currentDate.strftime(TIMESTAMP_FORMAT_DISPLAY))
+                yield ("date", currentDate.strftime(f"\n{TIMESTAMP_FORMAT_DISPLAY}"))
                 lastDate = currentDate
 
         # 然后 yield 消息本身

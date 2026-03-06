@@ -14,10 +14,13 @@ from rich.console import Console
 from telegram import Bot
 from telegram.error import Forbidden , BadRequest
 
-from utils.terminalUI import cls , smcup , rmcup
 from utils.inputHelper import asyncInput
 from utils.core.tuiBase import BaseTUIController
+from utils.terminalUI import cls , smcup , rmcup
+
 from .data import loadWhitelistFile , userOperation
+
+
 
 
 async def checkChatAvailable(bot: Bot , uid: str):
@@ -36,6 +39,8 @@ async def checkChatAvailable(bot: Bot , uid: str):
         return ("NotFound", e)
     except Exception as e:
         return ("Error", e)
+
+
 
 
 async def collectWhitelistViewModel(bot: Bot , selectedIndex: int = -1 , includeAddRow: bool = False) -> Tuple[List[dict], dict]:
@@ -96,6 +101,8 @@ async def collectWhitelistViewModel(bot: Bot , selectedIndex: int = -1 , include
     meta = {"selected": max(0 , min(selectedIndex , len(entries) - 1)) if entries else 0 , "count": len(entries)}
 
     return entries, meta
+
+
 
 
 def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: int = 0 , showHelpLine: bool = False , addRowOffset: int = 0) -> int:

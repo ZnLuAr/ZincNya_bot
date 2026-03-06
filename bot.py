@@ -8,13 +8,18 @@ from telegram.ext import (
 )
 import asyncio
 
-from loader import loadHandlers
+
 from config import BOT_TOKEN , TELEGRAM_PROXY
+
 from handlers.cli import handleConsoleCommand
+
+from loader import loadHandlers
+
 from utils.logger import initLogger
-from utils.errorHandler import initErrorHandler , setupAsyncioErrorHandler
 from utils.inputHelper import asyncInput
+from utils.todoReminder import todoReminderLoop
 from utils.core.stateManager import getStateManager
+from utils.errorHandler import initErrorHandler , setupAsyncioErrorHandler
 
 
 
@@ -93,9 +98,11 @@ async def main():
     await app.updater.start_polling()  # 启动监听
 
     consoleTask = asyncio.create_task(consoleListener(app))
+    reminderTask = asyncio.create_task(todoReminderLoop(app))
 
     # 等待控制台任务结束，即 /shutdown 时
     result = await consoleTask
+    reminderTask.cancel()
     if result == "SHUTDOWN":
         await app.updater.stop()    
         await app.stop()

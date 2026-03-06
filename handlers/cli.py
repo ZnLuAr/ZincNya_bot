@@ -105,8 +105,22 @@ async def handleConsoleCommand(app , commandLine: str):
         print(f"导入 /{commandName} 时发生错误喵：{e}\n")
         return
     
+
     # 最终执行命令
     if hasattr(module , "execute"):
+
+        # -h / --help：统一拦截，打印帮助后不执行 execute()
+        if commandArgs and commandArgs[0] in ("-h", "--help"):
+            if hasattr(module, "getHelp"):
+                info = module.getHelp()
+                print(f"\n{info['name']}    {info.get('description', '')}")
+                print(f"\n{info.get('usage', '')}\n")
+                if info.get("example"):
+                    print(f"{info['example']}\n")
+            else:
+                print(f"/{commandName} 没有提供帮助信息喵……\n")
+            return
+
         try:
             result = await module.execute(app , commandArgs)
             if result == "SHUTDOWN":

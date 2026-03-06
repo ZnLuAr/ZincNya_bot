@@ -93,6 +93,7 @@ ZincNya_bot/
 │   ├── whitelist.json          # 白名单（不会被提交）
 │   ├── chatHistory.db          # 加密聊天记录（不会被提交）
 │   ├── .chatKey                # 聊天记录加密密钥（不会被提交）
+│   ├── todos.db                # 待办事项数据库（不会被提交）
 │   └── ZincNyaQuotes.json      # 语录数据喵
 │
 ├── ffmpeg/                     # FFmpeg 可执行文件
@@ -102,7 +103,8 @@ ZincNya_bot/
 │   ├── cli.py                  # 控制台命令处理
 │   ├── stickers.py             # 表情包搜索与下载
 │   ├── nya.py                  # /nya 语录功能
-│   └── book.py                 # /book 书籍搜索
+│   ├── book.py                 # /book 书籍搜索
+│   └── todos.py                # /todos 待办事项管理
 │
 ├── utils/                      # 工具模块
 │   ├── command/                # CLI 命令
@@ -112,6 +114,7 @@ ZincNya_bot/
 │   │   ├── history.py          # /history 聊天记录预览与导出
 │   │   ├── nya.py              # /nya 语录管理
 │   │   ├── log.py              # /log 日志管理
+│   │   ├── todos.py            # /todos 待办事项管理（控制台）
 │   │   ├── clear.py            # /clear 清屏
 │   │   └── shutdown.py         # /shutdown 关闭
 │   │
@@ -130,6 +133,8 @@ ZincNya_bot/
 │   │
 │   ├── chatHistory.py          # 聊天记录加密存储
 │   ├── bookSearchAPI.py        # Open Library API 封装
+│   ├── todoDB.py               # 待办事项 SQLite 数据库
+│   ├── todoReminder.py         # 待办提醒后台任务
 │   ├── downloader.py           # 表情包下载与格式转换
 │   ├── fileEditor.py           # TUI 文本编辑器
 │   ├── terminalUI.py           # 终端 UI 工具（备用屏幕、ANSI）
@@ -172,6 +177,7 @@ ZincNya_bot/
 | `/findsticker` | 搜索和下载表情包 |
 | `/book <关键词>` | 搜索书籍 |
 | `/nya` | 获取一条随机语录 |
+| `/todos` | 管理个人待办事项 |
 
 想知道更详细的用法，就输入 `/help <command>` 喵！
 
