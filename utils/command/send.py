@@ -233,33 +233,41 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
     async def receiverLoop():
         """后台协程：持续监听对方发来的消息并展示"""
 
-        while state.isInteractive():
-            try:
-                # 使用 wait_for 添加超时，避免永久阻塞
+        nonTargetMessages = []  # 积攒非目标聊天的消息，退出时回填队列
+
+        try:
+            while state.isInteractive():
                 try:
-                    msg = await asyncio.wait_for(queue.get(), timeout=0.5)
-                except asyncio.TimeoutError:
-                    continue
+                    # 使用 wait_for 添加超时，避免永久阻塞
+                    try:
+                        msg = await asyncio.wait_for(queue.get(), timeout=0.5)
+                    except asyncio.TimeoutError:
+                        continue
 
-                if not msg:
-                    continue
+                    if not msg:
+                        continue
 
-                if str(msg.chat.id) != str(targetChatID):
-                    continue
+                    if str(msg.chat.id) != str(targetChatID):
+                        nonTargetMessages.append(msg)
+                        continue
 
-                # 保存消息到加密存储
-                sender = msg.from_user.username or msg.from_user.first_name or "Unknown"
-                content = msg.text or ""
-                await saveMessage(targetChatID, "incoming", sender, content)
+                    # 保存消息到加密存储
+                    sender = msg.from_user.username or msg.from_user.first_name or "Unknown"
+                    content = msg.text or ""
+                    await saveMessage(targetChatID, "incoming", sender, content)
 
-                printMessage("incomingMessage" , msg)
+                    printMessage("incomingMessage" , msg)
 
-            except asyncio.CancelledError:
-                break
+                except asyncio.CancelledError:
+                    break
 
-            except Exception:
-                # 忽略零星的单次读取异常，继续循环
-                pass
+                except Exception:
+                    # 忽略零星的单次读取异常，继续循环
+                    pass
+        finally:
+            # 将非目标消息回填队列，防止永久丢失
+            for msg in nonTargetMessages:
+                await queue.put(msg)
 
 
     async def inputLoop():
@@ -341,7 +349,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         except Exception:
             pass
 
-        print("退出聊天界面喵——\n")
+        print("\n退出聊天界面喵——\n\n")
 
 
 
@@ -354,16 +362,21 @@ def getHelp():
         "description": "在控制台中向指定对象发送一条消息",
     
         "usage": (
-            "/send [-c/--chat (chatID)] [-a/--at <userName>] [-id/--id <id1 , id2 ,...>] [-t/--text <text>]\n"
-            "用户或群聊的ID需要在 Telegram 的 @myidbot 中获取哦。"
+            "/send -id <id> -t <text>                   向指定对象发送消息\n"
+            "/send -id <id1> <id2> -t <text>            向多个对象发送消息\n"
+            "/send -id <id> -a <userName> -t <text>     发送消息并 @ 用户\n"
+            "/send -c <chatID>                          进入与指定用户的聊天界面\n"
+            "/send -c                                   弹出列表选择聊天对象\n"
+            "\n"
+            "注：ID 可通过 Telegram 的 @myidbot 获取哦"
         ),
 
         "example": (
-            "向一个用户发送消息：/send -id '1234567' -t 'Hello world'\n"
-            "向聊天中发送消息并@用户：/send -id '-1234567' -a 'userName' -t 'Do you know I'm a bot?'\n"
-            "向多个用户发送消息：/send -id '1234567' '1234568' -t '👀'"
-            "进入与指定用户的聊天界面：/send -c '1234567'\n"
-            "进入与用户的聊天界面，但弹出列表以供选择：/send -c"
+            "向用户发送消息：/send -id '1234567' -t 'Hello world'\n"
+            "发送并 @ 用户：/send -id '-1234567' -a 'userName' -t 'Do you know I'm a bot?'\n"
+            "向多个用户发送：/send -id '1234567' '1234568' -t '👀'\n"
+            "进入聊天界面：/send -c '1234567'\n"
+            "选择聊天对象：/send -c"
         ),
 
     }

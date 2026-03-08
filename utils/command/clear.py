@@ -96,14 +96,15 @@ def getHelp():
         "description": "清理控制台屏幕",
 
         "usage": (
-            "/clear (-a/--all) (-n/--n <int>) (-r/--reset)"
+            "/clear              清除整个屏幕\n"
+            "/clear -n <行数>    向上清除指定行数\n"
+            "/clear -r           重置到启动状态（清屏 + 重新打印启动信息）"
         ),
 
         "example": (
             "清除整个屏幕：/clear\n"
-            "清除整个屏幕：/clear --all\n"
             "向上清除 10 行：/clear -n 10\n"
-            "重置到启动状态：/clear --reset"
+            "重置到启动状态：/clear -r"
         ),
 
     }

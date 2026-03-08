@@ -93,6 +93,7 @@ ZincNya_bot/
 │   ├── whitelist.json          # 白名单（不会被提交）
 │   ├── chatHistory.db          # 加密聊天记录（不会被提交）
 │   ├── .chatKey                # 聊天记录加密密钥（不会被提交）
+│   ├── todos.db                # 待办事项数据库（不会被提交）
 │   └── ZincNyaQuotes.json      # 语录数据喵
 │
 ├── ffmpeg/                     # FFmpeg 可执行文件
@@ -102,7 +103,8 @@ ZincNya_bot/
 │   ├── cli.py                  # 控制台命令处理
 │   ├── stickers.py             # 表情包搜索与下载
 │   ├── nya.py                  # /nya 语录功能
-│   └── book.py                 # /book 书籍搜索
+│   ├── book.py                 # /book 书籍搜索
+│   └── todos.py                # /todos 待办事项管理
 │
 ├── utils/                      # 工具模块
 │   ├── command/                # CLI 命令
@@ -112,6 +114,7 @@ ZincNya_bot/
 │   │   ├── history.py          # /history 聊天记录预览与导出
 │   │   ├── nya.py              # /nya 语录管理
 │   │   ├── log.py              # /log 日志管理
+│   │   ├── todos.py            # /todos 待办事项管理（控制台）
 │   │   ├── clear.py            # /clear 清屏
 │   │   └── shutdown.py         # /shutdown 关闭
 │   │
@@ -119,6 +122,13 @@ ZincNya_bot/
 │   │   ├── fileCache.py        # 文件缓存系统（TTL + 修改检测）
 │   │   ├── stateManager.py     # 全局状态管理器
 │   │   └── tuiBase.py          # TUI 控制器基类
+│   │
+│   ├── todos/                  # 待办事项子系统
+│   │   ├── database.py         # SQLite 数据存储
+│   │   ├── utils.py            # 时间解析、优先级解析、格式化
+│   │   ├── tgRender.py         # Telegram 侧渲染
+│   │   ├── cliRender.py        # 控制台侧渲染
+│   │   └── reminder.py         # 后台提醒循环
 │   │
 │   ├── whitelistManager/       # 白名单管理模块
 │   │   ├── data.py             # 数据层（IO + 业务逻辑）
@@ -130,6 +140,7 @@ ZincNya_bot/
 │   │
 │   ├── chatHistory.py          # 聊天记录加密存储
 │   ├── bookSearchAPI.py        # Open Library API 封装
+│   ├── newsAPI.py              # 新闻抓取 API 封装（先咕着喵）
 │   ├── downloader.py           # 表情包下载与格式转换
 │   ├── fileEditor.py           # TUI 文本编辑器
 │   ├── terminalUI.py           # 终端 UI 工具（备用屏幕、ANSI）
@@ -161,6 +172,7 @@ ZincNya_bot/
 | `/send` | 发送消息或进入聊天界面 |
 | `/history` | 预览或导出聊天历史记录 |
 | `/nya` | 语录相关功能 |
+| `/todos` | 管理待办事项 |
 | `/log` | 管理日志文件 |
 | `/clear` | 清理控制台 |
 | `/shutdown` | 关闭 Bot |
@@ -172,25 +184,9 @@ ZincNya_bot/
 | `/findsticker` | 搜索和下载表情包 |
 | `/book <关键词>` | 搜索书籍 |
 | `/nya` | 获取一条随机语录 |
+| `/todos` | 管理个人待办事项 |
 
 想知道更详细的用法，就输入 `/help <command>` 喵！
-
----
-
-
-## 架构特性喵
-
-### 模块化设计
-
-咱采用了数据层和 UI 层分离的架构：
-- **数据层**（`data.py`）：负责文件 IO、缓存管理、业务逻辑
-- **UI 层**（`ui.py`）：负责 ViewModel 构建、界面渲染、用户交互
-
-### 核心基础设施
-
-- **文件缓存系统**（`core/fileCache.py`）：带 TTL 和文件修改检测的智能缓存
-- **全局状态管理器**（`core/stateManager.py`）：线程安全的状态管理
-- **TUI 基类**（`core/tuiBase.py`）：可复用的终端交互界面框架
 
 ---
 

@@ -99,3 +99,13 @@ NEWS_REQUEST_TIMEOUT = 30                                                       
 NEWS_TARGET_CHAT_ID = os.getenv("NEWS_TARGET_CHAT_ID", None)                    # 推送目标群聊 ID
 NEWS_MAX_ARTICLES = 5                                                           # 每次最多推送的文章数
 NEWS_DATA_FILE = os.path.join(CHAT_DATA_DIR, "pushedNews.json")                 # 已推送记录保存路径
+
+
+
+
+# Todos 功能相关常量
+TODOS_DB_PATH = os.path.join(os.path.join(os.path.dirname(__file__), "data"), "todos.db")
+TODOS_ITEMS_PER_PAGE = 6                                                        # 每页显示的待办数量
+TODOS_REMINDER_CHECK_INTERVAL = 60                                              # 提醒检查间隔（秒）
+TODOS_CONTENT_MAX_LENGTH = 200                                                  # 待办内容最大长度
+TODOS_CONTENT_PREVIEW_LENGTH = 15                                               # 列表中内容预览长度（字符数）
