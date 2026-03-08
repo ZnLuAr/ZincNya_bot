@@ -71,8 +71,8 @@ async def findSticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboardFoundSticker = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("存为 .webp 喵" , callback_data=f"download|{setName}|webp"),
-            InlineKeyboardButton("存为   .gif 喵" , callback_data=f"download|{setName}|gif_confirm"),
+            InlineKeyboardButton("存为 .webp 喵" , callback_data=f"sticker:{setName}:webp"),
+            InlineKeyboardButton("存为   .gif 喵" , callback_data=f"sticker:{setName}:gif_confirm"),
         ]
     ])
 
@@ -102,10 +102,7 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if not query.data.startswith("download|"):
-        return
-    
-    _ , setName , action = query.data.split("|" , 2)
+    _ , setName , action = query.data.split(":" , 2)
     stickerSet = getCachedSticker(setName)
 
     if not stickerSet:
@@ -138,8 +135,8 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("存为 .webp" , callback_data=f"download|{setName}|webp"),
-                InlineKeyboardButton("存为  .gif" , callback_data=f"download|{setName}|gif"),
+                InlineKeyboardButton("存为 .webp" , callback_data=f"sticker:{setName}:webp"),
+                InlineKeyboardButton("存为  .gif" , callback_data=f"sticker:{setName}:gif"),
             ]
         ])
         await update.callback_query.edit_message_text(text , reply_markup=keyboard)
@@ -212,7 +209,7 @@ def register():
     return {
         "handlers": [
             CommandHandler("findSticker", findSticker),
-            CallbackQueryHandler(onDownloadPressed)
+            CallbackQueryHandler(onDownloadPressed, pattern=r'^sticker:')
         ],
         "name": "表情包下载",
         "description": "查找并下载 Telegram 表情包",

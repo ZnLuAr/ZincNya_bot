@@ -195,10 +195,15 @@ def getHelp():
         "description": "管理 ZincNya bot 使用的白名单",
 
         "usage": (
-            "/whitelist [-a/--add <id>] [-d/--del <id>] [-s/--sus <id>] [-l/--list] [-c/--comment <id> <comment>]\n"
-            "用户或群聊的ID需要在 Telegram 的 @myidbot 中获取哦。\n"
+            "/whitelist -l                           查看白名单列表\n"
+            "/whitelist -a <id>                      添加用户或群聊\n"
+            "/whitelist -d <id>                      移除用户或群聊\n"
+            "/whitelist -s <id>                      暂停用户访问权限\n"
+            "/whitelist -c <id> <备注>               添加或修改备注\n"
+            "\n"
             "不过要注意——\n"
-            "--add、--del、--sus、--list 参数不能同时存在的……！"
+            "   -a / -d / -s / -l 参数不能同时使用的……！\n"
+            "   ID 可通过 Telegram 的 @myidbot 获取哦"
         ),
 
         "example": (

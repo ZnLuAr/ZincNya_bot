@@ -51,7 +51,7 @@ async def execute(app , args):
             if hasattr(mod , "getHelp"):
                 info = mod.getHelp()
                 print(f"\n\n{info['name']}        {info.get('description' , '')}")
-                print(f"\n{info.get('usage' , 'ないです（即答')}\n")
+                print(f"\n{info.get('usage' , 'ないです（即答')}\n\n")
                 if info.get("example"):
                     print(f"{info['example']}")
                     print("—" * 87 , "\n\n")

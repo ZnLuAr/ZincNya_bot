@@ -59,6 +59,7 @@ from utils.chatHistory import (
     getMessageCount,
     iterMessagesWithDateMarkers,
 )
+from utils.whitelistManager.data import loadWhitelistFile
 
 
 
@@ -117,11 +118,11 @@ async def execute(app, args: list[str]):
             except ValueError:
                 print(f"无效的条数喵：{countArg}\n")
                 return
-        _previewChat(chatID, limit)
+        await _previewChat(chatID, limit)
         return
 
     # 无参数：列出所有会话
-    _listChats()
+    await _listChats()
 
 
 
@@ -130,27 +131,36 @@ async def execute(app, args: list[str]):
 # 功能函数
 # ============================================================================
 
-def _listChats():
+async def _listChats():
     """列出所有有记录的会话"""
-    import asyncio
-    chats = asyncio.run(getChatList())
+    chats = await getChatList()
 
     if not chats:
         print("（暂无任何聊天记录……）\n")
         return
 
-    print(f"{'─' * 56}")
-    print(f"  {'Chat ID':<20}  {'消息数':>8}  {'最后消息时间'}")
-    print(f"{'─' * 56}")
+    # 从白名单中提取备注名
+    wl = loadWhitelistFile()
+    commentMap = {}
+    for section in ("allowed", "suspended"):
+        for uid, obj in wl.get(section, {}).items():
+            comment = obj.get("comment", "")
+            if comment:
+                commentMap[uid] = comment[:10] + ("…" if len(comment) > 10 else "")
+
+    print(f"{'─' * 70}")
+    print(f"  {'Chat ID':<20}  {'备注':<12}  {'消息数':>8}  {'最后消息时间'}")
+    print(f"{'─' * 70}")
 
     for chat in chats:
         cid   = chat["chat_id"]
         count = chat["message_count"]
         ts    = chat["last_message_time"]
         ts_str = ts.strftime("%Y-%m-%d %H:%M:%S") if ts else "未知"
-        print(f"  {cid:<20}  {count:>8}  {ts_str}")
+        name  = commentMap.get(cid, "")
+        print(f"  {cid:<20}  {name:<12}  {count:>8}  {ts_str}")
 
-    print(f"{'─' * 56}")
+    print(f"{'─' * 70}")
     print(f"  共 {len(chats)} 个会话，使用 -c <chatID> 预览消息喵\n")
 
 
@@ -160,16 +170,15 @@ def _sanitizeChatID(chatID: str) -> str:
     return sanitized
 
 
-def _previewChat(chatID: str, limit: int):
+async def _previewChat(chatID: str, limit: int):
     """预览指定会话的最近 N 条消息"""
-    import asyncio
     total = getMessageCount(chatID)
 
     if total == 0:
         print(f"（Chat {chatID} 暂无任何聊天记录喵……）\n")
         return
 
-    messages = asyncio.run(loadHistory(chatID, limit=limit))
+    messages = await loadHistory(chatID, limit=limit)
 
     if not messages:
         print(f"（ChatID {chatID} 有 {total} 条记录但全部解密失败了喵……密钥可能已更换）\n")
@@ -181,8 +190,8 @@ def _previewChat(chatID: str, limit: int):
     # 使用生成器遍历消息，自动插入日期分隔符
     for item_type, item_data in iterMessagesWithDateMarkers(messages):
         if item_type == "date":
-            # 日期分隔行
-            print(f"  [{item_data}]")
+            # 日期分隔行（前置空行，分隔两日消息）
+            print(f"\n  [{item_data}]")
         else:
             # 消息行（时间戳简化为 HH:MM:SS）
             msg = item_data
@@ -318,8 +327,8 @@ async def _writeExportFile(filepath: str, chatID: str, messages: list) -> bool:
             # 使用生成器遍历消息，自动插入日期分隔符
             for item_type, item_data in iterMessagesWithDateMarkers(messages):
                 if item_type == "date":
-                    # 日期分隔行
-                    f.write(f"[{item_data}]\n")
+                    # 日期分隔行（前置空行，分隔两日消息）
+                    f.write(f"\n[{item_data}]\n")
                 else:
                     # 消息行（时间戳简化为 HH:MM:SS）
                     msg = item_data

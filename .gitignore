@@ -76,6 +76,7 @@ data/chatHistory.db
 data/.chatKey
 data/chatExport/
 data/chatBackup/
+data/todos.db
 # 但保留 .gitkeep 占位文件
 !data/.gitkeep
 

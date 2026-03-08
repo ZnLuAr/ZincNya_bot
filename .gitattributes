@@ -1,0 +1,46 @@
+# ============================================================
+# ZincNya Bot — .gitattributes
+# ============================================================
+
+
+# ── 默认：所有文本文件统一用 LF ─────────────────────────────
+* text=auto eol=lf
+
+
+# ── Python ──────────────────────────────────────────────────
+*.py    text eol=lf
+
+
+# ── Shell 脚本（必须 LF，否则 bash 报错）────────────────────
+*.sh    text eol=lf
+
+
+# ── Windows 脚本（保留 CRLF）────────────────────────────────
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+
+# ── 配置与数据 ───────────────────────────────────────────────
+*.txt   text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.env   text eol=lf
+*.cfg   text eol=lf
+*.toml  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+
+
+# ── 二进制文件（不做行尾处理，不做 diff）────────────────────
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.ico   binary
+*.exe   binary
+*.db    binary
+*.zip   binary
+*.tar   binary
+*.gz    binary
