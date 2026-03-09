@@ -46,7 +46,7 @@ parseArgsTokens() 是通用参数解析器，供各指令模块调用。
     - --flag value
     - --flag=value
     - -id 123 456 789
-    并自动忽略非以“-”开头的 token。
+    并自动忽略非以"-"开头的 token。
 
 关于参数解析行为的要点：
     - 若 aliasMap 存在且输入为缩写（如 -a），会被替换为对应的全称键（如 add）
@@ -151,7 +151,7 @@ def parseArgsTokens(parsed: dict , tokens: list[str] , aliasMap: dict|None=None)
     原始 parsed 形如：
         {"at": None, "text": None, "id": [], "chat": None}
 
-    进行分词，形成新的参数列表（tokens），把带“-”的和后一个不带“-”的元素对应，
+    进行分词，形成新的参数列表（tokens），把带"-"的和后一个不带"-"的元素对应，
     最后返回填充了各个参数值的 parsed
 
         另外，还支持解析简写的参数，这主要通过各指令模块中的 argAlias:dict 实现
@@ -172,12 +172,17 @@ def parseArgsTokens(parsed: dict , tokens: list[str] , aliasMap: dict|None=None)
     while i < len(tokens):
         tok = tokens[i]
         key = tok.lstrip("-")
-        values = []  # 参数值
 
-        # 跳过不以“-”开头的 token
+        # 跳过不以”-”开头的 token
         if not tok.startswith("-"):
             i += 1
             continue
+
+        # 处理 --key=value 形式：先从 key 中分离值
+        if "=" in key:
+            key , eqValue = key.split("=" , 1)
+        else:
+            eqValue = None
 
         # 尝试将输入的 key 对应全称（若输入的是正确的缩写）
         if aliasMap and key in aliasMap:
@@ -190,21 +195,18 @@ def parseArgsTokens(parsed: dict , tokens: list[str] , aliasMap: dict|None=None)
 
 
         # 获取参数值——
+        values = []
 
-        # 当是以 -key=value 形式输入，则 value 将被提前定义，下个条件语句直接进入 values 列表
-        if "=" in key:
-            key , value = key.split("=" , 1)
+        if eqValue is not None:
+            values.append(eqValue)
+            i += 1
         else:
-            value = None
-
-        if value is not None:
-            values.append(value)
-        else:
-            # 当不以上者形式输入时，向后收集所有不以“-”开头的 token
+            # 向后收集所有不以”-”开头的 token
             j = i + 1
             while j < len(tokens) and not tokens[j].startswith("-"):
                 values.append(tokens[j])
                 j += 1
+            i = j
 
         # 若没有任何 value ，返回 "NoValue"
         if not values:
@@ -217,9 +219,6 @@ def parseArgsTokens(parsed: dict , tokens: list[str] , aliasMap: dict|None=None)
         else:
             # 若存在非 list 参数，则只接收第一个值
             parsed[key] = values[0]
-
-        # 前进，读取下一个参数、跳过所有被吃掉的值
-        i += 1 + len(values)
 
 
     return parsed

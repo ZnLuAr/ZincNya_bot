@@ -135,6 +135,7 @@ FFmpeg 路径：
 """
 
 import os
+import re
 import sys
 import uuid
 import magic
@@ -158,7 +159,16 @@ else:
     FFMPEG = os.path.abspath("ffmpeg/ffmpeg")
 
 if not os.path.isfile(FFMPEG):
-    raise RuntimeError(f"缺失 ffmpeg 喵：{FFMPEG}")
+    FFMPEG = None   # 延迟到 convertToGif() 时再报错，避免阻塞整个 bot 启动
+
+
+def _ensureFFmpeg():
+    """检查 ffmpeg 是否可用（首次调用 convertToGif 时触发）"""
+    if FFMPEG is None:
+        raise RuntimeError(
+            "缺失 ffmpeg 喵——\n"
+            "请运行 python scripts/setup_ffmpeg.py 或手动将 ffmpeg 放入 ffmpeg/ 目录"
+        )
 
 
 _downloadSemaphore: asyncio.Semaphore|None = None
@@ -167,6 +177,8 @@ def _getSemaphore():
     if _downloadSemaphore is None:
         _downloadSemaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
     return _downloadSemaphore
+
+
 
 
 
@@ -298,43 +310,46 @@ async def convertToGif(rawInputPath: str) -> str:
     if ext not in [".webp" , ".webm"]:
         raise ValueError(f"不支持的格式喵：{ext}")
 
+    _ensureFFmpeg()
+
     outputPath = inputPath.rsplit("." , 1)[0] + ".gif"
 
     fps = MAX_GIF_FPS
+    w , h = 512 , 512
 
     # 判断 Sticker 是否为静态 WebP，若是，则将帧率设为 1
+    # 同时获取尺寸信息（用 ffmpeg -f null 解码，从 stderr 解析帧数和分辨率）
     if ext == ".webp":
         probe = await asyncio.create_subprocess_exec(
             FFMPEG,
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "frame=pkt_pts_time",
-            "-of", "csv=p=0",
-            inputPath,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            "-i", inputPath,
+            "-f", "null",
+            "-",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
-        out , _ = await probe.communicate()
-        if len(out.splitlines()) <= 1:
+        _ , probeErr = await probe.communicate()
+        probeText = probeErr.decode(errors="ignore")
+
+        frameMatch = re.search(r'frame=\s*(\d+)', probeText)
+        if not frameMatch or int(frameMatch.group(1)) <= 1:
             fps = 1
 
-    # 获取 Sticker 尺寸，决定抖动策略
-    # 若为小尺寸 Sticker，则采用更激进的抖动策略，提升观感
-    probe = await asyncio.create_subprocess_exec(
-        FFMPEG,
-        "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=width,height",
-        "-of", "csv=p=0:s=x",
-        inputPath,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    sizeOut , _ = await probe.communicate()
-    try:
-        w , h = map(int , sizeOut.decode().strip().split("x"))
-    except Exception:
-        w = h = 512
+        sizeMatch = re.search(r'Video:.*?(\d{2,5})x(\d{2,5})', probeText)
+        if sizeMatch:
+            w , h = int(sizeMatch.group(1)) , int(sizeMatch.group(2))
+    else:
+        # .webm 始终为动画，仅需获取尺寸
+        probe = await asyncio.create_subprocess_exec(
+            FFMPEG,
+            "-i", inputPath,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _ , probeErr = await probe.communicate()
+        sizeMatch = re.search(r'Video:.*?(\d{2,5})x(\d{2,5})', probeErr.decode(errors="ignore"))
+        if sizeMatch:
+            w , h = int(sizeMatch.group(1)) , int(sizeMatch.group(2))
 
     dither = "bayer:bayer_scale=3" if w <= 256 and h <= 256 else "sierra2_4a"
 
