@@ -55,7 +55,6 @@ LOG_DIR = os.path.join(os.path.dirname(__file__), "log")
 
 # cli 相关常量
 COMMAND_DIR = "utils/command"
-HELP_LIST_DIR = os.path.join(os.path.dirname(__file__), "data", "helpList.csv")
 
 
 

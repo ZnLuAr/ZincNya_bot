@@ -31,7 +31,7 @@ echo -e "${YELLOW}📋 当前分支：${NC}"
 git branch --show-current
 
 # 2. 创建临时备份目录
-BACKUP_DIR="/tmp/zincnya_backup_$(date +%Y%m%d_%H%M%S)"
+BACKUP_DIR="../data/zincnya_backup/zincnya_backup_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 echo -e "${GREEN}✓ 创建备份目录：${BACKUP_DIR}${NC}"
 

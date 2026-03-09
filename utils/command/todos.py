@@ -94,7 +94,7 @@ async def execute(app, args: list[str]):
 
     # ── -overview / -ov：用户总览表格 ──
     if parsed["overview"] is not None:
-        rows = getUsersTodosSummary()
+        rows = await getUsersTodosSummary()
         printOverview(rows)
         return
 
@@ -306,7 +306,7 @@ async def execute(app, args: list[str]):
         print(f"无效状态 {listStatus!r}，可选：pending / done / all\n")
         return
 
-    total = getTodosCount(targetChatID, targetUserID, status=listStatus)
+    total = await getTodosCount(targetChatID, targetUserID, status=listStatus)
     todos = await getTodos(targetChatID, targetUserID, status=listStatus)
     printTodoList(todos, total, targetLabel, listStatus)
 

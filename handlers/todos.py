@@ -135,7 +135,7 @@ async def handleTodosCommand(update: Update, context: ContextTypes.DEFAULT_TYPE)
             except Exception:
                 pass
 
-        total = getTodosCount(chatID, userID)
+        total = await getTodosCount(chatID, userID)
         todos = await getTodos(chatID, userID, limit=TODOS_ITEMS_PER_PAGE, offset=0)
         text, keyboard = renderListView(todos, total, 1, userName)
         msg = await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
@@ -233,7 +233,7 @@ async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
         # ── 列表视图 / 翻页 ──
         if action == 'list':
             page = int(parts[2]) if len(parts) > 2 else 1
-            total = getTodosCount(chatID, userID)
+            total = await getTodosCount(chatID, userID)
             offset = (page - 1) * TODOS_ITEMS_PER_PAGE
             todos = await getTodos(chatID, userID, limit=TODOS_ITEMS_PER_PAGE, offset=offset)
 
@@ -364,7 +364,7 @@ async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
             await deleteTodo(todoID)
 
             # 删除后回到列表
-            total = getTodosCount(chatID, userID)
+            total = await getTodosCount(chatID, userID)
             todos = await getTodos(chatID, userID, limit=TODOS_ITEMS_PER_PAGE, offset=0)
             text, keyboard = renderListView(todos, total, 1, userName)
             await _safeEdit(query.message, text, reply_markup=keyboard, parse_mode="HTML")
@@ -374,6 +374,7 @@ async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await logAction(
             user, "/todos callback 异常",
             f"{action}: {e}", LogLevel.ERROR,
+            LogChildType.WITH_ONE_CHILD,
         )
         await _safeEdit(
             query.message,

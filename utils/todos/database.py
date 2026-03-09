@@ -64,6 +64,7 @@ getUsersTodosSummary()
 
 
 import os
+import asyncio
 import sqlite3
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -158,24 +159,24 @@ async def addTodo(
         成功返回待办 ID，失败返回 None
     """
     try:
-        conn = sqlite3.connect(TODOS_DB_PATH)
-        cursor = conn.cursor()
-
         remindTimeStr = remindTime.strftime(TIMESTAMP_FORMAT) if remindTime else None
 
-        cursor.execute(
-            """
-            INSERT INTO todos (chat_id, user_id, content, remind_time, priority)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (str(chatID), str(userID), content, remindTimeStr, priority)
-        )
+        def _sync():
+            conn = sqlite3.connect(TODOS_DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO todos (chat_id, user_id, content, remind_time, priority)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (str(chatID), str(userID), content, remindTimeStr, priority)
+            )
+            todoID = cursor.lastrowid
+            conn.commit()
+            conn.close()
+            return todoID
 
-        todoID = cursor.lastrowid
-        conn.commit()
-        conn.close()
-
-        return todoID
+        return await asyncio.to_thread(_sync)
 
     except Exception as e:
         await logSystemEvent(
@@ -209,49 +210,52 @@ async def getTodos(
             - id, chat_id, user_id, content, remind_time, priority, status, created_at, completed_at
     """
     try:
-        conn = sqlite3.connect(TODOS_DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        def _sync():
+            conn = sqlite3.connect(TODOS_DB_PATH)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
 
-        if status == 'all':
-            query = """
-                SELECT * FROM todos
-                WHERE chat_id = ? AND user_id = ?
-                ORDER BY created_at DESC
-            """
-            params = (str(chatID), str(userID))
-        else:
-            query = """
-                SELECT * FROM todos
-                WHERE chat_id = ? AND user_id = ? AND status = ?
-                ORDER BY created_at DESC
-            """
-            params = (str(chatID), str(userID), status)
+            if status == 'all':
+                query = """
+                    SELECT * FROM todos
+                    WHERE chat_id = ? AND user_id = ?
+                    ORDER BY created_at DESC
+                """
+                params = (str(chatID), str(userID))
+            else:
+                query = """
+                    SELECT * FROM todos
+                    WHERE chat_id = ? AND user_id = ? AND status = ?
+                    ORDER BY created_at DESC
+                """
+                params = (str(chatID), str(userID), status)
 
-        if limit > 0:
-            query += " LIMIT ? OFFSET ?"
-            params += (limit, offset)
+            if limit > 0:
+                query += " LIMIT ? OFFSET ?"
+                params += (limit, offset)
 
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        conn.close()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            conn.close()
 
-        todos = []
-        for row in rows:
-            todos.append({
-                "id": row["id"],
-                "chat_id": row["chat_id"],
-                "user_id": row["user_id"],
-                "content": row["content"],
-                "remind_time": datetime.fromisoformat(row["remind_time"]) if row["remind_time"] else None,
-                "priority": row["priority"],
-                "status": row["status"],
-                "created_at": datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-                "completed_at": datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
-                "reminded": row["reminded"],
-            })
+            todos = []
+            for row in rows:
+                todos.append({
+                    "id": row["id"],
+                    "chat_id": row["chat_id"],
+                    "user_id": row["user_id"],
+                    "content": row["content"],
+                    "remind_time": datetime.fromisoformat(row["remind_time"]) if row["remind_time"] else None,
+                    "priority": row["priority"],
+                    "status": row["status"],
+                    "created_at": datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+                    "completed_at": datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
+                    "reminded": row["reminded"],
+                })
 
-        return todos
+            return todos
+
+        return await asyncio.to_thread(_sync)
 
     except Exception as e:
         await logSystemEvent(
@@ -271,29 +275,32 @@ async def getTodoByID(todoID: int) -> Optional[Dict[str, Any]]:
         待办字典，或 None（不存在）
     """
     try:
-        conn = sqlite3.connect(TODOS_DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        def _sync():
+            conn = sqlite3.connect(TODOS_DB_PATH)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
 
-        cursor.execute("SELECT * FROM todos WHERE id = ?", (todoID,))
-        row = cursor.fetchone()
-        conn.close()
+            cursor.execute("SELECT * FROM todos WHERE id = ?", (todoID,))
+            row = cursor.fetchone()
+            conn.close()
 
-        if not row:
-            return None
+            if not row:
+                return None
 
-        return {
-            "id": row["id"],
-            "chat_id": row["chat_id"],
-            "user_id": row["user_id"],
-            "content": row["content"],
-            "remind_time": datetime.fromisoformat(row["remind_time"]) if row["remind_time"] else None,
-            "priority": row["priority"],
-            "status": row["status"],
-            "reminded": row["reminded"],
-            "created_at": datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-            "completed_at": datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
-        }
+            return {
+                "id": row["id"],
+                "chat_id": row["chat_id"],
+                "user_id": row["user_id"],
+                "content": row["content"],
+                "remind_time": datetime.fromisoformat(row["remind_time"]) if row["remind_time"] else None,
+                "priority": row["priority"],
+                "status": row["status"],
+                "reminded": row["reminded"],
+                "created_at": datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+                "completed_at": datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
+            }
+
+        return await asyncio.to_thread(_sync)
 
     except Exception as e:
         await logSystemEvent(
@@ -320,53 +327,57 @@ async def updateTodo(todoID: int, **kwargs) -> bool:
         成功返回 True，失败返回 False
     """
     try:
-        conn = sqlite3.connect(TODOS_DB_PATH)
-        cursor = conn.cursor()
+        def _sync():
+            conn = sqlite3.connect(TODOS_DB_PATH)
+            cursor = conn.cursor()
 
-        # 构建 UPDATE 语句
-        updates = []
-        params = []
+            # 构建 UPDATE 语句
+            updates = []
+            params = []
 
-        if "content" in kwargs:
-            updates.append("content = ?")
-            params.append(kwargs["content"])
+            if "content" in kwargs:
+                updates.append("content = ?")
+                params.append(kwargs["content"])
 
-        if "remind_time" in kwargs:
-            updates.append("remind_time = ?")
-            remindTime = kwargs["remind_time"]
-            params.append(remindTime.strftime(TIMESTAMP_FORMAT) if remindTime else None)
+            if "remind_time" in kwargs:
+                updates.append("remind_time = ?")
+                remindTime = kwargs["remind_time"]
+                params.append(remindTime.strftime(TIMESTAMP_FORMAT) if remindTime else None)
 
-        if "priority" in kwargs:
-            updates.append("priority = ?")
-            params.append(kwargs["priority"])
+            if "priority" in kwargs:
+                updates.append("priority = ?")
+                params.append(kwargs["priority"])
 
-        if "status" in kwargs:
-            updates.append("status = ?")
-            params.append(kwargs["status"])
-            if kwargs["status"] == "done":
-                # 标记完成 → 记录完成时间
-                updates.append("completed_at = ?")
-                params.append(datetime.now().strftime(TIMESTAMP_FORMAT))
-            elif kwargs["status"] == "pending":
-                # 重新打开 → 清除完成时间
-                updates.append("completed_at = ?")
-                params.append(None)
+            if "status" in kwargs:
+                updates.append("status = ?")
+                params.append(kwargs["status"])
+                if kwargs["status"] == "done":
+                    # 标记完成 → 记录完成时间
+                    updates.append("completed_at = ?")
+                    params.append(datetime.now().strftime(TIMESTAMP_FORMAT))
+                elif kwargs["status"] == "pending":
+                    # 重新打开 → 清除完成时间
+                    updates.append("completed_at = ?")
+                    params.append(None)
 
-        if "reminded" in kwargs:
-            updates.append("reminded = ?")
-            params.append(kwargs["reminded"])
+            if "reminded" in kwargs:
+                updates.append("reminded = ?")
+                params.append(kwargs["reminded"])
 
-        if not updates:
-            return True  # 没有更新内容
+            if not updates:
+                conn.close()
+                return True  # 没有更新内容
 
-        params.append(todoID)
-        query = f"UPDATE todos SET {', '.join(updates)} WHERE id = ?"
+            params.append(todoID)
+            query = f"UPDATE todos SET {', '.join(updates)} WHERE id = ?"
 
-        cursor.execute(query, params)
-        conn.commit()
-        conn.close()
+            cursor.execute(query, params)
+            conn.commit()
+            conn.close()
 
-        return True
+            return True
+
+        return await asyncio.to_thread(_sync)
 
     except Exception as e:
         await logSystemEvent(
@@ -386,14 +397,15 @@ async def deleteTodo(todoID: int) -> bool:
         成功返回 True，失败返回 False
     """
     try:
-        conn = sqlite3.connect(TODOS_DB_PATH)
-        cursor = conn.cursor()
+        def _sync():
+            conn = sqlite3.connect(TODOS_DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM todos WHERE id = ?", (todoID,))
+            conn.commit()
+            conn.close()
+            return True
 
-        cursor.execute("DELETE FROM todos WHERE id = ?", (todoID,))
-        conn.commit()
-        conn.close()
-
-        return True
+        return await asyncio.to_thread(_sync)
 
     except Exception as e:
         await logSystemEvent(
@@ -425,7 +437,7 @@ async def reopenTodo(todoID: int) -> bool:
     return await updateTodo(todoID, status="pending", reminded=0)
 
 
-def getTodosCount(chatID: str, userID: str, status: str = 'pending') -> int:
+async def getTodosCount(chatID: str, userID: str, status: str = 'pending') -> int:
     """
     获取待办数量。
 
@@ -438,29 +450,32 @@ def getTodosCount(chatID: str, userID: str, status: str = 'pending') -> int:
         待办数量
     """
     try:
-        conn = sqlite3.connect(TODOS_DB_PATH)
-        cursor = conn.cursor()
+        def _sync():
+            conn = sqlite3.connect(TODOS_DB_PATH)
+            cursor = conn.cursor()
 
-        if status == 'all':
-            cursor.execute(
-                "SELECT COUNT(*) FROM todos WHERE chat_id = ? AND user_id = ?",
-                (str(chatID), str(userID))
-            )
-        else:
-            cursor.execute(
-                "SELECT COUNT(*) FROM todos WHERE chat_id = ? AND user_id = ? AND status = ?",
-                (str(chatID), str(userID), status)
-            )
+            if status == 'all':
+                cursor.execute(
+                    "SELECT COUNT(*) FROM todos WHERE chat_id = ? AND user_id = ?",
+                    (str(chatID), str(userID))
+                )
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM todos WHERE chat_id = ? AND user_id = ? AND status = ?",
+                    (str(chatID), str(userID), status)
+                )
 
-        count = cursor.fetchone()[0]
-        conn.close()
-        return count
+            count = cursor.fetchone()[0]
+            conn.close()
+            return count
+
+        return await asyncio.to_thread(_sync)
 
     except Exception:
         return 0
 
 
-def getUsersTodosSummary() -> List[Dict[str, Any]]:
+async def getUsersTodosSummary() -> List[Dict[str, Any]]:
     """
     按用户聚合统计待办数量，供控制台总览使用。
 
@@ -473,46 +488,49 @@ def getUsersTodosSummary() -> List[Dict[str, Any]]:
         - last_active: str  最近一条 todo 的创建时间（格式 YYYY-MM-DD HH:MM）
     """
     try:
-        conn = sqlite3.connect(TODOS_DB_PATH)
-        cursor = conn.cursor()
+        def _sync():
+            conn = sqlite3.connect(TODOS_DB_PATH)
+            cursor = conn.cursor()
 
-        now = datetime.now().strftime(TIMESTAMP_FORMAT)
+            now = datetime.now().strftime(TIMESTAMP_FORMAT)
 
-        cursor.execute(
-            """
-            SELECT
-                user_id,
-                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
-                SUM(CASE WHEN status = 'done'    THEN 1 ELSE 0 END) AS done,
-                COUNT(*) AS total,
-                SUM(CASE WHEN status = 'pending'
-                              AND remind_time IS NOT NULL
-                              AND remind_time <= ?
-                         THEN 1 ELSE 0 END) AS overdue,
-                MAX(created_at) AS last_active
-            FROM todos
-            GROUP BY user_id
-            ORDER BY pending DESC, total DESC
-            """,
-            (now,)
-        )
+            cursor.execute(
+                """
+                SELECT
+                    user_id,
+                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+                    SUM(CASE WHEN status = 'done'    THEN 1 ELSE 0 END) AS done,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN status = 'pending'
+                                  AND remind_time IS NOT NULL
+                                  AND remind_time <= ?
+                             THEN 1 ELSE 0 END) AS overdue,
+                    MAX(created_at) AS last_active
+                FROM todos
+                GROUP BY user_id
+                ORDER BY pending DESC, total DESC
+                """,
+                (now,)
+            )
 
-        rows = cursor.fetchall()
-        conn.close()
+            rows = cursor.fetchall()
+            conn.close()
 
-        result = []
-        for row in rows:
-            user_id, pending, done, total, overdue, last_active = row
-            result.append({
-                "user_id":     user_id,
-                "pending":     pending or 0,
-                "done":        done    or 0,
-                "total":       total   or 0,
-                "overdue":     overdue or 0,
-                "last_active": last_active[:16] if last_active else "—",
-            })
+            result = []
+            for row in rows:
+                user_id, pending, done, total, overdue, last_active = row
+                result.append({
+                    "user_id":     user_id,
+                    "pending":     pending or 0,
+                    "done":        done    or 0,
+                    "total":       total   or 0,
+                    "overdue":     overdue or 0,
+                    "last_active": last_active[:16] if last_active else "—",
+                })
 
-        return result
+            return result
+
+        return await asyncio.to_thread(_sync)
 
     except Exception:
         return []
@@ -526,40 +544,43 @@ async def getPendingReminders() -> List[Dict[str, Any]]:
         待办列表
     """
     try:
-        conn = sqlite3.connect(TODOS_DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        def _sync():
+            conn = sqlite3.connect(TODOS_DB_PATH)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
 
-        now = datetime.now().strftime(TIMESTAMP_FORMAT)
+            now = datetime.now().strftime(TIMESTAMP_FORMAT)
 
-        cursor.execute(
-            """
-            SELECT * FROM todos
-            WHERE remind_time <= ? AND status = 'pending' AND reminded = 0
-            ORDER BY remind_time ASC
-            """,
-            (now,)
-        )
+            cursor.execute(
+                """
+                SELECT * FROM todos
+                WHERE remind_time <= ? AND status = 'pending' AND reminded = 0
+                ORDER BY remind_time ASC
+                """,
+                (now,)
+            )
 
-        rows = cursor.fetchall()
-        conn.close()
+            rows = cursor.fetchall()
+            conn.close()
 
-        todos = []
-        for row in rows:
-            todos.append({
-                "id": row["id"],
-                "chat_id": row["chat_id"],
-                "user_id": row["user_id"],
-                "content": row["content"],
-                "remind_time": datetime.fromisoformat(row["remind_time"]) if row["remind_time"] else None,
-                "priority": row["priority"],
-                "status": row["status"],
-                "created_at": datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-                "completed_at": datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
-                "reminded": row["reminded"],
-            })
+            todos = []
+            for row in rows:
+                todos.append({
+                    "id": row["id"],
+                    "chat_id": row["chat_id"],
+                    "user_id": row["user_id"],
+                    "content": row["content"],
+                    "remind_time": datetime.fromisoformat(row["remind_time"]) if row["remind_time"] else None,
+                    "priority": row["priority"],
+                    "status": row["status"],
+                    "created_at": datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+                    "completed_at": datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
+                    "reminded": row["reminded"],
+                })
 
-        return todos
+            return todos
+
+        return await asyncio.to_thread(_sync)
 
     except Exception as e:
         await logSystemEvent(
