@@ -65,7 +65,7 @@ import importlib
 import inspect
 import os
 
-from config import COMMAND_DIR
+from config import COMMAND_DIR, COMMAND_MODULE
 from utils.logger import logAction, LogLevel, LogChildType
 
 
@@ -92,7 +92,7 @@ async def handleConsoleCommand(app , commandLine: str):
     commandArgs = args[1:]
     
     # 加载对应命令模块
-    moudlePath = f"{COMMAND_DIR.replace('/', '.')}.{commandName}"
+    moudlePath = f"{COMMAND_MODULE}.{commandName}"
     filePath = os.path.join(COMMAND_DIR , f"{commandName}.py")
 
     if not os.path.exists(filePath):
@@ -173,7 +173,7 @@ def parseArgsTokens(parsed: dict , tokens: list[str] , aliasMap: dict|None=None)
         tok = tokens[i]
         key = tok.lstrip("-")
 
-        # 跳过不以”-”开头的 token
+        # 跳过不以“-”开头的 token
         if not tok.startswith("-"):
             i += 1
             continue
@@ -201,7 +201,7 @@ def parseArgsTokens(parsed: dict , tokens: list[str] , aliasMap: dict|None=None)
             values.append(eqValue)
             i += 1
         else:
-            # 向后收集所有不以”-”开头的 token
+            # 向后收集所有不以“-”开头的 token
             j = i + 1
             while j < len(tokens) and not tokens[j].startswith("-"):
                 values.append(tokens[j])

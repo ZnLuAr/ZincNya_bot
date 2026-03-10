@@ -1,7 +1,7 @@
 import os
 import importlib
 
-from config import COMMAND_DIR
+from config import COMMAND_DIR, COMMAND_MODULE
 from utils.logger import logAction, LogLevel, LogChildType
 
 
@@ -18,7 +18,7 @@ async def execute(app , args):
                 continue
             fileName = file[:-3]
             # （实现命令的）模块的路径，将目录路径 utils/command 转化为 utils.command
-            moudlePath = f"{COMMAND_DIR.replace('/' , '.')}.{fileName}"
+            moudlePath = f"{COMMAND_MODULE}.{fileName}"
             try:
                 mod = importlib.import_module(moudlePath)
                 if hasattr(mod , "getHelp"):
@@ -41,7 +41,7 @@ async def execute(app , args):
         
         # 有参数，打印对应命令信息
         command = args[0].lstrip("/")
-        targetMoudlePath = f"{COMMAND_DIR.replace('/' , '.')}.{command}"
+        targetMoudlePath = f"{COMMAND_MODULE}.{command}"
         try:
             # 尝试导入终端指定的命令模块（单个）
             mod = importlib.import_module(targetMoudlePath)

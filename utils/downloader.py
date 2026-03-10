@@ -148,15 +148,17 @@ from utils.logger import logAction, LogLevel, LogChildType
 from config import (
     MAX_CONCURRENT_DOWNLOADS,       # 最大并发下载数量
     MAX_DOWNLOADS_ATTEMPTS,         # 最大下载尝试次数
-    MAX_GIF_FPS                     # 最大 GIF 帧数
+    MAX_GIF_FPS,                    # 最大 GIF 帧数
+    PROJECT_ROOT,                   # 项目根目录
+    DOWNLOAD_DIR                    # 下载目录
 )
 
 
 
 if sys.platform == "win32":
-    FFMPEG = os.path.abspath("ffmpeg/ffmpeg.exe")
+    FFMPEG = os.path.join(PROJECT_ROOT, "ffmpeg", "ffmpeg.exe")
 else:
-    FFMPEG = os.path.abspath("ffmpeg/ffmpeg")
+    FFMPEG = os.path.join(PROJECT_ROOT, "ffmpeg", "ffmpeg")
 
 if not os.path.isfile(FFMPEG):
     FFMPEG = None   # 延迟到 convertToGif() 时再报错，避免阻塞整个 bot 启动
@@ -189,8 +191,11 @@ async def createStickerZip(
         stickerSet,
         setName,
         stickerSuffix,
-        outputDir="download/"
+        outputDir=None
     ):
+
+    if outputDir is None:
+        outputDir = DOWNLOAD_DIR
 
     os.makedirs(outputDir , exist_ok=True)
     

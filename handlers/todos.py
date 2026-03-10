@@ -105,7 +105,7 @@ async def handleTodosCommand(update: Update, context: ContextTypes.DEFAULT_TYPE)
     args = context.args or []
     rawText = ' '.join(args).strip()
 
-    # /todos help
+    # 接收到来自于 Telegram 的帮助请求时发出
     if rawText in ['help', '-help', '--help', '-h']:
         await update.message.reply_text(
             "📋 todos 命令用法\n\n"
@@ -295,7 +295,7 @@ async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
             await markDone(todoID)
             await _safeEdit(
                 query.message,
-                f"✅ 完成了喵——\n\n{html.escape(todo['content'])}",
+                f"✅ 那么就完成了喵——\n\n{html.escape(todo['content'])}",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("↩️ 返回列表", callback_data="todos:list:1")
                 ]]),
