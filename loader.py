@@ -20,13 +20,19 @@ register() 函数可以返回两种格式：
            }
 """
 
+import os
 import importlib
 import pkgutil
 from telegram.ext import Application
 
+from config import PROJECT_ROOT
+
 
 # 明确跳过的模块（不是 Telegram handler 的模块）
 SKIP_MODULES = ["cli"]
+
+# handlers 目录的绝对路径（用于 pkgutil 扫描）
+_HANDLERS_DIR = os.path.join(PROJECT_ROOT, "handlers")
 
 
 
@@ -41,7 +47,7 @@ def loadHandlers(app: Application):
 
     print("正在加载 Telegram 处理器喵……\n")
 
-    for _ , module_name , _ in pkgutil.iter_modules([package]):
+    for _ , module_name , _ in pkgutil.iter_modules([_HANDLERS_DIR]):
 
         # 跳过明确排除的模块
         if module_name in SKIP_MODULES:
