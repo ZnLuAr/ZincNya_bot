@@ -1,4 +1,5 @@
 import os
+from enum import Enum
 from dotenv import load_dotenv
 
 # 项目根目录（所有路径的锚点）
@@ -65,6 +66,22 @@ COMMAND_MODULE = "utils.command"                                 # Python 模块
 
 # Whitelist 相关常量
 WHITELIST_DIR = os.path.join(PROJECT_ROOT, "data", "whitelist.json")
+
+
+
+
+# Operators 相关常量
+OPERATORS_DIR = os.path.join(PROJECT_ROOT, "data", "operators.json")
+
+
+class Permission(str, Enum):
+    """Operator 权限枚举"""
+    SHUTDOWN = "shutdown"
+    RESTART = "restart"
+    STATUS = "status"
+
+    def __str__(self):
+        return self.value
 
 
 
