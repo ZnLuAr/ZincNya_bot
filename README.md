@@ -91,6 +91,7 @@ ZincNya_bot/
 │
 ├── data/                       # 数据文件喵
 │   ├── whitelist.json          # 白名单（不会被提交）
+│   ├── operators.json          # 管理员权限配置（不会被提交）
 │   ├── chatHistory.db          # 加密聊天记录（不会被提交）
 │   ├── .chatKey                # 聊天记录加密密钥（不会被提交）
 │   ├── todos.db                # 待办事项数据库（不会被提交）
@@ -104,7 +105,8 @@ ZincNya_bot/
 │   ├── stickers.py             # 表情包搜索与下载
 │   ├── nya.py                  # /nya 语录功能
 │   ├── book.py                 # /book 书籍搜索
-│   └── todos.py                # /todos 待办事项管理
+│   ├── todos.py                # /todos 待办事项管理
+│   └── shutdown.py             # 远程关机/重启/状态（仅 ops）
 │
 ├── utils/                      # 工具模块
 │   ├── command/                # CLI 命令
@@ -142,6 +144,7 @@ ZincNya_bot/
 │   ├── bookSearchAPI.py        # Open Library API 封装
 │   ├── newsAPI.py              # 新闻抓取 API 封装（先咕着喵）
 │   ├── downloader.py           # 表情包下载与格式转换
+│   ├── operators.py            # Operators 权限管理
 │   ├── fileEditor.py           # TUI 文本编辑器
 │   ├── terminalUI.py           # 终端 UI 工具（备用屏幕、ANSI）
 │   ├── errorHandler.py         # 错误处理与日志
@@ -186,6 +189,17 @@ ZincNya_bot/
 | `/nya` | 获取一条随机语录 |
 | `/todos` | 管理个人待办事项 |
 
+管理员（ops）还可以使用这些命令喵～
+
+| 命令 | 说明 |
+|------|------|
+| `/shutdown` | 远程关闭 Bot |
+| `/restart` | 远程重启 Bot |
+| `/status` | 查看 Bot 运行状态 |
+| `@bot 关机` | 通过 @ 提及触发关机 |
+| `@bot 重启` | 通过 @ 提及触发重启 |
+| `@bot 运行状态` | 通过 @ 提及查看状态 |
+
 想知道更详细的用法，就输入 `/help <command>` 喵！
 
 ---
@@ -209,6 +223,7 @@ ZincNya_bot/
 这些文件包含敏感信息，不会被提交到 git：
 - `.env` - Bot token 等环境变量喵
 - `data/whitelist.json` - 用户白名单喵
+- `data/operators.json` - 管理员权限配置喵
 - `data/chatHistory.db` - 加密的聊天记录喵
 - `data/.chatKey` - 聊天记录加密密钥喵
 - `data/chatExport/` - 导出的聊天记录喵
