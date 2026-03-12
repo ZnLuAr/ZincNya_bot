@@ -9,18 +9,20 @@ utils/core/fileCache.py
 - 线程安全的读写操作
 - 延迟加载（首次访问时才加载）
 - 统计数据跟踪（命中率监控）
+- 深拷贝保护（防止调用者修改缓存）
 """
+
+
 
 import os
 import json
+import copy
 import time
 import threading
 from pathlib import Path
 from typing import Optional, Callable, TypeVar, Generic
 
 from config import DEFAULT_FILE_CACHE_TTL
-
-
 
 
 T = TypeVar('T')
@@ -82,6 +84,8 @@ class CachedFile(Generic[T]):
         1. 缓存为空（首次访问）
         2. TTL 过期
         3. 文件被外部修改
+
+        返回深拷贝，防止调用者修改缓存
         """
         with self._lock:
             now = time.time()
@@ -107,16 +111,19 @@ class CachedFile(Generic[T]):
             else:
                 self.hits += 1
 
-            return self._cache
+            # 返回深拷贝，防止调用者修改缓存
+            return copy.deepcopy(self._cache)
 
 
     def set(self, data: T):
         """
         更新缓存并保存到文件
+
+        传入数据会被深拷贝，防止调用者后续修改影响缓存
         """
         with self._lock:
             self.saver(str(self.filePath), data)
-            self._cache = data
+            self._cache = copy.deepcopy(data)
             self._cachedAt = time.time()
 
             # 更新文件修改时间
@@ -198,48 +205,77 @@ def _saveJson(filePath: str, data: dict | list):
 
 _whitelistCache: Optional[CachedFile] = None
 _quotesCache: Optional[CachedFile] = None
+_operatorsCache: Optional[CachedFile] = None
+_cacheLock = threading.Lock()
 
 
 def getWhitelistCache() -> CachedFile:
     """
-    获取白名单缓存单例
+    获取白名单缓存单例（线程安全）
 
-    缓存 data/whitelist.json，TTL 8 分钟
+    缓存 data/whitelist.json，TTL 5 分钟
     """
     global _whitelistCache
 
     if _whitelistCache is None:
-        from config import WHITELIST_DIR
+        with _cacheLock:
+            if _whitelistCache is None:
+                from config import WHITELIST_PATH
 
-        _whitelistCache = CachedFile(
-            filePath=WHITELIST_DIR,
-            loader=_loadJson,
-            saver=_saveJson,
-            ttl=300   # 8 分钟
-        )
+                _whitelistCache = CachedFile(
+                    filePath=WHITELIST_PATH,
+                    loader=_loadJson,
+                    saver=_saveJson,
+                    ttl=300   # 5 分钟
+                )
 
     return _whitelistCache
 
 
 def getQuotesCache() -> CachedFile:
     """
-    获取语录缓存单例
+    获取语录缓存单例（线程安全）
 
     缓存 data/ZincNyaQuotes.json，TTL 8 分钟
     """
     global _quotesCache
 
     if _quotesCache is None:
-        from config import QUOTES_DIR
+        with _cacheLock:
+            if _quotesCache is None:
+                from config import QUOTES_PATH
 
-        _quotesCache = CachedFile(
-            filePath=QUOTES_DIR,
-            loader=_loadJson,
-            saver=_saveJson,
+                _quotesCache = CachedFile(
+                    filePath=QUOTES_PATH,
+                    loader=_loadJson,
+                    saver=_saveJson,
             ttl=DEFAULT_FILE_CACHE_TTL  # 8 分钟
         )
 
     return _quotesCache
+
+
+def getOperatorsCache() -> CachedFile:
+    """
+    获取 operators 缓存单例（线程安全）
+
+    缓存 data/operators.json，TTL 5 分钟
+    """
+    global _operatorsCache
+
+    if _operatorsCache is None:
+        with _cacheLock:
+            if _operatorsCache is None:
+                from config import OPERATORS_PATH
+
+                _operatorsCache = CachedFile(
+                    filePath=OPERATORS_PATH,
+                    loader=_loadJson,
+                    saver=_saveJson,
+                    ttl=300   # 5 分钟
+                )
+
+    return _operatorsCache
 
 
 def getAllCacheStats() -> dict:
@@ -259,5 +295,8 @@ def getAllCacheStats() -> dict:
 
     if _quotesCache is not None:
         stats["quotes"] = _quotesCache.getStats()
+
+    if _operatorsCache is not None:
+        stats["operators"] = _operatorsCache.getStats()
 
     return stats

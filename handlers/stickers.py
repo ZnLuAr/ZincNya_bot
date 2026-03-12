@@ -1,5 +1,8 @@
+import os
 import time
 import asyncio
+import threading
+from typing import Optional, Any
 from telegram import Update , InlineKeyboardButton , InlineKeyboardMarkup
 from telegram.ext import (
     CommandHandler,
@@ -9,7 +12,7 @@ from telegram.ext import (
 
 from utils.downloader import createStickerZip, deleteLater
 from utils.logger import logAction, LogLevel, LogChildType
-from utils.core.stateManager import getStateManager
+from utils.core.errorDecorators import handleTelegramErrors
 from config import (
     CACHE_TTL,
     DELETE_DELAY,
@@ -20,7 +23,51 @@ from config import (
 
 
 
+# ============================================================================
+# 贴纸缓存（模块内管理，带 TTL）
+# ============================================================================
 
+_MAX_STICKER_CACHE = 50
+_stickerCache: dict[str, tuple[Any, float]] = {}
+_stickerLock = threading.RLock()
+
+
+def getCachedSticker(setName: str) -> Optional[Any]:
+    """获取缓存的贴纸集，过期返回 None"""
+    with _stickerLock:
+        if setName in _stickerCache:
+            data, timestamp = _stickerCache[setName]
+            if time.time() - timestamp < CACHE_TTL:
+                return data
+            del _stickerCache[setName]
+        return None
+
+
+def setCachedSticker(setName: str, stickerSet: Any):
+    """缓存贴纸集"""
+    with _stickerLock:
+        now = time.time()
+
+        # 清理过期条目
+        expired = [
+            k for k, (_, ts) in _stickerCache.items()
+            if now - ts > CACHE_TTL
+        ]
+        for k in expired:
+            del _stickerCache[k]
+
+        # 超过上限时移除最旧的条目
+        if len(_stickerCache) >= _MAX_STICKER_CACHE:
+            oldest = min(_stickerCache, key=lambda k: _stickerCache[k][1])
+            del _stickerCache[oldest]
+
+        _stickerCache[setName] = (stickerSet, now)
+
+
+
+
+
+@handleTelegramErrors(errorReply="诶……？动不了身去找……")
 async def findSticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await logAction(
@@ -56,8 +103,22 @@ async def findSticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    stickerSet = await context.bot.get_sticker_set(setName)
-    setCachedSticker(setName , stickerSet)
+    try:
+        stickerSet = await context.bot.get_sticker_set(setName)
+        setCachedSticker(setName , stickerSet)
+    except Exception as e:
+        await update.message.reply_text(
+            f"呜……获取表情包失败了……\n"
+            f"可能是网络问题或表情包不存在喵……"
+        )
+        await logAction(
+            "System",
+            f"获取表情包 {setName} 失败",
+            f"{type(e).__name__}: {str(e)}",
+            LogLevel.ERROR,
+            LogChildType.LAST_CHILD
+        )
+        return
 
 
     # 构建用户互动界面（信息和按钮）
@@ -76,6 +137,11 @@ async def findSticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ])
 
+    # 点击 "存为 .gif" 时，提示用户下载的表情包质量会不可避免地劣化
+    # 要求再一次确认，所以第一次选择，使用 gif_confirm 作为 callback_data
+    # 下方是再一次确认的按钮。若不选择继续则退出下载
+
+
     await logAction(
         "System",
         "成功找到表情包",
@@ -85,24 +151,27 @@ async def findSticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     sent = await update.message.reply_text(text , reply_markup=keyboardFoundSticker)
 
-    # 发出3分钟后删除
+    # 发出 DELETE_DELAY(秒) 后删除
     asyncio.create_task(
         deleteLater(context , sent.chat_id , sent.message_id , None , DELETE_DELAY)
     )
 
-    # 点击 “存为 .gif” 时，提示用户下载的表情包质量会不可避免地劣化
-    # 要求再一次确认，所以第一次选择，使用 _gif 作为 callback_data
-    # 下方是再一次确认的按钮。若不选择继续则退出下载
 
 
 
-
+@handleTelegramErrors(errorReply="诶……？没法抓到图片……")
 async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
 
-    _ , setName , action = query.data.split(":" , 2)
+    # 解析 callback_data，防止 ValueError
+    parts = query.data.split(":" , 2)
+    if len(parts) != 3:
+        await query.edit_message_text("无效的回调数据喵……")
+        return
+
+    _ , setName , action = parts
     stickerSet = getCachedSticker(setName)
 
     if not stickerSet:
@@ -142,13 +211,19 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text(text , reply_markup=keyboard)
         return
     
-    # 开始下载
-    stickerSuffix = action      # webp / gif
+    # 校验 action 合法性
+    _VALID_FORMATS = {"webp", "gif"}
+    if action not in _VALID_FORMATS:
+        await query.edit_message_text("无效的格式喵……")
+        return
 
+
+    # 开始下载
+    stickerSuffix = action
 
     await query.edit_message_text(
         f"收到——\n"
-        f"表情包 “{stickerSet.title}”，\n"
+        f"表情包 {stickerSet.title}，\n"
         f"现在就给 @{query.from_user.username or query.from_user.first_name}下载喵……"
     )
     await logAction(
@@ -159,48 +234,59 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         LogChildType.WITH_CHILD
     )
 
-    zipPath = await createStickerZip(
-        context.bot,
-        stickerSet,
-        setName,
-        stickerSuffix
-    )
-
-    with open(zipPath , "rb") as f:
-        sent = await context.bot.send_document(
-            read_timeout=DEFAULT_READ_TIMEOUT,
-            write_timeout=DEFAULT_WRITE_TIMEOUT,
-            chat_id=query.message.chat.id,
-            document=f,
-            caption=(
-                f"@{query.from_user.username or query.from_user.first_name} 様——\n"
-                f"表情包 {setName}，\n"
-                "就发出来啦，请查收喵——\n"
-            ),
+    zipPath = None
+    try:
+        zipPath = await createStickerZip(
+            context.bot,
+            stickerSet,
+            setName,
+            stickerSuffix
         )
 
-    await logAction(
-        "System",
-        f"表情包 {setName} 成功发出喵——",
-        f"as {stickerSuffix} to {query.from_user}",
-        LogLevel.INFO,
-        LogChildType.LAST_CHILD_WITH_CHILD
-    )
+        with open(zipPath , "rb") as f:
+            sent = await context.bot.send_document(
+                read_timeout=DEFAULT_READ_TIMEOUT,
+                write_timeout=DEFAULT_WRITE_TIMEOUT,
+                chat_id=query.message.chat.id,
+                document=f,
+                caption=(
+                    f"@{query.from_user.username or query.from_user.first_name} 様——\n"
+                    f"表情包 {setName}，\n"
+                    "就发出来啦，请查收喵——\n"
+                ),
+            )
 
-    # 延时后删除相关信息
-    asyncio.create_task(
-        deleteLater(context, sent.chat_id, sent.message_id, zipPath, DELETE_DELAY)
-    )
+        await logAction(
+            "System",
+            f"表情包 {setName} 成功发出喵——",
+            f"as {stickerSuffix} to {query.from_user}",
+            LogLevel.INFO,
+            LogChildType.LAST_CHILD_WITH_CHILD
+        )
 
+        # 延时后删除相关信息
+        asyncio.create_task(
+            deleteLater(context, sent.chat_id, sent.message_id, zipPath, DELETE_DELAY)
+        )
 
-
-
-def getCachedSticker(setName: str):
-    return getStateManager().getCachedSticker(setName)
-
-
-def setCachedSticker(setName: str , stickerSet):
-    getStateManager().setCachedSticker(setName , stickerSet)
+    except Exception as e:
+        await query.edit_message_text(
+            f"啊、下载失败了……\n"
+            f"请稍后再试，或者联系管理员喵……"
+        )
+        await logAction(
+            "System",
+            f"表情包 {setName} 下载失败",
+            f"{type(e).__name__}: {str(e)}",
+            LogLevel.ERROR,
+            LogChildType.LAST_CHILD
+        )
+        # 清理可能残留的 zip 文件
+        if zipPath and os.path.exists(zipPath):
+            try:
+                os.remove(zipPath)
+            except Exception:
+                pass
 
 
 

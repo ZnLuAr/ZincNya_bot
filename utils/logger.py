@@ -77,11 +77,26 @@ TreeLogger 是单例模式的日志记录器，负责管理日志文件的创建
 
 
 import os
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Optional
 import asyncio
 from config import LOG_DIR
+
+
+# 匹配 ANSI 转义序列（如 \x1b[31m）和其他 C0/C1 控制字符
+_ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b[^[]?')
+_CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+
+
+def sanitizeForLog(text: str) -> str:
+    """剥离 ANSI 转义序列和控制字符，防止日志注入"""
+    if not text:
+        return text
+    text = _ANSI_ESCAPE_RE.sub('', text)
+    text = _CONTROL_CHAR_RE.sub('', text)
+    return text
 
 
 
@@ -187,7 +202,9 @@ class TreeLogger:
             self.initialize()
 
         timestamp = datetime.now().strftime("%H:%M:%S")
-        userName = self._extractUserName(user)
+        userName = self._sanitize(self._extractUserName(user))
+        event = self._sanitize(event)
+        details = self._sanitize(details)
 
         # 如果有异常，追加异常信息到 details
         if exception:
@@ -269,6 +286,12 @@ class TreeLogger:
         with open(self._logPath, "a", encoding="utf-8") as f:
             f.write(logLine)
         print(consoleText)
+
+
+    @staticmethod
+    def _sanitize(text: str) -> str:
+        """剥离 ANSI 转义序列和控制字符，防止日志注入"""
+        return sanitizeForLog(text)
 
 
     def _extractUserName(self , user):

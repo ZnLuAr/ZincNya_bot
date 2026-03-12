@@ -12,6 +12,7 @@ utils/inputHelper.py
 
 import sys
 import asyncio
+import threading
 
 from concurrent.futures import ThreadPoolExecutor
 from prompt_toolkit import PromptSession
@@ -22,6 +23,10 @@ from prompt_toolkit.patch_stdout import patch_stdout
 
 session: PromptSession = None
 executor: ThreadPoolExecutor = None
+
+# 关机标志：置为 True 后 syncInput 会立即返回空字符串
+_shuttingDown: bool = False
+_shuttingDownLock = threading.Lock()
 
 
 
@@ -46,12 +51,79 @@ def getExecutor() -> ThreadPoolExecutor:
 
 
 
+def interruptInput():
+    """
+    通知 syncInput 停止等待输入。
+
+    在 Windows 控制台下，readline() 无法被 close() 或 cancel() 打断。
+    此函数设置关机标志，并向控制台输入缓冲区写入一个回车，
+    使 readline() 立即返回，让线程池 Future 得以完成。
+    """
+    global _shuttingDown
+    with _shuttingDownLock:
+        _shuttingDown = True
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            import ctypes.wintypes
+
+            class KEY_EVENT_RECORD(ctypes.Structure):
+                _fields_ = [
+                    ("bKeyDown", ctypes.wintypes.BOOL),
+                    ("wRepeatCount", ctypes.wintypes.WORD),
+                    ("wVirtualKeyCode", ctypes.wintypes.WORD),
+                    ("wVirtualScanCode", ctypes.wintypes.WORD),
+                    ("uChar", ctypes.wintypes.WCHAR),
+                    ("dwControlKeyState", ctypes.wintypes.DWORD),
+                ]
+
+            class _Event(ctypes.Union):
+                _fields_ = [("KeyEvent", KEY_EVENT_RECORD)]
+
+            class INPUT_RECORD(ctypes.Structure):
+                _fields_ = [
+                    ("EventType", ctypes.wintypes.WORD),
+                    ("Event", _Event),
+                ]
+
+            record = INPUT_RECORD()
+            record.EventType = 0x0001  # KEY_EVENT
+            record.Event.KeyEvent.bKeyDown = True
+            record.Event.KeyEvent.wRepeatCount = 1
+            record.Event.KeyEvent.wVirtualKeyCode = 0x0D  # VK_RETURN
+            record.Event.KeyEvent.uChar = '\r'
+
+            kernel32 = ctypes.windll.kernel32
+            hStdin = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+            written = ctypes.wintypes.DWORD(0)
+            kernel32.WriteConsoleInputW(
+                hStdin, ctypes.byref(record), 1, ctypes.byref(written)
+            )
+        except Exception:
+            pass
+    else:
+        try:
+            sys.stdin.close()
+        except Exception:
+            pass
+
+
+
+
 def syncInput(prompt: str) -> str:
     """同步输入函数，在线程池中执行"""
-    # 暂时使用原生 input() 来排除 prompt_toolkit 的问题
+    with _shuttingDownLock:
+        if _shuttingDown:
+            return ""
     sys.stdout.write(prompt)
     sys.stdout.flush()
-    return sys.stdin.readline().rstrip('\n\r')
+    line = sys.stdin.readline().rstrip('\n\r')
+    # 关机期间注入的回车，忽略掉
+    with _shuttingDownLock:
+        if _shuttingDown:
+            return ""
+    return line
 
 
 

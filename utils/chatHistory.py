@@ -81,6 +81,7 @@ getMessageCount(chatID=None)
 
 
 import os
+import sys
 import sqlite3
 from datetime import datetime
 from typing import List, Optional
@@ -94,13 +95,8 @@ from config import (
     CHAT_HISTORY_LIMIT,
 )
 from utils.logger import logSystemEvent, LogLevel
+from utils.core.database import Database
 
-
-
-
-# ============================================================================
-# 时间戳格式常量
-# ============================================================================
 
 TIMESTAMP_FORMAT_DATE = "%Y%m%d"                # 归档文件名日期格式
 TIMESTAMP_FORMAT_DATETIME = "%Y-%m-%d %H:%M:%S" # 数据库时间戳格式
@@ -113,9 +109,8 @@ TIMESTAMP_FORMAT_DISPLAY = "%Y/%m/%d"           # 日期分隔符显示格式
 # 密钥管理
 # ============================================================================
 
-def ensureDataDir():
-    """确保 data 目录存在"""
-    os.makedirs(CHAT_DATA_DIR, exist_ok=True)
+# 缓存 Fernet 实例，避免重复读取密钥文件
+_fernet_cache: Optional[Fernet] = None
 
 
 def loadOrCreateKey() -> bytes:
@@ -125,8 +120,6 @@ def loadOrCreateKey() -> bytes:
     密钥存储在 data/.chat_key 文件中。
     如果文件不存在，会自动生成新密钥。
     """
-    ensureDataDir()
-
     if os.path.exists(KEY_PATH):
         with open(KEY_PATH, "rb") as f:
             return f.read()
@@ -136,26 +129,39 @@ def loadOrCreateKey() -> bytes:
     with open(KEY_PATH, "wb") as f:
         f.write(key)
 
+    # 限制文件权限为仅属主可读写（非 Windows 系统）
+    if sys.platform != "win32":
+        os.chmod(KEY_PATH, 0o600)
+
     return key
 
 
 def getFernet() -> Fernet:
-    """获取 Fernet 加密器实例"""
-    key = loadOrCreateKey()
-    return Fernet(key)
+    """
+    获取 Fernet 加密器实例（带缓存）。
+
+    首次调用时从磁盘加载密钥，后续调用直接返回缓存的实例。
+    """
+    global _fernet_cache
+
+    if _fernet_cache is None:
+        key = loadOrCreateKey()
+        _fernet_cache = Fernet(key)
+
+    return _fernet_cache
 
 
 
 
 # ============================================================================
-# 数据库初始化
+# 数据库实例与初始化
 # ============================================================================
 
-def initDB():
-    """初始化数据库表结构"""
-    ensureDataDir()
+chatHistoryDB = Database(DB_PATH, "ChatHistory")
 
-    conn = sqlite3.connect(DB_PATH)
+
+def _initSchema(conn):
+    """初始化表结构（由 initDatabase 调用）"""
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -172,12 +178,10 @@ def initDB():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_id ON messages(chat_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp)")
 
-    conn.commit()
-    conn.close()
 
-
-# 模块导入时初始化数据库
-initDB()
+def initDatabase():
+    """初始化聊天记录数据库（由 appLifecycle 调用）"""
+    chatHistoryDB.initSchema(_initSchema)
 
 
 
@@ -202,17 +206,13 @@ async def _archiveOverflow(chatID: str, overflowCount: int) -> bool:
         同一天的多次溢出会追加到同一个归档文件中。
     """
     try:
-        os.makedirs(CHAT_BACKUP_DIR, exist_ok=True)
+        def _query(conn):
+            dateStr = datetime.now().strftime(TIMESTAMP_FORMAT_DATE)
+            archiveFilename = f"archive_{chatID}_{dateStr}.db"
+            archivePath = os.path.join(CHAT_BACKUP_DIR, archiveFilename)
 
-        dateStr = datetime.now().strftime(TIMESTAMP_FORMAT_DATE)
-        archiveFilename = f"archive_{chatID}_{dateStr}.db"
-        archivePath = os.path.join(CHAT_BACKUP_DIR, archiveFilename)
-
-        # 使用 context manager 确保连接正确关闭
-        with sqlite3.connect(DB_PATH) as mainConn:
-            mainCursor = mainConn.cursor()
-
-            mainCursor.execute(
+            cursor = conn.cursor()
+            cursor.execute(
                 """
                 SELECT id, chat_id, direction, sender, content, timestamp
                 FROM messages
@@ -222,12 +222,14 @@ async def _archiveOverflow(chatID: str, overflowCount: int) -> bool:
                 """,
                 (str(chatID), overflowCount)
             )
-            overflowMessages = mainCursor.fetchall()
+            overflowMessages = cursor.fetchall()
 
             if not overflowMessages:
-                return True
+                return True, archiveFilename
 
-            # 归档数据库使用与主数据库相同的表结构
+            os.makedirs(CHAT_BACKUP_DIR, exist_ok=True)
+
+            # 归档数据库：一次性临时文件，不纳入 Database 管理
             with sqlite3.connect(archivePath) as archiveConn:
                 archiveCursor = archiveConn.cursor()
 
@@ -252,12 +254,16 @@ async def _archiveOverflow(chatID: str, overflowCount: int) -> bool:
 
                 archiveConn.commit()
 
+            return True, archiveFilename
+
+        success, archiveFilename = await chatHistoryDB.run(_query)
+
         await logSystemEvent(
             "聊天记录归档成功喵",
             f"Chat {chatID}: {overflowCount} 条 → {archiveFilename}",
             LogLevel.INFO
         )
-        return True
+        return success
 
     except Exception as e:
         await logSystemEvent(
@@ -290,42 +296,44 @@ async def saveMessage(chatID: str, direction: str, sender: str, content: str) ->
     try:
         fernet = getFernet()
         encryptedContent = fernet.encrypt(content.encode("utf-8"))
-
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-
-        # 使用本地时间而非 UTC
         localTimestamp = datetime.now().strftime(TIMESTAMP_FORMAT_DATETIME)
 
-        cursor.execute(
-            "INSERT INTO messages (chat_id, direction, sender, content, timestamp) VALUES (?, ?, ?, ?, ?)",
-            (str(chatID), direction, sender, encryptedContent, localTimestamp)
-        )
+        def _insertAndCount(conn):
+            cursor = conn.cursor()
 
-        # 检查是否超出限制，若超出则先归档再删除
-        cursor.execute("SELECT COUNT(*) FROM messages WHERE chat_id = ?", (str(chatID),))
-        currentCount = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO messages (chat_id, direction, sender, content, timestamp) VALUES (?, ?, ?, ?, ?)",
+                (str(chatID), direction, sender, encryptedContent, localTimestamp)
+            )
 
+            # 检查是否超出限制
+            cursor.execute("SELECT COUNT(*) FROM messages WHERE chat_id = ?", (str(chatID),))
+            return cursor.fetchone()[0]
+
+        currentCount = await chatHistoryDB.run(_insertAndCount)
+
+        # 如果超出限制，归档并删除旧消息
         if currentCount > CHAT_HISTORY_LIMIT:
             overflowCount = currentCount - CHAT_HISTORY_LIMIT
 
-            # 提交当前事务，确保新消息已保存
-            conn.commit()
-
-            # 仅当归档成功时才删除旧消息，防止数据丢失
+            # 归档旧消息
             if await _archiveOverflow(chatID, overflowCount):
-                cursor.execute(
-                    """
-                    DELETE FROM messages
-                    WHERE chat_id = ? AND id NOT IN (
-                        SELECT id FROM messages
-                        WHERE chat_id = ?
-                        ORDER BY timestamp DESC
-                        LIMIT ?
+                def _deleteOverflow(conn):
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        DELETE FROM messages
+                        WHERE chat_id = ? AND id NOT IN (
+                            SELECT id FROM messages
+                            WHERE chat_id = ?
+                            ORDER BY timestamp DESC
+                            LIMIT ?
+                        )
+                        """,
+                        (str(chatID), str(chatID), CHAT_HISTORY_LIMIT)
                     )
-                    """,
-                    (str(chatID), str(chatID), CHAT_HISTORY_LIMIT)
-                )
+
+                await chatHistoryDB.run(_deleteOverflow)
             else:
                 await logSystemEvent(
                     "归档失败喵，先保留旧消息……",
@@ -333,8 +341,6 @@ async def saveMessage(chatID: str, direction: str, sender: str, content: str) ->
                     LogLevel.WARNING
                 )
 
-        conn.commit()
-        conn.close()
         return True
 
     except Exception as e:
@@ -366,34 +372,34 @@ async def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict
     try:
         fernet = getFernet()
 
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        def _query(conn):
+            cursor = conn.cursor()
 
-        if limit > 0:
-            cursor.execute(
-                """
-                SELECT direction, sender, content, timestamp
-                FROM messages
-                WHERE chat_id = ?
-                ORDER BY timestamp DESC
-                LIMIT ? OFFSET ?
-                """,
-                (str(chatID), limit, offset)
-            )
-        else:
-            cursor.execute(
-                """
-                SELECT direction, sender, content, timestamp
-                FROM messages
-                WHERE chat_id = ?
-                ORDER BY timestamp DESC
-                """,
-                (str(chatID),)
-            )
+            if limit > 0:
+                cursor.execute(
+                    """
+                    SELECT direction, sender, content, timestamp
+                    FROM messages
+                    WHERE chat_id = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (str(chatID), limit, offset)
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT direction, sender, content, timestamp
+                    FROM messages
+                    WHERE chat_id = ?
+                    ORDER BY timestamp DESC
+                    """,
+                    (str(chatID),)
+                )
 
-        rows = cursor.fetchall()
-        conn.close()
+            return cursor.fetchall()
+
+        rows = await chatHistoryDB.run(_query)
 
         messages = []
         skippedCount = 0
@@ -443,24 +449,22 @@ async def getChatList() -> List[dict]:
             - last_message_time: datetime
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        def _query(conn):
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT
+                    chat_id,
+                    COUNT(*) as message_count,
+                    MAX(timestamp) as last_message_time
+                FROM messages
+                GROUP BY chat_id
+                ORDER BY last_message_time DESC
+                """
+            )
+            return cursor.fetchall()
 
-        cursor.execute(
-            """
-            SELECT
-                chat_id,
-                COUNT(*) as message_count,
-                MAX(timestamp) as last_message_time
-            FROM messages
-            GROUP BY chat_id
-            ORDER BY last_message_time DESC
-            """
-        )
-
-        rows = cursor.fetchall()
-        conn.close()
+        rows = await chatHistoryDB.run(_query)
 
         return [
             {
@@ -492,16 +496,14 @@ async def clearHistory(chatID: Optional[str] = None) -> bool:
         成功返回 True，失败返回 False
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+        def _query(conn):
+            cursor = conn.cursor()
+            if chatID:
+                cursor.execute("DELETE FROM messages WHERE chat_id = ?", (str(chatID),))
+            else:
+                cursor.execute("DELETE FROM messages")
 
-        if chatID:
-            cursor.execute("DELETE FROM messages WHERE chat_id = ?", (str(chatID),))
-        else:
-            cursor.execute("DELETE FROM messages")
-
-        conn.commit()
-        conn.close()
+        await chatHistoryDB.run(_query)
         return True
 
     except Exception as e:
@@ -514,7 +516,7 @@ async def clearHistory(chatID: Optional[str] = None) -> bool:
         return False
 
 
-def getMessageCount(chatID: Optional[str] = None) -> int:
+async def getMessageCount(chatID: Optional[str] = None) -> int:
     """
     获取消息数量。
 
@@ -525,18 +527,15 @@ def getMessageCount(chatID: Optional[str] = None) -> int:
         消息数量
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+        def _query(conn):
+            cursor = conn.cursor()
+            if chatID:
+                cursor.execute("SELECT COUNT(*) FROM messages WHERE chat_id = ?", (str(chatID),))
+            else:
+                cursor.execute("SELECT COUNT(*) FROM messages")
+            return cursor.fetchone()[0]
 
-        if chatID:
-            cursor.execute("SELECT COUNT(*) FROM messages WHERE chat_id = ?", (str(chatID),))
-        else:
-            cursor.execute("SELECT COUNT(*) FROM messages")
-
-        count = cursor.fetchone()[0]
-        conn.close()
-        return count
-
+        return await chatHistoryDB.run(_query)
     except Exception:
         return 0
 

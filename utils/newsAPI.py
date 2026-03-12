@@ -22,6 +22,7 @@ utils/newsAPI.py
 
 
 import json
+import asyncio
 import aiohttp
 from io import BytesIO
 from datetime import datetime
@@ -37,6 +38,42 @@ from config import (
     NEWS_DATA_FILE,
 )
 from utils.logger import logSystemEvent, LogLevel
+from utils.core.resourceManager import getResourceManager
+from utils.core.errorDecorators import handleErrors
+
+
+# ============================================================================
+# 全局 aiohttp Session（复用连接池）
+# ============================================================================
+
+_session: Optional[aiohttp.ClientSession] = None
+_sessionLock = asyncio.Lock()
+
+
+async def _getSession() -> aiohttp.ClientSession:
+    """获取全局 aiohttp Session 单例（协程安全）"""
+    global _session
+
+    if _session is None or _session.closed:
+        async with _sessionLock:
+            if _session is None or _session.closed:
+                timeout = aiohttp.ClientTimeout(total=NEWS_REQUEST_TIMEOUT)
+                _session = aiohttp.ClientSession(timeout=timeout)
+
+    return _session
+
+
+async def _closeSession():
+    """关闭全局 Session（由资源管理器自动调用）"""
+    global _session
+    if _session and not _session.closed:
+        await _session.close()
+        _session = None
+
+
+def registerResources():
+    """显式注册资源清理回调（由 appLifecycle 调用）"""
+    getResourceManager().register("newsAPI Session", _closeSession, priority=10)
 
 
 
@@ -53,6 +90,7 @@ class NewsArticle:
 
 
 
+@handleErrors(errorType="NewsAPI", defaultReturn=[])
 async def fetchLatestNews(limit: int = 5) -> list[NewsArticle]:
     """
     获取最新文章列表
@@ -63,15 +101,13 @@ async def fetchLatestNews(limit: int = 5) -> list[NewsArticle]:
     返回:
         NewsArticle 列表
     """
-    timeout = aiohttp.ClientTimeout(total=NEWS_REQUEST_TIMEOUT)
+    session = await _getSession()
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            NEWS_SOURCE_URL,
-            timeout=timeout,
-            proxy=NEWS_HTTP_PROXY
-        ) as response:
-            html = await response.text()
+    async with session.get(
+        NEWS_SOURCE_URL,
+        proxy=NEWS_HTTP_PROXY
+    ) as response:
+        html = await response.text()
 
     soup = BeautifulSoup(html, "html.parser")
     articles = []
@@ -121,6 +157,7 @@ async def fetchLatestNews(limit: int = 5) -> list[NewsArticle]:
 
 
 
+@handleErrors(errorType="NewsAPI", defaultReturn=b"")
 async def downloadCover(url: str) -> bytes:
     """
     下载封面图片
@@ -129,17 +166,15 @@ async def downloadCover(url: str) -> bytes:
         url: 图片 URL
 
     返回:
-        图片的二进制数据
+        图片的二进制数据（失败时返回空 bytes）
     """
-    timeout = aiohttp.ClientTimeout(total=NEWS_REQUEST_TIMEOUT)
+    session = await _getSession()
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            url,
-            timeout=timeout,
-            proxy=NEWS_HTTP_PROXY
-        ) as response:
-            return await response.read()
+    async with session.get(
+        url,
+        proxy=NEWS_HTTP_PROXY
+    ) as response:
+        return await response.read()
 
 
 
@@ -156,28 +191,31 @@ async def pushToTelegram(bot: Bot, chat_id: str, article: NewsArticle) -> bool:
     返回:
         是否推送成功
     """
-    # 构建消息内容
-    caption = f"**{article.title}**"
+    # 构建消息内容（使用 HTML 解析模式，避免用户内容中的 *_` 导致解析失败）
+    caption = f"<b>{article.title}</b>"
     if article.summary:
         caption += f"\n\n{article.summary}"
-    caption += f"\n\n[阅读原文]({article.url})"
+    caption += f'\n\n<a href="{article.url}">阅读原文</a>'
 
     try:
+        cover_data = b""
         if article.cover_url:
-            # 下载封面图并发送
             cover_data = await downloadCover(article.cover_url)
+
+        if cover_data:
+            # 有封面图，发送图片
             await bot.send_photo(
                 chat_id=chat_id,
                 photo=BytesIO(cover_data),
                 caption=caption,
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
         else:
-            # 无封面图，发送纯文本
+            # 无封面或下载失败，发送纯文本
             await bot.send_message(
                 chat_id=chat_id,
                 text=caption,
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
         return True
 

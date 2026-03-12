@@ -21,11 +21,15 @@ register() 函数可以返回两种格式：
 """
 
 import os
+import logging
+import functools
 import importlib
 import pkgutil
 from telegram.ext import Application
 
-from config import PROJECT_ROOT
+from config import PROJECT_ROOT, AUTH_ENABLED
+from utils.whitelistManager.data import whetherAuthorizedUser
+from utils.logger import sanitizeForLog
 
 
 # 明确跳过的模块（不是 Telegram handler 的模块）
@@ -33,6 +37,27 @@ SKIP_MODULES = ["cli"]
 
 # handlers 目录的绝对路径（用于 pkgutil 扫描）
 _HANDLERS_DIR = os.path.join(PROJECT_ROOT, "handlers")
+
+_logger = logging.getLogger(__name__)
+
+
+
+
+def _wrapWithAuth(handler_func):
+    """包装 handler，在执行前检查白名单"""
+    @functools.wraps(handler_func)
+    async def wrapper(update, context, *args, **kwargs):
+        user = update.effective_user
+        if user and not whetherAuthorizedUser(user.id):
+            _logger.warning(
+                "未授权访问: %s (@%s / %s)",
+                sanitizeForLog(user.full_name),
+                sanitizeForLog(user.username or "N/A"),
+                user.id
+            )
+            return
+        return await handler_func(update, context, *args, **kwargs)
+    return wrapper
 
 
 
@@ -71,15 +96,19 @@ def loadHandlers(app: Application):
                 handlers = result.get("handlers" , [])
                 name = result.get("name" , module_name)
                 description = result.get("description" , "")
+                requireAuth = result.get("auth" , True)  # 默认需要白名单鉴权
             else:
                 # 简单格式（向后兼容）
                 handlers = result
                 name = module_name
                 description = ""
+                requireAuth = True
 
-            # 注册 handlers
+            # 注册 handlers（按需包装白名单鉴权）
             handler_count = 0
             for handler in handlers:
+                if requireAuth and AUTH_ENABLED and hasattr(handler, "callback"):
+                    handler.callback = _wrapWithAuth(handler.callback)
                 app.add_handler(handler)
                 handler_count += 1
                 total_handlers += 1
