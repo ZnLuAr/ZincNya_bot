@@ -9,16 +9,16 @@ import json
 import random
 from typing import List , Optional
 
-from config import QUOTES_DIR
+from config import QUOTES_PATH
 
 
 
 
 def ensureQuoteFile():
-    if QUOTES_DIR:
-        os.makedirs(os.path.dirname(QUOTES_DIR) , exist_ok=True)
-    if not os.path.exists(QUOTES_DIR):
-        with open(QUOTES_DIR , "w" , encoding="utf-8") as f:
+    if QUOTES_PATH:
+        os.makedirs(os.path.dirname(QUOTES_PATH) , exist_ok=True)
+    if not os.path.exists(QUOTES_PATH):
+        with open(QUOTES_PATH , "w" , encoding="utf-8") as f:
             json.dump([] , f , ensure_ascii=False , indent=2)
 
 
@@ -152,6 +152,8 @@ def userOperation(operation: str , index:Optional[int]=None , payload:Optional[d
 
         case "set":
             if index is None or not (0<= index < len(quotes)):
+                return False
+            if payload is None or not isinstance(payload, dict):
                 return False
             quotes[index].update(payload)
             saveQuoteFile(quotes)

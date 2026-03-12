@@ -63,21 +63,14 @@ getUsersTodosSummary()
 """
 
 
-import os
-import asyncio
 import sqlite3
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
-from config import TODOS_DB_PATH, CHAT_DATA_DIR
+from config import TODOS_DB_PATH
 from utils.logger import logSystemEvent, LogLevel
+from utils.core.database import Database
 
-
-
-
-# ============================================================================
-# 时间戳格式常量
-# ============================================================================
 
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"  # 数据库时间戳格式
 
@@ -85,19 +78,14 @@ TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"  # 数据库时间戳格式
 
 
 # ============================================================================
-# 数据库初始化
+# 数据库实例与初始化
 # ============================================================================
 
-def ensureDataDir():
-    """确保 data 目录存在"""
-    os.makedirs(CHAT_DATA_DIR, exist_ok=True)
+todosDB = Database(TODOS_DB_PATH, "Todos")
 
 
-def initDB():
-    """初始化数据库表结构"""
-    ensureDataDir()
-
-    conn = sqlite3.connect(TODOS_DB_PATH)
+def _initSchema(conn):
+    """初始化表结构（由 initDatabase 调用）"""
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -126,12 +114,34 @@ def initDB():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_status ON todos(status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_remind_time ON todos(remind_time, status)")
 
-    conn.commit()
-    conn.close()
+
+def initDatabase():
+    """初始化待办数据库（由 appLifecycle 调用）"""
+    todosDB.initSchema(_initSchema)
 
 
-# 模块导入时初始化数据库
-initDB()
+
+
+# ============================================================================
+# 行转换工具
+# ============================================================================
+
+def _rowToTodoDict(row) -> Dict[str, Any]:
+    """将 sqlite3.Row 转换为待办字典"""
+    return {
+        "id": row["id"],
+        "chat_id": row["chat_id"],
+        "user_id": row["user_id"],
+        "content": row["content"],
+        "remind_time": datetime.fromisoformat(row["remind_time"]) if row["remind_time"] else None,
+        "priority": row["priority"],
+        "status": row["status"],
+        "reminded": row["reminded"],
+        "created_at": datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+        "completed_at": datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
+    }
+
+
 
 
 # ============================================================================
@@ -161,8 +171,7 @@ async def addTodo(
     try:
         remindTimeStr = remindTime.strftime(TIMESTAMP_FORMAT) if remindTime else None
 
-        def _sync():
-            conn = sqlite3.connect(TODOS_DB_PATH)
+        def _query(conn):
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -171,12 +180,9 @@ async def addTodo(
                 """,
                 (str(chatID), str(userID), content, remindTimeStr, priority)
             )
-            todoID = cursor.lastrowid
-            conn.commit()
-            conn.close()
-            return todoID
+            return cursor.lastrowid
 
-        return await asyncio.to_thread(_sync)
+        return await todosDB.run(_query)
 
     except Exception as e:
         await logSystemEvent(
@@ -210,9 +216,7 @@ async def getTodos(
             - id, chat_id, user_id, content, remind_time, priority, status, created_at, completed_at
     """
     try:
-        def _sync():
-            conn = sqlite3.connect(TODOS_DB_PATH)
-            conn.row_factory = sqlite3.Row
+        def _query(conn):
             cursor = conn.cursor()
 
             if status == 'all':
@@ -236,26 +240,9 @@ async def getTodos(
 
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            conn.close()
+            return [_rowToTodoDict(row) for row in rows]
 
-            todos = []
-            for row in rows:
-                todos.append({
-                    "id": row["id"],
-                    "chat_id": row["chat_id"],
-                    "user_id": row["user_id"],
-                    "content": row["content"],
-                    "remind_time": datetime.fromisoformat(row["remind_time"]) if row["remind_time"] else None,
-                    "priority": row["priority"],
-                    "status": row["status"],
-                    "created_at": datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-                    "completed_at": datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
-                    "reminded": row["reminded"],
-                })
-
-            return todos
-
-        return await asyncio.to_thread(_sync)
+        return await todosDB.run(_query)
 
     except Exception as e:
         await logSystemEvent(
@@ -275,32 +262,13 @@ async def getTodoByID(todoID: int) -> Optional[Dict[str, Any]]:
         待办字典，或 None（不存在）
     """
     try:
-        def _sync():
-            conn = sqlite3.connect(TODOS_DB_PATH)
-            conn.row_factory = sqlite3.Row
+        def _query(conn):
             cursor = conn.cursor()
-
             cursor.execute("SELECT * FROM todos WHERE id = ?", (todoID,))
             row = cursor.fetchone()
-            conn.close()
+            return _rowToTodoDict(row) if row else None
 
-            if not row:
-                return None
-
-            return {
-                "id": row["id"],
-                "chat_id": row["chat_id"],
-                "user_id": row["user_id"],
-                "content": row["content"],
-                "remind_time": datetime.fromisoformat(row["remind_time"]) if row["remind_time"] else None,
-                "priority": row["priority"],
-                "status": row["status"],
-                "reminded": row["reminded"],
-                "created_at": datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-                "completed_at": datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
-            }
-
-        return await asyncio.to_thread(_sync)
+        return await todosDB.run(_query)
 
     except Exception as e:
         await logSystemEvent(
@@ -327,8 +295,7 @@ async def updateTodo(todoID: int, **kwargs) -> bool:
         成功返回 True，失败返回 False
     """
     try:
-        def _sync():
-            conn = sqlite3.connect(TODOS_DB_PATH)
+        def _query(conn):
             cursor = conn.cursor()
 
             # 构建 UPDATE 语句
@@ -365,19 +332,15 @@ async def updateTodo(todoID: int, **kwargs) -> bool:
                 params.append(kwargs["reminded"])
 
             if not updates:
-                conn.close()
                 return True  # 没有更新内容
 
             params.append(todoID)
             query = f"UPDATE todos SET {', '.join(updates)} WHERE id = ?"
 
             cursor.execute(query, params)
-            conn.commit()
-            conn.close()
-
             return True
 
-        return await asyncio.to_thread(_sync)
+        return await todosDB.run(_query)
 
     except Exception as e:
         await logSystemEvent(
@@ -397,15 +360,12 @@ async def deleteTodo(todoID: int) -> bool:
         成功返回 True，失败返回 False
     """
     try:
-        def _sync():
-            conn = sqlite3.connect(TODOS_DB_PATH)
+        def _query(conn):
             cursor = conn.cursor()
             cursor.execute("DELETE FROM todos WHERE id = ?", (todoID,))
-            conn.commit()
-            conn.close()
             return True
 
-        return await asyncio.to_thread(_sync)
+        return await todosDB.run(_query)
 
     except Exception as e:
         await logSystemEvent(
@@ -450,8 +410,7 @@ async def getTodosCount(chatID: str, userID: str, status: str = 'pending') -> in
         待办数量
     """
     try:
-        def _sync():
-            conn = sqlite3.connect(TODOS_DB_PATH)
+        def _query(conn):
             cursor = conn.cursor()
 
             if status == 'all':
@@ -465,11 +424,9 @@ async def getTodosCount(chatID: str, userID: str, status: str = 'pending') -> in
                     (str(chatID), str(userID), status)
                 )
 
-            count = cursor.fetchone()[0]
-            conn.close()
-            return count
+            return cursor.fetchone()[0]
 
-        return await asyncio.to_thread(_sync)
+        return await todosDB.run(_query)
 
     except Exception:
         return 0
@@ -488,8 +445,7 @@ async def getUsersTodosSummary() -> List[Dict[str, Any]]:
         - last_active: str  最近一条 todo 的创建时间（格式 YYYY-MM-DD HH:MM）
     """
     try:
-        def _sync():
-            conn = sqlite3.connect(TODOS_DB_PATH)
+        def _query(conn):
             cursor = conn.cursor()
 
             now = datetime.now().strftime(TIMESTAMP_FORMAT)
@@ -514,7 +470,6 @@ async def getUsersTodosSummary() -> List[Dict[str, Any]]:
             )
 
             rows = cursor.fetchall()
-            conn.close()
 
             result = []
             for row in rows:
@@ -530,7 +485,7 @@ async def getUsersTodosSummary() -> List[Dict[str, Any]]:
 
             return result
 
-        return await asyncio.to_thread(_sync)
+        return await todosDB.run(_query)
 
     except Exception:
         return []
@@ -544,9 +499,7 @@ async def getPendingReminders() -> List[Dict[str, Any]]:
         待办列表
     """
     try:
-        def _sync():
-            conn = sqlite3.connect(TODOS_DB_PATH)
-            conn.row_factory = sqlite3.Row
+        def _query(conn):
             cursor = conn.cursor()
 
             now = datetime.now().strftime(TIMESTAMP_FORMAT)
@@ -561,26 +514,9 @@ async def getPendingReminders() -> List[Dict[str, Any]]:
             )
 
             rows = cursor.fetchall()
-            conn.close()
+            return [_rowToTodoDict(row) for row in rows]
 
-            todos = []
-            for row in rows:
-                todos.append({
-                    "id": row["id"],
-                    "chat_id": row["chat_id"],
-                    "user_id": row["user_id"],
-                    "content": row["content"],
-                    "remind_time": datetime.fromisoformat(row["remind_time"]) if row["remind_time"] else None,
-                    "priority": row["priority"],
-                    "status": row["status"],
-                    "created_at": datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-                    "completed_at": datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
-                    "reminded": row["reminded"],
-                })
-
-            return todos
-
-        return await asyncio.to_thread(_sync)
+        return await todosDB.run(_query)
 
     except Exception as e:
         await logSystemEvent(

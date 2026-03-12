@@ -27,6 +27,11 @@ TELEGRAM_PROXY = os.getenv("TELEGRAM_PROXY", None)
 
 
 
+# 数据目录（确保存在）
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+
 DEFAULT_FILE_CACHE_TTL = 480  # 秒
 
 
@@ -46,7 +51,7 @@ DEFAULT_WRITE_TIMEOUT = 60      # 将请求上传至 Telegram 请求体的超时
 
 
 # /nya 功能相关常量
-QUOTES_DIR = os.path.join(PROJECT_ROOT, "data", "ZincNyaQuotes.json")
+QUOTES_PATH = os.path.join(PROJECT_ROOT, "data", "ZincNyaQuotes.json")
 
 
 
@@ -65,13 +70,14 @@ COMMAND_MODULE = "utils.command"                                 # Python 模块
 
 
 # Whitelist 相关常量
-WHITELIST_DIR = os.path.join(PROJECT_ROOT, "data", "whitelist.json")
+WHITELIST_PATH = os.path.join(PROJECT_ROOT, "data", "whitelist.json")
+AUTH_ENABLED = True     # 设为 False 则跳过白名单鉴权，允许所有用户使用
 
 
 
 
 # Operators 相关常量
-OPERATORS_DIR = os.path.join(PROJECT_ROOT, "data", "operators.json")
+OPERATORS_PATH = os.path.join(PROJECT_ROOT, "data", "operators.json")
 
 
 class Permission(str, Enum):
@@ -79,6 +85,7 @@ class Permission(str, Enum):
     SHUTDOWN = "shutdown"
     RESTART = "restart"
     STATUS = "status"
+    NOTIFY = "notify"
 
     def __str__(self):
         return self.value
@@ -94,16 +101,16 @@ BOOK_ITEMS_PER_PAGE = 5                                     # 每页显示书籍
 BOOK_MAX_ITEMS_PER_PAGE = 10                                # 每页最大书籍数量
 BOOK_REQUEST_TIMEOUT = 30                                   # API 请求超时（秒）- 增加以应对慢速网络
 BOOK_DESCRIPTION_MAX_LENGTH = 500                           # 书籍简介最大长度
-BOOK_QUERY_HASH_LENGTH = 8                                  # 搜索词哈希长度（用于 callback_data）
+BOOK_QUERY_HASH_LENGTH = 12                                 # 搜索词哈希长度（12 hex = 48 bit，降低碰撞概率）
 BOOK_HTTP_PROXY = os.getenv("BOOK_HTTP_PROXY", None)        # HTTP 代理（可选），格式: "http://host:port"
 
 
 
 
 # 聊天记录保存相关常量
-CHAT_DATA_DIR = os.path.join(PROJECT_ROOT, "data")                              # 聊天记录保存路径
-DB_PATH = os.path.join(CHAT_DATA_DIR, "chatHistory.db")                         # 聊天记录保存文件名
-KEY_PATH = os.path.join(CHAT_DATA_DIR, ".chatKey")                              # 密钥文件路径
+CHAT_DATA_DIR = DATA_DIR                                                        # 兼容旧引用
+DB_PATH = os.path.join(DATA_DIR, "chatHistory.db")                              # 聊天记录保存文件名
+KEY_PATH = os.path.join(DATA_DIR, ".chatKey")                                   # 密钥文件路径
 CHAT_HISTORY_LIMIT = 131072                                                     # 每个聊天保存的最大消息条数
 CHAT_EXPORT_DIR = os.path.join(CHAT_DATA_DIR, "chatExport")                      # 聊天记录导出目录
 CHAT_BACKUP_DIR = os.path.join(CHAT_DATA_DIR, "chatBackup")                      # 聊天记录自动归档目录
@@ -113,6 +120,7 @@ CHAT_PREVIEW_LIMIT = 20                                                         
 
 
 # 新闻抓取功能相关常量
+# 注意：该站点仅提供 HTTP，无 HTTPS 支持。如更换源站，建议使用 HTTPS
 NEWS_SOURCE_URL = os.getenv("NEWS_SOURCE_URL", "http://naenara.com.kp/main/index/ch/first")
 NEWS_HTTP_PROXY = os.getenv("NEWS_HTTP_PROXY", None)                            # HTTP 代理（可选），格式: "http://host:port"
 NEWS_REQUEST_TIMEOUT = 30                                                       # 请求超时（秒）

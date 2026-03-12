@@ -349,7 +349,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         except Exception:
             pass
 
-        print("\n退出聊天界面喵——\n\n")
+        print("退出聊天界面喵——\n\n")
 
 
 

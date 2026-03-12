@@ -55,37 +55,31 @@ Callback Data 格式
 
 
 import html
+from collections import OrderedDict
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import BadRequest
 from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
 
 from utils.todos.database import (
     addTodo, getTodos, getTodoByID,
     updateTodo, deleteTodo, markDone, reopenTodo, getTodosCount,
 )
-from utils.todos.utils import parseTime, parsePriority, PRIORITY_EMOJI, formatRemindTime
-from utils.todos.tgRender import preview, renderListView, renderDetailView
+from utils.telegramHelpers import safeEditMessage
 from utils.logger import logAction, LogLevel, LogChildType
+from utils.core.errorDecorators import handleTelegramErrors
 from config import TODOS_ITEMS_PER_PAGE, TODOS_CONTENT_MAX_LENGTH
+from utils.todos.tgRender import preview, renderListView, renderDetailView
+from utils.todos.utils import parseTime, parsePriority, PRIORITY_EMOJI, formatRemindTime
 
 
 
 
 # 记录每个用户最后一条 /todos 列表消息，用于防刷屏
 # key: (chat_id, user_id), value: message_id
-_lastQueryMessages: dict[tuple[str, str], int] = {}
+# 使用 OrderedDict 实现 LRU，限制最大条目数防止内存泄漏
+_MAX_CACHED_MESSAGES = 1023
+_lastQueryMessages: OrderedDict[tuple[str, str], int] = OrderedDict()
 
-
-async def _safeEdit(message, text: str, **kwargs) -> bool:
-    """安全地编辑消息，忽略"消息未修改"错误"""
-    try:
-        await message.edit_text(text, **kwargs)
-        return True
-    except BadRequest as e:
-        if "Message is not modified" in str(e):
-            return False
-        raise
 
 
 
@@ -94,6 +88,7 @@ async def _safeEdit(message, text: str, **kwargs) -> bool:
 # 命令处理
 # ============================================================================
 
+@handleTelegramErrors(errorReply="……有、有畸形的待办数据朝咱直冲过来喵……！")
 async def handleTodosCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /todos 命令"""
 
@@ -140,6 +135,9 @@ async def handleTodosCommand(update: Update, context: ContextTypes.DEFAULT_TYPE)
         text, keyboard = renderListView(todos, total, 1, userName)
         msg = await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
+        # LRU: 如果超出限制，移除最旧的条目
+        if len(_lastQueryMessages) >= _MAX_CACHED_MESSAGES:
+            _lastQueryMessages.popitem(last=False)
         _lastQueryMessages[key] = msg.message_id
         return
 
@@ -171,6 +169,7 @@ async def handleTodosCommand(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # 5. 回复确认
     pri = PRIORITY_EMOJI.get(priority, '⚪')
     remindStr = f"\n提醒：{formatRemindTime(remindTime)}" if remindTime else ""
+
 
     await update.message.reply_text(
         f"好、记下来了喵——\n\n"
@@ -209,6 +208,7 @@ async def handleTodosCommand(update: Update, context: ContextTypes.DEFAULT_TYPE)
 #   todos:del:{todoID}              确认后删除
 #
 
+@handleTelegramErrors(errorReply="待办消息貌似发生了点什么事喵……锌酱碰不到它……")
 async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 InlineKeyboard 回调，路由表见上方注释"""
 
@@ -221,166 +221,171 @@ async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
     userName = user.username or user.first_name or str(user.id)
     userTag = f"@{html.escape(userName)}"
 
+    # 统一解析 callback_data，防止 ValueError
     parts = query.data.split(':')
+    if len(parts) < 2:
+        await safeEditMessage(query.message, "无效的回调数据喵", parse_mode="HTML")
+        return
+
     action = parts[1]
 
-    try:
-        # ── 关闭（删除消息） ──
-        if action == 'close':
-            await query.message.delete()
-            return
-
-        # ── 列表视图 / 翻页 ──
-        if action == 'list':
-            page = int(parts[2]) if len(parts) > 2 else 1
-            total = await getTodosCount(chatID, userID)
-            offset = (page - 1) * TODOS_ITEMS_PER_PAGE
-            todos = await getTodos(chatID, userID, limit=TODOS_ITEMS_PER_PAGE, offset=offset)
-
-            text, keyboard = renderListView(todos, total, page, userName)
-            await _safeEdit(query.message, text, reply_markup=keyboard, parse_mode="HTML")
-            return
-
-        # ── 详情视图 ──
-        if action == 'detail':
+    # 提取 todoID（如果存在）
+    todoID = None
+    if len(parts) > 2 and action != 'list':
+        try:
             todoID = int(parts[2])
-            todo = await getTodoByID(todoID)
-
-            if not todo or todo['user_id'] != userID:
-                await _safeEdit(
-                    query.message,
-                    f"{userTag}  👀\n你在尝试点击是叭——\n……这条待办不存在或不属于你喵 (・ω・`)",
-                    parse_mode="HTML",
-                )
-                return
-
-            text, keyboard = renderDetailView(todo)
-            await _safeEdit(query.message, text, reply_markup=keyboard, parse_mode="HTML")
+        except ValueError:
+            await safeEditMessage(query.message, "无效的待办 ID 喵", parse_mode="HTML")
             return
 
-        # ── 修改优先级 ──
-        if action == 'pri':
-            todoID = int(parts[2])
-            newPriority = parts[3]
-            todo = await getTodoByID(todoID)
+    # ── 关闭（删除消息） ──
+    if action == 'close':
+        await query.message.delete()
+        return
 
-            if not todo or todo['user_id'] != userID:
-                await _safeEdit(
-                    query.message,
-                    f"呜……{userTag} 👀\n你在尝试点击是叭——\n……这条待办不存在或不属于你喵 (・ω・`)",
-                    parse_mode="HTML",
-                )
-                return
+    # ── 列表视图 / 翻页 ──
+    if action == 'list':
+        page = 1
+        if len(parts) > 2:
+            try:
+                page = int(parts[2])
+            except ValueError:
+                pass
 
-            await updateTodo(todoID, priority=newPriority)
-            todo['priority'] = newPriority
+        total = await getTodosCount(chatID, userID)
+        offset = (page - 1) * TODOS_ITEMS_PER_PAGE
+        todos = await getTodos(chatID, userID, limit=TODOS_ITEMS_PER_PAGE, offset=offset)
 
-            text, keyboard = renderDetailView(todo)
-            await _safeEdit(query.message, text, reply_markup=keyboard, parse_mode="HTML")
-            return
+        text, keyboard = renderListView(todos, total, page, userName)
+        await safeEditMessage(query.message, text, reply_markup=keyboard, parse_mode="HTML")
+        return
 
-        # ── 标记完成 ──
-        if action == 'done':
-            todoID = int(parts[2])
-            todo = await getTodoByID(todoID)
+    # ── 详情视图 ──
+    if action == 'detail':
+        todo = await getTodoByID(todoID)
 
-            if not todo or todo['user_id'] != userID:
-                await _safeEdit(
-                    query.message,
-                    f"呜……{userTag} 👀\n你在尝试点击是叭——\n……这条待办不存在或不属于你喵 (・ω・`)",
-                    parse_mode="HTML",
-                )
-                return
-
-            await markDone(todoID)
-            await _safeEdit(
+        if not todo or todo['user_id'] != userID:
+            await safeEditMessage(
                 query.message,
-                f"✅ 那么就完成了喵——\n\n{html.escape(todo['content'])}",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("↩️ 返回列表", callback_data="todos:list:1")
-                ]]),
+                f"{userTag}  👀\n你在尝试点击是叭——\n……这条待办不存在或不属于你喵w",
                 parse_mode="HTML",
             )
             return
 
-        # ── 重新打开 ──
-        if action == 'reopen':
-            todoID = int(parts[2])
-            todo = await getTodoByID(todoID)
+        text, keyboard = renderDetailView(todo)
+        await safeEditMessage(query.message, text, reply_markup=keyboard, parse_mode="HTML")
+        return
 
-            if not todo or todo['user_id'] != userID:
-                await _safeEdit(
-                    query.message,
-                    f"呜……{userTag} 👀\n你在尝试点击是叭——\n……这条待办不存在或不属于你喵 (・ω・`)",
-                    parse_mode="HTML",
-                )
-                return
-
-            await reopenTodo(todoID)
-            todo['status'] = 'pending'
-            text, keyboard = renderDetailView(todo)
-            await _safeEdit(query.message, text, reply_markup=keyboard, parse_mode="HTML")
+    # ── 修改优先级 ──
+    if action == 'pri':
+        if len(parts) < 4:
+            await safeEditMessage(query.message, "无效的回调数据喵", parse_mode="HTML")
             return
 
-        # ── 删除确认 ──
-        if action == 'delc':
-            todoID = int(parts[2])
-            todo = await getTodoByID(todoID)
+        newPriority = parts[3]
+        todo = await getTodoByID(todoID)
 
-            if not todo or todo['user_id'] != userID:
-                await _safeEdit(
-                    query.message,
-                    f"呜……{userTag} 👀\n你在尝试点击是叭——\n……这条待办不存在或不属于你喵 (・ω・`)",
-                    parse_mode="HTML",
-                )
-                return
-
-            await _safeEdit(
+        if not todo or todo['user_id'] != userID:
+            await safeEditMessage(
                 query.message,
-                f"确定要删除这条待办吗？\n\n{html.escape(todo['content'])}",
-                reply_markup=InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("确认删除", callback_data=f"todos:del:{todoID}"),
-                        InlineKeyboardButton("↩️ 返回", callback_data=f"todos:detail:{todoID}"),
-                    ]
-                ]),
+                f"哼嗯……{userTag} 👀\n你在尝试点击是叭——\n……这条待办不存在或不属于你喵w",
                 parse_mode="HTML",
             )
             return
 
-        # ── 确认后删除 ──
-        if action == 'del':
-            todoID = int(parts[2])
-            todo = await getTodoByID(todoID)
+        await updateTodo(todoID, priority=newPriority)
+        todo['priority'] = newPriority
 
-            if not todo or todo['user_id'] != userID:
-                await _safeEdit(
-                    query.message,
-                    f"呜……{userTag} 👀\n你在尝试点击是叭——\n……这条待办不存在或不属于你喵 (・ω・`)",
-                    parse_mode="HTML",
-                )
-                return
+        text, keyboard = renderDetailView(todo)
+        await safeEditMessage(query.message, text, reply_markup=keyboard, parse_mode="HTML")
+        return
 
-            await deleteTodo(todoID)
+    # ── 标记完成 ──
+    if action == 'done':
+        todo = await getTodoByID(todoID)
 
-            # 删除后回到列表
-            total = await getTodosCount(chatID, userID)
-            todos = await getTodos(chatID, userID, limit=TODOS_ITEMS_PER_PAGE, offset=0)
-            text, keyboard = renderListView(todos, total, 1, userName)
-            await _safeEdit(query.message, text, reply_markup=keyboard, parse_mode="HTML")
+        if not todo or todo['user_id'] != userID:
+            await safeEditMessage(
+                query.message,
+                f"哼嗯……{userTag} 👀\n你在尝试点击是叭——\n……这条待办不存在或不属于你喵w",
+                parse_mode="HTML",
+            )
             return
 
-    except Exception as e:
-        await logAction(
-            user, "/todos callback 异常",
-            f"{action}: {e}", LogLevel.ERROR,
-            LogChildType.WITH_ONE_CHILD,
-        )
-        await _safeEdit(
+        await markDone(todoID)
+        await safeEditMessage(
             query.message,
-            f"出错了喵……\n{html.escape(str(e))}",
+            f"✅ 那么就完成了喵——\n\n{html.escape(todo['content'])}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("↩️ 返回列表", callback_data="todos:list:1")
+            ]]),
             parse_mode="HTML",
         )
+        return
+
+    # ── 重新打开 ──
+    if action == 'reopen':
+        todo = await getTodoByID(todoID)
+
+        if not todo or todo['user_id'] != userID:
+            await safeEditMessage(
+                query.message,
+                f"哼嗯……{userTag} 👀\n你在尝试点击是叭——\n……这条待办不存在或不属于你喵w",
+                parse_mode="HTML",
+            )
+            return
+
+        await reopenTodo(todoID)
+        todo['status'] = 'pending'
+        text, keyboard = renderDetailView(todo)
+        await safeEditMessage(query.message, text, reply_markup=keyboard, parse_mode="HTML")
+        return
+
+    # ── 删除确认 ──
+    if action == 'delc':
+        todo = await getTodoByID(todoID)
+
+        if not todo or todo['user_id'] != userID:
+            await safeEditMessage(
+                query.message,
+                f"哼嗯……{userTag} 👀\n你在尝试点击是叭——\n……这条待办不存在或不属于你喵w",
+                parse_mode="HTML",
+            )
+            return
+
+        await safeEditMessage(
+            query.message,
+            f"确定要删除这条待办吗？\n\n{html.escape(todo['content'])}",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("确认删除", callback_data=f"todos:del:{todoID}"),
+                    InlineKeyboardButton("↩️ 返回", callback_data=f"todos:detail:{todoID}"),
+                ]
+            ]),
+            parse_mode="HTML",
+        )
+        return
+
+    # ── 确认后删除 ──
+    if action == 'del':
+        todo = await getTodoByID(todoID)
+
+        if not todo or todo['user_id'] != userID:
+            await safeEditMessage(
+                query.message,
+                f"哼嗯……{userTag} 👀\n你在尝试点击是叭——\n……这条待办不存在或不属于你喵w",
+                parse_mode="HTML",
+            )
+            return
+
+        await deleteTodo(todoID)
+
+        # 删除后回到列表
+        total = await getTodosCount(chatID, userID)
+        todos = await getTodos(chatID, userID, limit=TODOS_ITEMS_PER_PAGE, offset=0)
+        text, keyboard = renderListView(todos, total, 1, userName)
+        await safeEditMessage(query.message, text, reply_markup=keyboard, parse_mode="HTML")
+        return
 
 
 

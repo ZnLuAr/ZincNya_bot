@@ -159,6 +159,45 @@ from config import (
     BOOK_DESCRIPTION_MAX_LENGTH,
     BOOK_HTTP_PROXY,
 )
+from utils.core.resourceManager import getResourceManager
+
+
+# ============================================================================
+# 全局 aiohttp Session（复用连接池）
+# ============================================================================
+
+_session: Optional[aiohttp.ClientSession] = None
+_sessionLock = asyncio.Lock()
+
+
+async def _getSession() -> aiohttp.ClientSession:
+    """
+    获取全局 aiohttp Session 单例。
+
+    使用 asyncio.Lock 防止并发创建多个 Session。
+    """
+    global _session
+
+    if _session is None or _session.closed:
+        async with _sessionLock:
+            if _session is None or _session.closed:
+                timeout = aiohttp.ClientTimeout(total=BOOK_REQUEST_TIMEOUT)
+                _session = aiohttp.ClientSession(timeout=timeout)
+
+    return _session
+
+
+async def _closeSession():
+    """关闭全局 Session（由资源管理器自动调用）"""
+    global _session
+    if _session and not _session.closed:
+        await _session.close()
+        _session = None
+
+
+def registerResources():
+    """显式注册资源清理回调（由 appLifecycle 调用）"""
+    getResourceManager().register("bookSearchAPI Session", _closeSession, priority=10)
 
 
 # ============================================================================
@@ -288,9 +327,8 @@ async def searchBooks(query: str , page: int = 1 , limit: int = 5) -> dict:
     url = f"{BOOK_SEARCH_API}?q={encodedQuery}&offset={offset}&limit={limit}"
 
     try:
-        timeout = aiohttp.ClientTimeout(total=BOOK_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url , timeout=timeout , proxy=BOOK_HTTP_PROXY) as response:
+        session = await _getSession()
+        async with session.get(url , proxy=BOOK_HTTP_PROXY) as response:
                 if response.status == 422:
                     return {
                         "total": 0,
@@ -316,7 +354,7 @@ async def searchBooks(query: str , page: int = 1 , limit: int = 5) -> dict:
             "page": page,
             "totalPages": 0,
             "results": [],
-            "error": "请求超时，稍后重试喵"
+            "error": "请求超时，可能要稍后重试喵……"
         }
     except aiohttp.ClientError as e:
         return {
@@ -397,9 +435,8 @@ async def getBookDetail(workId: str) -> Optional[dict]:
     url = f"{BOOK_WORKS_API}/{workId}.json"
 
     try:
-        timeout = aiohttp.ClientTimeout(total=BOOK_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url , timeout=timeout , proxy=BOOK_HTTP_PROXY) as response:
+        session = await _getSession()
+        async with session.get(url , proxy=BOOK_HTTP_PROXY) as response:
                 if response.status != 200:
                     return None
 

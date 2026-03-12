@@ -32,11 +32,11 @@ Callback Data 格式
 
 由于 Telegram callback_data 限制 64 字节，使用以下紧凑编码：
 
-    book:l:{hash}:{page}        列表视图/翻页 (list)
+    book:list:{hash}:{page}        列表视图/翻页 (list)
         - hash: 搜索词的 MD5 短哈希（BOOK_QUERY_HASH_LENGTH 位）
         - page: 页码
 
-    book:c                      关闭/删除消息 (close)
+    book:close                      关闭/删除消息 (close)
 
 搜索词哈希机制：
     由于 callback_data 长度限制，无法存储完整搜索词。
@@ -60,8 +60,7 @@ CommandHandler("book" , handleBookCommand)
     处理 /book <query> 命令
 
 MessageHandler(filters.Regex(...) , handleBookTrigger)
-    处理 "找书 xxx" / "搜书 xxx" 触发词
-    正则: r'^(找书|搜书)\s+.+'
+    使用正则处理 "找书 xxx" / "搜书 xxx" 触发词
 
 CallbackQueryHandler(handleBookCallback , pattern=r'^book:')
     处理所有 book: 开头的回调
@@ -73,7 +72,7 @@ CallbackQueryHandler(handleBookCallback , pattern=r'^book:')
 
 handleBookCommand(update , context) -> None
 ────────────────────────────────────────
-    处理 /book 命令。
+    处理 Telegram 端的 /book 命令。
 
     流程:
         1. 从 context.args 提取搜索词
@@ -96,8 +95,8 @@ handleBookCallback(update , context) -> None
     处理按钮回调。
 
     根据 callback_data 前缀分发到对应处理逻辑：
-        - "c": 关闭（删除消息）
-        - "l": 列表视图（翻页）
+        - "close": 关闭（删除消息）
+        - "list": 列表视图（翻页）
 
 
 ================================================================================
@@ -136,18 +135,27 @@ _escapeHtml(text) -> str
 _truncate(text , maxLen) -> str
     截断文本，超长时末尾加 "…"
 
-_safeEditText(message , text , **kwargs) -> bool
+safeEditMessage(message , text , **kwargs) -> bool
     安全地编辑消息，忽略"消息未修改"错误
 
 """
 
 
+
+
 import hashlib
-from telegram.error import BadRequest
 from telegram import Update , InlineKeyboardButton , InlineKeyboardMarkup
-from telegram.ext import CommandHandler , MessageHandler , CallbackQueryHandler , ContextTypes , filters
+from telegram.ext import (
+    filters,
+    ContextTypes,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    )
 
 from utils.bookSearchAPI import searchBooks
+from utils.telegramHelpers import safeEditMessage
+from utils.core.errorDecorators import handleTelegramErrors
 from config import BOOK_ITEMS_PER_PAGE , BOOK_QUERY_HASH_LENGTH
 
 
@@ -157,30 +165,11 @@ def _hashQuery(query: str) -> str:
     """生成搜索词的短哈希"""
     return hashlib.md5(query.encode()).hexdigest()[:BOOK_QUERY_HASH_LENGTH]
 
-
-async def _safeEditText(message , text: str , **kwargs) -> bool:
-    """
-    安全地编辑消息，忽略"消息未修改"错误。
-
-    当用户快速点击按钮时，可能会触发多次编辑请求，
-    如果内容相同，Telegram 会抛出 BadRequest。
-    """
-    try:
-        await message.edit_text(text , **kwargs)
-        return True
-    except BadRequest as e:
-        if "Message is not modified" in str(e):
-            return False  # 静默忽略
-        raise  # 其他错误继续抛出
-
-
 def _truncate(text: str , maxLen: int) -> str:
     """截断文本"""
     if len(text) <= maxLen:
         return text
     return text[:maxLen - 1] + "…"
-
-
 
 
 def _escapeHtml(text: str) -> str:
@@ -189,6 +178,8 @@ def _escapeHtml(text: str) -> str:
             .replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;"))
+
+
 
 
 def _renderListView(query: str , searchResult: dict) -> tuple[str , InlineKeyboardMarkup]:
@@ -210,7 +201,7 @@ def _renderListView(query: str , searchResult: dict) -> tuple[str , InlineKeyboa
     if error:
         text = f"⚠️ 搜索出错了喵：{_escapeHtml(error)}"
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✖ 关闭" , callback_data="book:c")
+            InlineKeyboardButton("✖ 关闭" , callback_data="book:close")
         ]])
         return text , keyboard
 
@@ -218,7 +209,7 @@ def _renderListView(query: str , searchResult: dict) -> tuple[str , InlineKeyboa
     if total == 0:
         text = f"📭 没有找到「{_escapeHtml(query)}」相关的书籍喵……\n\n试试换个关键词？"
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✖ 关闭" , callback_data="book:c")
+            InlineKeyboardButton("✖ 关闭" , callback_data="book:close")
         ]])
         return text , keyboard
 
@@ -232,8 +223,8 @@ def _renderListView(query: str , searchResult: dict) -> tuple[str , InlineKeyboa
         year = book["year"] or "?"
         lang = book["language"] or "?"
 
-        # 生成 Open Library 链接
-        bookUrl = f"https://openlibrary.org/works/{book['id']}"
+        # 生成 Open Library 链接（转义 URL 中的特殊字符）
+        bookUrl = f"https://openlibrary.org/works/{_escapeHtml(book['id'])}"
 
         # 使用 HTML 超链接格式
         lines.append(f"📖 <a href=\"{bookUrl}\">{_escapeHtml(title)}</a>")
@@ -250,15 +241,15 @@ def _renderListView(query: str , searchResult: dict) -> tuple[str , InlineKeyboa
     navButtons = []
     if page > 1:
         navButtons.append(
-            InlineKeyboardButton(f"<< 上页 ({page - 1})" , callback_data=f"book:l:{queryHash}:{page - 1}")
+            InlineKeyboardButton(f"<< 上页 ({page - 1})" , callback_data=f"book:list:{queryHash}:{page - 1}")
         )
     if page < totalPages:
         navButtons.append(
-            InlineKeyboardButton(f"下页 ({page + 1}) >>" , callback_data=f"book:l:{queryHash}:{page + 1}")
+            InlineKeyboardButton(f"下页 ({page + 1}) >>" , callback_data=f"book:list:{queryHash}:{page + 1}")
         )
 
     # 关闭按钮
-    closeButton = [InlineKeyboardButton("✖ 取消搜索喵" , callback_data="book:c")]
+    closeButton = [InlineKeyboardButton("❌ 取消搜索喵" , callback_data="book:close")]
 
     # 组装键盘
     keyboard_rows = []
@@ -273,6 +264,7 @@ def _renderListView(query: str , searchResult: dict) -> tuple[str , InlineKeyboa
 
 
 
+@handleTelegramErrors(errorReply="啊、搜索出错了……请稍后再试喵")
 async def handleBookCommand(update: Update , context: ContextTypes.DEFAULT_TYPE):
     """处理 /book <query> 命令"""
 
@@ -285,7 +277,7 @@ async def handleBookCommand(update: Update , context: ContextTypes.DEFAULT_TYPE)
             "例如：\n"
             "  /book 堂吉诃德 \n"
             "  /book Marcel Proust \n"
-            "  /bookerta Python"
+            "  /book Python"
             "\n\n"
             "Open Library 作为以英文为主的数据库，\n"
             "用英文作者名/书名搜索效果可能会更好哦——"
@@ -306,6 +298,7 @@ async def handleBookCommand(update: Update , context: ContextTypes.DEFAULT_TYPE)
 
 
 
+@handleTelegramErrors(errorReply="啊、搜索出错了……请稍后再试喵")
 async def handleBookTrigger(update: Update , context: ContextTypes.DEFAULT_TYPE):
     """处理 "找书 xxx" / "搜书 xxx" 触发词"""
 
@@ -330,6 +323,7 @@ async def handleBookTrigger(update: Update , context: ContextTypes.DEFAULT_TYPE)
 
 
 
+@handleTelegramErrors(errorReply="啊、搜索出错了……请稍后再试喵")
 async def handleBookCallback(update: Update , context: ContextTypes.DEFAULT_TYPE):
     """处理按钮回调"""
 
@@ -346,20 +340,24 @@ async def handleBookCallback(update: Update , context: ContextTypes.DEFAULT_TYPE
     action = parts[1]
 
     # ========== 关闭 ==========
-    if action == "c":
+    if action == "close":
         await query.message.delete()
         return
 
     # ========== 列表视图 (翻页) ==========
-    if action == "l" and len(parts) >= 4:
+    if action == "list" and len(parts) >= 4:
         queryHash = parts[2]
-        page = int(parts[3])
+        try:
+            page = int(parts[3])
+        except ValueError:
+            await safeEditMessage(query.message, "👀 无效的页码喵")
+            return
 
         # 从 user_data 获取搜索词
         query_text = context.user_data.get(f"book_query_{queryHash}" , "")
 
         if not query_text:
-            await _safeEditText(query.message , "⚠️ 搜索已过期，请重新搜索喵")
+            await safeEditMessage(query.message , "搜索已过期，请重新搜索喵……？")
             return
 
         # 重新搜索
@@ -367,7 +365,7 @@ async def handleBookCallback(update: Update , context: ContextTypes.DEFAULT_TYPE
 
         # 渲染并更新消息
         text , keyboard = _renderListView(query_text , result)
-        await _safeEditText(query.message , text , reply_markup=keyboard , parse_mode="HTML")
+        await safeEditMessage(query.message , text , reply_markup=keyboard , parse_mode="HTML")
         return
 
 

@@ -172,7 +172,7 @@ def _sanitizeChatID(chatID: str) -> str:
 
 async def _previewChat(chatID: str, limit: int):
     """预览指定会话的最近 N 条消息"""
-    total = getMessageCount(chatID)
+    total = await getMessageCount(chatID)
 
     if total == 0:
         print(f"（Chat {chatID} 暂无任何聊天记录喵……）\n")
@@ -208,7 +208,7 @@ async def _previewChat(chatID: str, limit: int):
 
 async def _exportChat(chatID: str):
     """将指定会话导出为 txt 文件"""
-    total = getMessageCount(chatID)
+    total = await getMessageCount(chatID)
 
     if total == 0:
         await logSystemEvent(
@@ -318,7 +318,7 @@ async def _writeExportFile(filepath: str, chatID: str, messages: list) -> bool:
     """
     try:
         with open(filepath, "w", encoding="utf-8") as f:
-            f.write(f"ZincNya Bot — 聊天记录导出\n")
+            f.write(f"—— 聊天记录导出 ——\n")
             f.write(f"Chat ID : {chatID}\n")
             f.write(f"导出时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"消息总数: {len(messages)} 条\n")

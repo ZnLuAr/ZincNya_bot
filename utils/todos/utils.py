@@ -23,6 +23,8 @@ formatRemindTime(dt) -> str
 """
 
 
+
+
 import re
 import sys
 from io import StringIO
@@ -31,17 +33,15 @@ from datetime import datetime, timedelta
 
 # jionlp 在 import 时会 print 广告，临时压制
 _stdout = sys.stdout
-sys.stdout = StringIO()
-import jionlp as jio
-sys.stdout = _stdout
-del _stdout
+try:
+    sys.stdout = StringIO()
+    import jionlp as jio
+finally:
+    sys.stdout = _stdout
+    del _stdout
 
 
 
-
-# ============================================================================
-# 常量
-# ============================================================================
 
 PRIORITY_EMOJI = {
     'P0': '🔴', 'P1': '🟠', 'P2': '🟡', 'P3': '🟢', 'P_': '⚪',
@@ -69,6 +69,8 @@ def parseTime(text: str) -> tuple[datetime | None, str]:
         明天9:00 / 下午3点       自然语言+时刻（jionlp）
 
     无法识别时返回 (None, text) 原文不变。
+
+    为防止 DoS，限制扫描前 100 个字符。
     """
     # 先识别英文简写相对时间：2h, 30m, 1d（仅开头）
     # (?![a-zA-Z]) 确保 "2hours" 不匹配，同时允许后接中文或空格
@@ -91,11 +93,18 @@ def parseTime(text: str) -> tuple[datetime | None, str]:
     #   - 内层循环从文本末尾缩短，找该起点的最长 strict 时间前缀
     #   - 找到最靠前的有效起点即停止
     # 时间表达式剔出后，将前后剩余文本拼接为 remaining。
+    #
+    # 限制扫描前 100 个字符，防止 DoS
+    # 中文时间表达式通常不超过 30 字符（如 "后天下午三点半"）
+    # 限制内层循环长度，将复杂度从 O(n²) 降为 O(n × maxLen)
+    scanLimit = min(len(text), 100)
+    maxTimeExprLen = 30
     base = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     _tp = jio.TimeParser()
 
-    for start in range(len(text)):
-        for end in range(len(text), start, -1):
+    for start in range(scanLimit):
+        maxEnd = min(start + maxTimeExprLen, scanLimit)
+        for end in range(maxEnd, start, -1):
             sub = text[start:end]
             try:
                 result = _tp(sub, time_base=base, strict=True)
@@ -141,7 +150,11 @@ def parsePriority(text: str) -> tuple[str, str]:
 # ============================================================================
 
 def formatRemindTime(dt: datetime) -> str:
-    """格式化提醒时间为友好显示"""
+    """
+    格式化提醒时间为友好显示
+
+    注意：所有时间均为本地时间（系统时区）
+    """
     now = datetime.now()
     today = now.date()
     tomorrow = today + timedelta(days=1)

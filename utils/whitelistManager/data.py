@@ -1,21 +1,28 @@
 """
 白名单数据层
 
-IO 操作与业务逻辑：ensure/load/save、权限检查、CRUD 操作
+IO 操作与业务逻辑：ensure/load/save、权限检查、CRUD 操作、/start 鉴权与通知
 """
 
 import os
 import json
+import time
 from typing import Optional
 
-from config import WHITELIST_DIR
+from config import WHITELIST_PATH, Permission
 from utils.logger import logAction, LogLevel, LogChildType
+from utils.operators import getOperatorsWithPermission
+
+
+# /start 通知冷却：同一用户 10 分钟内只通知一次
+_NOTIFY_COOLDOWN = 600
+_lastNotifyTime: dict[str, float] = {}
 
 
 def ensureWhitelistFile():
-    os.makedirs(os.path.dirname(WHITELIST_DIR) , exist_ok=True)
-    if not os.path.exists(WHITELIST_DIR):
-        with open(WHITELIST_DIR , "w" , encoding="utf-8") as f:
+    os.makedirs(os.path.dirname(WHITELIST_PATH) , exist_ok=True)
+    if not os.path.exists(WHITELIST_PATH):
+        with open(WHITELIST_PATH , "w" , encoding="utf-8") as f:
             json.dump({"allowed": {} , "suspended": {}} , f , ensure_ascii=False , indent=2)
 
 
@@ -102,11 +109,28 @@ async def handleStart(update , context):
     name = f"{user.first_name} {user.last_name or ''}".strip()
 
     if not whetherAuthorizedUser(userID):
-        print ("ご、ご主人様——")
+        # 冷却期内不重复通知 operator（防止刷 /start 轰炸）
+        now = time.monotonic()
+        lastTime = _lastNotifyTime.get(userID, 0)
+
+        if now - lastTime > _NOTIFY_COOLDOWN:
+            _lastNotifyTime[userID] = now
+            notifyText = (
+                f"有不认识的人碰到锌酱了喵——\n\n"
+                f"用户：{name}\n"
+                f"用户名：@{userName}\n"
+                f"ID：{userID}"
+            )
+            for opID in getOperatorsWithPermission(Permission.NOTIFY):
+                try:
+                    await context.bot.send_message(chat_id=int(opID), text=notifyText)
+                except Exception:
+                    pass
+
         await logAction(
             update.effective_user,
-            "有不认识的人尝试访问咱了……",
-            f"直接拒绝喵：{name}(@{userName} / ID：{userID})",
+            "未授权访问",
+            f"{name}(@{userName} / {userID})",
             LogLevel.WARNING,
             LogChildType.WITH_ONE_CHILD
         )

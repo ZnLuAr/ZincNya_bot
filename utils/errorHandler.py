@@ -109,6 +109,7 @@ telegram API 错误（使用 isinstance 判断）：
 import os
 import sys
 import logging
+import threading
 import traceback
 from datetime import datetime
 from typing import Optional
@@ -145,6 +146,7 @@ class ErrorHandler:
     def __init__(self):
         self.errorCounts = defaultdict(int)  # 错误计数（按类型+消息）
         self.lastErrorDate = None            # 上次错误的日期（用于重置计数）
+        self._lock = threading.Lock()        # 保护计数器的线程锁
 
 
     def initialize(self, app=None):
@@ -205,17 +207,18 @@ class ErrorHandler:
             exception: 原始异常对象（用于获取 traceback）
             context: 额外的上下文信息
         """
-        self.resetDailyCountsIfNeeded()
+        with self._lock:
+            self.resetDailyCountsIfNeeded()
 
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        errorKey = self.getErrorKey(errorType, message)
-        self.errorCounts[errorKey] += 1
-        count = self.errorCounts[errorKey]
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            errorKey = self.getErrorKey(errorType, message)
+            self.errorCounts[errorKey] += 1
+            count = self.errorCounts[errorKey]
 
-        # 终端显示简洁摘要
+        # 终端显示简洁摘要（在锁外执行 I/O）
         shortMessage = message[:60] + "..." if len(message) > 60 else message
         if count > 1:
-            print(f"记录了 {errorType}: {shortMessage} 喵 (今日第 {count} 次喵)")
+            print(f"记录了 {errorType}: {shortMessage} 喵 (今日第 {count} 次喵)\n")
         else:
             print(
                 f"[{timestamp}] @锌酱：刚刚发生了错误喵\n"
@@ -434,6 +437,11 @@ errorHandler = ErrorHandler()
 def initErrorHandler(app=None):
     """初始化错误处理系统"""
     errorHandler.initialize(app)
+
+
+def getErrorHandler() -> ErrorHandler:
+    """获取全局错误处理器单例"""
+    return errorHandler
 
 
 def logError(errorType: str , message: str , exception=None , context=None):

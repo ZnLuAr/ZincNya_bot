@@ -83,8 +83,8 @@ python bot.py
 ```
 ZincNya_bot/
 ├── bot.py                      # Bot 主程序
-├── config.py                   # 配置文件
-├── loader.py                   # 功能加载器
+├── config.py                   # 配置与常量
+├── loader.py                   # Handler 动态加载器
 ├── .env                        # 环境变量（不会被提交到 git）
 ├── .env.example                # 环境变量模板
 ├── requirements.txt            # Python 依赖
@@ -95,13 +95,15 @@ ZincNya_bot/
 │   ├── chatHistory.db          # 加密聊天记录（不会被提交）
 │   ├── .chatKey                # 聊天记录加密密钥（不会被提交）
 │   ├── todos.db                # 待办事项数据库（不会被提交）
+│   ├── pushedNews.json         # 已推送新闻记录（不会被提交）
 │   └── ZincNyaQuotes.json      # 语录数据喵
 │
 ├── ffmpeg/                     # FFmpeg 可执行文件
 │   └── README.md               # FFmpeg 配置说明
 │
 ├── handlers/                   # Telegram 消息处理器
-│   ├── cli.py                  # 控制台命令处理
+│   ├── cli.py                  # 控制台命令路由
+│   ├── start.py                # /start 白名单鉴权与欢迎
 │   ├── stickers.py             # 表情包搜索与下载
 │   ├── nya.py                  # /nya 语录功能
 │   ├── book.py                 # /book 书籍搜索
@@ -121,7 +123,12 @@ ZincNya_bot/
 │   │   └── shutdown.py         # /shutdown 关闭
 │   │
 │   ├── core/                   # 核心基础设施
+│   │   ├── appLifecycle.py     # 应用生命周期（构建、启动、停止、重启）
+│   │   ├── consoleListener.py  # 控制台命令监听器
+│   │   ├── database.py         # SQLite 数据库封装（WAL、连接管理）
+│   │   ├── errorDecorators.py  # 统一错误处理装饰器
 │   │   ├── fileCache.py        # 文件缓存系统（TTL + 修改检测）
+│   │   ├── resourceManager.py  # 资源清理管理器（退出时回调）
 │   │   ├── stateManager.py     # 全局状态管理器
 │   │   └── tuiBase.py          # TUI 控制器基类
 │   │
@@ -133,7 +140,7 @@ ZincNya_bot/
 │   │   └── reminder.py         # 后台提醒循环
 │   │
 │   ├── whitelistManager/       # 白名单管理模块
-│   │   ├── data.py             # 数据层（IO + 业务逻辑）
+│   │   ├── data.py             # 数据层（IO + 业务逻辑 + /start 处理）
 │   │   └── ui.py               # UI 层（ViewModel + TUI）
 │   │
 │   ├── nyaQuoteManager/        # 语录管理模块
@@ -145,6 +152,7 @@ ZincNya_bot/
 │   ├── newsAPI.py              # 新闻抓取 API 封装（先咕着喵）
 │   ├── downloader.py           # 表情包下载与格式转换
 │   ├── operators.py            # Operators 权限管理
+│   ├── telegramHelpers.py      # Telegram 消息操作工具
 │   ├── fileEditor.py           # TUI 文本编辑器
 │   ├── terminalUI.py           # 终端 UI 工具（备用屏幕、ANSI）
 │   ├── errorHandler.py         # 错误处理与日志
@@ -184,6 +192,7 @@ ZincNya_bot/
 
 | 命令 | 说明 |
 |------|------|
+| `/start` | 白名单鉴权与欢迎 |
 | `/findsticker` | 搜索和下载表情包 |
 | `/book <关键词>` | 搜索书籍 |
 | `/nya` | 获取一条随机语录 |
@@ -199,6 +208,15 @@ ZincNya_bot/
 | `@bot 关机` | 通过 @ 提及触发关机 |
 | `@bot 重启` | 通过 @ 提及触发重启 |
 | `@bot 运行状态` | 通过 @ 提及查看状态 |
+
+Operator 权限位（在 `operators.json` 中配置）：
+
+| 权限 | 说明 |
+|------|------|
+| `shutdown` | 允许远程关机 |
+| `restart` | 允许远程重启 |
+| `status` | 允许查看运行状态 |
+| `notify` | 接收未授权用户访问通知 |
 
 想知道更详细的用法，就输入 `/help <command>` 喵！
 
@@ -226,7 +244,10 @@ ZincNya_bot/
 - `data/operators.json` - 管理员权限配置喵
 - `data/chatHistory.db` - 加密的聊天记录喵
 - `data/.chatKey` - 聊天记录加密密钥喵
+- `data/todos.db` - 待办事项数据库喵
+- `data/pushedNews.json` - 已推送新闻记录喵
 - `data/chatExport/` - 导出的聊天记录喵
+- `data/chatBackup/` - 聊天记录自动归档喵
 
 第一次部署的时候需要手动创建 `.env` 文件，
 其他数据文件会在使用时自动生成喵——
