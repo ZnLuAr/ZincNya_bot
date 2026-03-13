@@ -100,19 +100,34 @@ def setup_windows():
 def setup_linux():
     """Linux 平台配置"""
     print("\n检测到 Linux 平台")
-    print("\n推荐使用系统包管理器安装 FFmpeg：")
-    print("  Debian/Ubuntu: sudo apt install ffmpeg")
-    print("  Fedora:        sudo dnf install ffmpeg")
-    print("  Arch:          sudo pacman -S ffmpeg")
 
-    response = input("\n是否使用系统包管理器安装？(y/n): ").strip().lower()
+    url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
 
-    if response == 'y':
-        print("\n请在终端中运行相应的安装命令。")
+    temp_tar = PROJECT_ROOT / "temp_ffmpeg.tar.xz"
+
+    if not download_file(url, temp_tar):
+        return False
+
+    print("\n正在解压文件...")
+    try:
+        with tarfile.open(temp_tar, 'r:xz') as tar:
+            for member in tar.getmembers():
+                if member.name.endswith("bin/ffmpeg") and not member.isdir():
+                    member.name = "ffmpeg"
+                    tar.extract(member, FFMPEG_DIR)
+                    target = FFMPEG_DIR / "ffmpeg"
+                    target.chmod(0o755)
+                    print(f"✓ 已提取：{target}")
+                    break
+
+        temp_tar.unlink()
+        print("✓ 清理完成")
         return True
-    else:
-        print("\n如需手动下载静态构建版本，请访问：")
-        print("https://johnvansickle.com/ffmpeg/")
+
+    except Exception as e:
+        print(f"❌ 解压失败：{e}")
+        if temp_tar.exists():
+            temp_tar.unlink()
         return False
 
 

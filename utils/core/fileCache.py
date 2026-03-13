@@ -172,29 +172,34 @@ class CachedFile(Generic[T]):
 # ============================================================================
 
 def _loadJson(filePath: str) -> dict | list:
-    """通用 JSON 加载函数"""
+    """通用 JSON 加载函数（EAFP 模式，避免 TOCTOU）"""
     # 确保父目录存在
     parentDir = os.path.dirname(filePath)
     if parentDir:
         os.makedirs(parentDir, exist_ok=True)
 
-    # 如果文件不存在，返回空结构
-    if not os.path.exists(filePath):
+    # 直接尝试打开，文件不存在时返回空结构
+    try:
+        with open(filePath, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
         return {}
-
-    with open(filePath, 'r', encoding='utf-8') as f:
-        return json.load(f)
 
 
 def _saveJson(filePath: str, data: dict | list):
-    """通用 JSON 保存函数"""
+    """通用 JSON 保存函数（原子写入，防止中途崩溃导致文件损坏）"""
     # 确保父目录存在
     parentDir = os.path.dirname(filePath)
     if parentDir:
         os.makedirs(parentDir, exist_ok=True)
 
-    with open(filePath, 'w', encoding='utf-8') as f:
+    # 先写入临时文件，再原子替换
+    tmpPath = filePath + ".tmp"
+    with open(tmpPath, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmpPath, filePath)
 
 
 
