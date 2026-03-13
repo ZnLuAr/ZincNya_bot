@@ -138,20 +138,22 @@ def quoteUIRenderer(entries: List[dict] , selectedIndex: int = -1 , addRowOffset
 async def editQuoteViaEditor(initialTextEscaped: str , initialWeight: float = 1.0) -> Optional[Tuple[str, float]]:
     initialText = initialTextEscaped.replace("\\n", "\n")
 
-    with tempfile.NamedTemporaryFile("w+" , delete=False , suffix=".tmp" , encoding="utf-8") as tf:
-        tempPath = tf.name
-        tf.write(f"# weight: {initialWeight}\n")
-        tf.write(initialText)
+    tempPath: Optional[str] = None
+    try:
+        with tempfile.NamedTemporaryFile("w+" , delete=False , suffix=".tmp" , encoding="utf-8") as tf:
+            tempPath = tf.name
+            tf.write(f"# weight: {initialWeight}\n")
+            tf.write(initialText)
 
-    saved = await editFile(tempPath)
-    if not saved:
-        os.unlink(tempPath)
-        return None
+        saved = await editFile(tempPath)
+        if not saved:
+            return None
 
-    with open(tempPath , "r" , encoding="utf-8") as f:
-        lines = f.read().splitlines()
-
-    os.unlink(tempPath)
+        with open(tempPath , "r" , encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    finally:
+        if tempPath and os.path.exists(tempPath):
+            os.unlink(tempPath)
 
     if not lines:
         return None
