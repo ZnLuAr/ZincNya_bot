@@ -134,6 +134,9 @@ FFmpeg 路径：
     - Linux/macOS: ffmpeg/ffmpeg
 """
 
+
+
+
 import os
 import re
 import sys
@@ -152,6 +155,7 @@ from config import (
     PROJECT_ROOT,                   # 项目根目录
     DOWNLOAD_DIR                    # 下载目录
 )
+
 
 
 
@@ -181,12 +185,39 @@ def _getSemaphore():
     return _downloadSemaphore
 
 
+_activeGifJobs: int = 0  # 当前正在处理的 GIF 任务数（asyncio 单线程，无需锁）
+
+def getActiveGifJobs() -> int:
+    """获取当前正在处理的 GIF 任务数（createStickerZip 粒度）"""
+    return _activeGifJobs
+
+
 
 
 
 # 下载并打包完整表情包，之后的发送消息交给 /handlers/stickers.py
 # 这是 utils/downloader.py 的主入口，下载并打包整个表情包
 async def createStickerZip(
+        bot,
+        stickerSet,
+        setName,
+        stickerSuffix,
+        outputDir=None
+    ):
+
+    global _activeGifJobs
+    if stickerSuffix == "gif":
+        _activeGifJobs += 1
+    try:
+        return await _createStickerZipImpl(bot, stickerSet, setName, stickerSuffix, outputDir)
+    finally:
+        if stickerSuffix == "gif":
+            _activeGifJobs -= 1
+
+
+
+
+async def _createStickerZipImpl(
         bot,
         stickerSet,
         setName,
@@ -310,7 +341,10 @@ async def convertToGif(rawInputPath: str) -> str:
     # .tgs 是 Telegram Lottie 动画格式，FFmpeg 不直接支持
     # 暂时抛出友好的错误提示
     if ext == ".tgs":
-        raise ValueError(f"暂不支持将 .tgs 格式转换为 GIF 喵……\n这是 Lottie 动画格式，需要特殊处理……")
+        raise ValueError(
+            f"现在还不支持将 .tgs 格式转换为 GIF 喵……\n"
+            "这是杜叔叔的 Lottie 动画格式，需要特殊处理"
+            )
 
     if ext not in [".webp" , ".webm"]:
         raise ValueError(f"不支持的格式喵：{ext}")

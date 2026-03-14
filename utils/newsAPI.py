@@ -21,6 +21,9 @@ utils/newsAPI.py
 """
 
 
+
+
+import html
 import json
 import asyncio
 import aiohttp
@@ -48,6 +51,8 @@ from utils.core.errorDecorators import handleErrors
 
 _session: Optional[aiohttp.ClientSession] = None
 _sessionLock = asyncio.Lock()
+
+
 
 
 async def _getSession() -> aiohttp.ClientSession:
@@ -192,10 +197,10 @@ async def pushToTelegram(bot: Bot, chat_id: str, article: NewsArticle) -> bool:
         是否推送成功
     """
     # 构建消息内容（使用 HTML 解析模式，避免用户内容中的 *_` 导致解析失败）
-    caption = f"<b>{article.title}</b>"
+    caption = f"<b>{html.escape(article.title)}</b>"
     if article.summary:
-        caption += f"\n\n{article.summary}"
-    caption += f'\n\n<a href="{article.url}">阅读原文</a>'
+        caption += f"\n\n{html.escape(article.summary)}"
+    caption += f'\n\n<a href="{html.escape(article.url, quote=True)}">阅读原文</a>'
 
     try:
         cover_data = b""

@@ -44,6 +44,8 @@ DELETE_DELAY = 360              # 表情包相关信息 6 分钟后删除
 MAX_CONCURRENT_DOWNLOADS = 5    # 最大并发下载 Stickers 数量
 MAX_DOWNLOADS_ATTEMPTS = 3      # 最大尝试下载次数
 MAX_GIF_FPS = 24                # 下载的最大 gif 帧数
+GIF_QUEUE_ALERT_THRESHOLD = 2   # GIF 任务数达到此值时告警
+GIF_ALERT_COOLDOWN = 300        # operator 告警冷却（秒）
 DEFAULT_READ_TIMEOUT = 300      # 请求发出后，等待返回响应的超时缓冲区 (秒)
 DEFAULT_WRITE_TIMEOUT = 60      # 将请求上传至 Telegram 请求体的超时缓冲区（秒）
 
