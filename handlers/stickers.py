@@ -10,14 +10,18 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from utils.downloader import createStickerZip, deleteLater
+from utils.operators import getOperatorsWithPermission
 from utils.logger import logAction, LogLevel, LogChildType
 from utils.core.errorDecorators import handleTelegramErrors
+from utils.downloader import createStickerZip, deleteLater, getActiveGifJobs
 from config import (
     CACHE_TTL,
     DELETE_DELAY,
     DEFAULT_READ_TIMEOUT,
     DEFAULT_WRITE_TIMEOUT,
+    GIF_QUEUE_ALERT_THRESHOLD,
+    GIF_ALERT_COOLDOWN,
+    Permission,
 )
 
 
@@ -30,6 +34,8 @@ from config import (
 _MAX_STICKER_CACHE = 50
 _stickerCache: dict[str, tuple[Any, float]] = {}
 _stickerLock = threading.RLock()
+
+_lastGifAlertTime: float = 0.0  # GIF 过载告警时间戳（防告警风暴）
 
 
 def getCachedSticker(setName: str) -> Optional[Any]:
@@ -67,7 +73,7 @@ def setCachedSticker(setName: str, stickerSet: Any):
 
 
 
-@handleTelegramErrors(errorReply="诶……？动不了身去找……")
+@handleTelegramErrors(errorReply="诶……？被缠住了……没法动身去找……")
 async def findSticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await logAction(
@@ -221,10 +227,33 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 开始下载
     stickerSuffix = action
 
+    # GIF 过载检测与告警
+    gifQueueNote = ""
+    if stickerSuffix == "gif":
+        activeJobs = getActiveGifJobs()
+        if activeJobs >= GIF_QUEUE_ALERT_THRESHOLD:
+            gifQueueNote = (
+                f"\n\n啊、堆起来了……\n"
+                f"目前有 {activeJobs} 个 GIF 任务正在进行，\n"
+                "可能需要等一会儿哦……💦"
+                )
+            global _lastGifAlertTime
+            nowAlert = time.monotonic()
+            if (nowAlert - _lastGifAlertTime) > GIF_ALERT_COOLDOWN:
+                _lastGifAlertTime = nowAlert
+                alertText = f"⚠️ GIF 转换队列堆积，当前有 {activeJobs} 个任务正在进行"
+                for opID in getOperatorsWithPermission(Permission.NOTIFY):
+                    try:
+                        await context.bot.send_message(chat_id=int(opID), text=alertText)
+                    except Exception:
+                        pass
+
+
     await query.edit_message_text(
         f"收到——\n"
         f"表情包 {stickerSet.title}，\n"
         f"现在就给 @{query.from_user.username or query.from_user.first_name}下载喵……"
+        + gifQueueNote
     )
     await logAction(
         query.from_user,
@@ -233,6 +262,7 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         LogLevel.INFO,
         LogChildType.WITH_CHILD
     )
+
 
     zipPath = None
     try:
@@ -268,6 +298,7 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(
             deleteLater(context, sent.chat_id, sent.message_id, zipPath, DELETE_DELAY)
         )
+
 
     except Exception as e:
         await query.edit_message_text(

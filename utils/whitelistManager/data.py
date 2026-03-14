@@ -10,13 +10,16 @@ import time
 from typing import Optional
 
 from config import WHITELIST_PATH, Permission
-from utils.logger import logAction, LogLevel, LogChildType
 from utils.operators import getOperatorsWithPermission
+from utils.logger import logAction, LogLevel, LogChildType
 
 
 # /start 通知冷却：同一用户 10 分钟内只通知一次
 _NOTIFY_COOLDOWN = 600
+_MAX_NOTIFY_CACHE = 4096    # 安全上限，正常情况不触发
 _lastNotifyTime: dict[str, float] = {}
+
+
 
 
 def ensureWhitelistFile():
@@ -114,6 +117,13 @@ async def handleStart(update , context):
         lastTime = _lastNotifyTime.get(userID, 0)
 
         if now - lastTime > _NOTIFY_COOLDOWN:
+            # 清理过期条目（语义上等同于"从未记录"，删除后若再触发会正确重新通知）
+            expired = [k for k, t in _lastNotifyTime.items() if now - t > _NOTIFY_COOLDOWN]
+            for k in expired:
+                del _lastNotifyTime[k]
+            # 安全上限兜底（正常情况不触发）
+            if len(_lastNotifyTime) >= _MAX_NOTIFY_CACHE:
+                del _lastNotifyTime[next(iter(_lastNotifyTime))]
             _lastNotifyTime[userID] = now
             notifyText = (
                 f"有不认识的人碰到锌酱了喵——\n\n"

@@ -16,7 +16,7 @@ from rich.console import Console
 from utils.fileEditor import editFile
 from utils.terminalUI import cls, smcup, rmcup
 from utils.core.tuiBase import BaseTUIController
-from .data import loadQuoteFile , saveQuoteFile , userOperation
+from .data import loadQuoteFile , userOperation
 
 
 
@@ -135,14 +135,20 @@ def quoteUIRenderer(entries: List[dict] , selectedIndex: int = -1 , addRowOffset
 
 
 
-async def editQuoteViaEditor(initialTextEscaped: str , initialWeight: float = 1.0) -> Optional[Tuple[str, float]]:
+async def editQuoteViaEditor(initialTextEscaped: str , initialWeight = 1.0) -> Optional[Tuple[str, object]]:
     initialText = initialTextEscaped.replace("\\n", "\n")
+
+    # 将 weight 序列化为逗号分隔字符串，list 与消息条数一一对应
+    if isinstance(initialWeight, list):
+        weightStr = ", ".join(str(w) for w in initialWeight)
+    else:
+        weightStr = str(initialWeight)
 
     tempPath: Optional[str] = None
     try:
         with tempfile.NamedTemporaryFile("w+" , delete=False , suffix=".tmp" , encoding="utf-8") as tf:
             tempPath = tf.name
-            tf.write(f"# weight: {initialWeight}\n")
+            tf.write(f"# weight: {weightStr}\n")
             tf.write(initialText)
 
         saved = await editFile(tempPath)
@@ -163,10 +169,14 @@ async def editQuoteViaEditor(initialTextEscaped: str , initialWeight: float = 1.
 
     bodyLines = lines
     if firstLine.startswith("# weight:"):
+        raw = firstLine[len("# weight:"):].strip()
+        parts = [p.strip() for p in raw.split(",")]
         try:
-            weight = float(firstLine[len("# weight:"):].strip())
-        except:
-            weight = 1.0
+            parsed = [float(p) for p in parts if p]
+        except ValueError:
+            parsed = [1.0]
+        # 只有一个值时退化为 float，保持与旧数据兼容
+        weight = parsed[0] if len(parsed) == 1 else parsed
         bodyLines = lines[1:]
 
     body = "\n".join(bodyLines)
@@ -247,7 +257,7 @@ class QuoteTUIController(BaseTUIController):
             except ValueError:
                 return True
 
-            res = await editQuoteViaEditor(raw.get("text", ""), _extractBaseWeight(raw.get("weight", 1.0)))
+            res = await editQuoteViaEditor(raw.get("text", ""), raw.get("weight", 1.0))
             if res:
                 newT, newW = res
                 userOperation("set", index=idx, payload={"text": newT, "weight": newW})

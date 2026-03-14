@@ -56,7 +56,6 @@ Callback Data 格式
 
 import html
 from collections import OrderedDict
-
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -70,8 +69,6 @@ from utils.core.errorDecorators import handleTelegramErrors
 from config import TODOS_ITEMS_PER_PAGE, TODOS_CONTENT_MAX_LENGTH
 from utils.todos.tgRender import preview, renderListView, renderDetailView
 from utils.todos.utils import parseTime, parsePriority, PRIORITY_EMOJI, formatRemindTime
-
-
 
 
 # 记录每个用户最后一条 /todos 列表消息，用于防刷屏
@@ -88,7 +85,7 @@ _lastQueryMessages: OrderedDict[tuple[str, str], int] = OrderedDict()
 # 命令处理
 # ============================================================================
 
-@handleTelegramErrors(errorReply="……有、有畸形的待办数据朝咱直冲过来喵……！")
+@handleTelegramErrors(errorReply="……有、有畸形的待办数据朝咱直冲过来喵！")
 async def handleTodosCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /todos 命令"""
 
@@ -283,6 +280,9 @@ async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
         newPriority = parts[3]
+        if newPriority not in PRIORITY_EMOJI:
+            await safeEditMessage(query.message, "无效的优先级喵", parse_mode="HTML")
+            return
         todo = await getTodoByID(todoID)
 
         if not todo or todo['user_id'] != userID:
