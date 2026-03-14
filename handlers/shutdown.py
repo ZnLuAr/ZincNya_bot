@@ -46,7 +46,7 @@ async def shutdown(update: Update , _: ContextTypes.DEFAULT_TYPE):
         childType=LogChildType.WITH_ONE_CHILD
     )
 
-    await update.message.reply_text("……瞼を閉じました……=  =")
+    await update.message.reply_text("现在就关机喵——\n……瞼を閉じました……=  =")
 
     # 通知 bot.py ，高雅不堪地关机
     getStateManager().requestShutdown()
@@ -69,7 +69,7 @@ async def restart(update: Update , _: ContextTypes.DEFAULT_TYPE):
         childType=LogChildType.WITH_ONE_CHILD
     )
 
-    await update.message.reply_text("……瞼を閉じました……=  =")
+    await update.message.reply_text("现在就重启喵——\n……瞼を閉じました……=  =")
 
     # 通知 bot.py 进行高雅不堪的关机后重启
     getStateManager().requestRestart()

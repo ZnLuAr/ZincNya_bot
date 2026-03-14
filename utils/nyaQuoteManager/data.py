@@ -136,9 +136,10 @@ def userOperation(operation: str , index:Optional[int]=None , payload:Optional[d
         case "add":
             if not isinstance(payload , dict) or "text" not in payload:
                 return False
+            w = payload.get("weight", 1.0)
             quotes.append({
                 "text": payload["text"],
-                "weight": float(payload.get("weight" , 1.0)),
+                "weight": [float(x) for x in w] if isinstance(w, list) else float(w),
             })
             saveQuoteFile(quotes)
             return True
