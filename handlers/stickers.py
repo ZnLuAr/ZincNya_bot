@@ -13,7 +13,7 @@ from telegram.ext import (
 from utils.operators import getOperatorsWithPermission
 from utils.logger import logAction, LogLevel, LogChildType
 from utils.core.errorDecorators import handleTelegramErrors
-from utils.downloader import createStickerZip, deleteLater, getActiveGifJobs
+from utils.downloader import createStickerZip, deleteMessageLater, registerFileCleanup, getActiveGifJobs
 from config import (
     CACHE_TTL,
     DELETE_DELAY,
@@ -157,9 +157,9 @@ async def findSticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     sent = await update.message.reply_text(text , reply_markup=keyboardFoundSticker)
 
-    # 发出 DELETE_DELAY(秒) 后删除
+    # 发出 DELETE_DELAY(秒) 后删除消息
     asyncio.create_task(
-        deleteLater(context , sent.chat_id , sent.message_id , None , DELETE_DELAY)
+        deleteMessageLater(context, sent.chat_id, sent.message_id, DELETE_DELAY)
     )
 
 
@@ -294,9 +294,11 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
             LogChildType.LAST_CHILD_WITH_CHILD
         )
 
-        # 延时后删除相关信息
+        # 文件清理注册到 resourceManager（关机时保证执行）
+        registerFileCleanup(zipPath)
+        # 消息延时删除
         asyncio.create_task(
-            deleteLater(context, sent.chat_id, sent.message_id, zipPath, DELETE_DELAY)
+            deleteMessageLater(context, sent.chat_id, sent.message_id, DELETE_DELAY)
         )
 
 
