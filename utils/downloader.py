@@ -322,7 +322,7 @@ async def downloadEachOne(bot , fileID , outPath , stickerSuffix="webp"):
             except (TelegramError , NetworkError , OSError) as e:
                 if attempt < MAX_DOWNLOADS_ATTEMPTS:
                     # 指数级退避等待，防止 Tg API 限速
-                    await asyncio.sleep(MAX_DOWNLOADS_ATTEMPTS * attempt)
+                    await asyncio.sleep(2 ** attempt)
                 else:
                     return {"ok": False , "error": str(e)}
 
@@ -448,6 +448,12 @@ async def convertToGif(rawInputPath: str) -> str:
 
 # 在180秒后清除相关信息，防止刷屏
 async def deleteLater(context, chatId, messageId, filePath, deleteDelay):
+    """
+    延时删除消息和文件（旧接口，保留向后兼容）
+
+    注意：此函数将文件删除和消息删除耦合在一起。
+    推荐使用 registerFileCleanup() + deleteMessageLater() 分离处理。
+    """
     await asyncio.sleep(deleteDelay)
     try:
        await context.bot.delete_message(chatId, message_id=messageId)
@@ -460,3 +466,36 @@ async def deleteLater(context, chatId, messageId, filePath, deleteDelay):
                 os.remove(filePath)
         except Exception:
             pass
+
+
+async def deleteMessageLater(context, chatId, messageId, delay):
+    """延时删除 Telegram 消息"""
+    await asyncio.sleep(delay)
+    try:
+        await context.bot.delete_message(chatId, message_id=messageId)
+    except Exception:
+        pass
+
+
+async def _cleanupFile(filePath: str):
+    """同步删除文件（由 resourceManager 调用）"""
+    try:
+        if os.path.exists(filePath):
+            os.remove(filePath)
+    except Exception:
+        pass
+
+
+def registerFileCleanup(filePath: str):
+    """
+    注册文件清理到 resourceManager，确保关机时删除
+
+    用于临时文件（如下载的 zip）的可靠清理。
+    即使 bot 在延时任务完成前关机，文件也会被删除。
+    """
+    from utils.core.resourceManager import getResourceManager
+    getResourceManager().register(
+        f"Cleanup {os.path.basename(filePath)}",
+        lambda: _cleanupFile(filePath),
+        priority=0
+    )

@@ -46,7 +46,21 @@ def getExecutor() -> ThreadPoolExecutor:
     global executor
     if executor is None:
         executor = ThreadPoolExecutor(max_workers=1)
+        # 注册清理回调
+        from utils.core.resourceManager import getResourceManager
+        getResourceManager().register(
+            "ThreadPoolExecutor (inputHelper)",
+            _shutdownExecutor,
+            priority=5
+        )
     return executor
+
+
+async def _shutdownExecutor():
+    """关闭线程池（由 resourceManager 调用）"""
+    global executor
+    if executor is not None:
+        executor.shutdown(wait=True)
 
 
 
