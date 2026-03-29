@@ -98,7 +98,6 @@ ZincNya_bot/
 │   ├── chatHistory.db          # 加密聊天记录（不会被提交）
 │   ├── .chatKey                # 聊天记录加密密钥（不会被提交）
 │   ├── todos.db                # 待办事项数据库（不会被提交）
-│   ├── pushedNews.json         # 已推送新闻记录（不会被提交）
 │   ├── llmConfig.json          # LLM 功能配置（不会被提交）
 │   ├── llmMemory.db            # LLM structured memory 数据库（不会被提交）
 │   ├── prompts.json            # LLM 提示词配置（不会被提交）
@@ -116,6 +115,7 @@ ZincNya_bot/
 │   ├── book.py                 # /book 书籍搜索
 │   ├── todos.py                # /todos 待办事项管理
 │   ├── llm.py                  # LLM 自动回复与审核回调
+│   ├── llmCommand.py           # Telegram 端 /llm 命令（ops 控制）
 │   └── shutdown.py             # 远程关机/重启/状态（仅 ops）
 │
 ├── utils/                      # 工具模块
@@ -166,6 +166,7 @@ ZincNya_bot/
 │   │   └── ui.py               # UI 层（ViewModel + TUI）
 │   │
 │   ├── chatHistory.py          # 聊天记录加密存储
+│   ├── chatUI.py               # prompt_toolkit 全屏聊天界面（固定底部输入）
 │   ├── bookSearchAPI.py        # Open Library API 封装
 │   ├── newsAPI.py              # 新闻抓取 API 封装（先咕着喵）
 │   ├── downloader.py           # 表情包下载与格式转换
@@ -174,7 +175,7 @@ ZincNya_bot/
 │   ├── fileEditor.py           # TUI 文本编辑器
 │   ├── terminalUI.py           # 终端 UI 工具（备用屏幕、ANSI）
 │   ├── errorHandler.py         # 错误处理与日志
-│   ├── inputHelper.py          # 统一异步输入工具
+│   ├── inputHelper.py          # 统一异步输入工具（含多行输入）
 │   └── logger.py               # 树状日志系统
 │
 ├── scripts/                    # 辅助脚本喵
@@ -268,7 +269,9 @@ Operator 权限位（在 `operators.json` 中配置）：
 - `data/chatHistory.db` - 加密的聊天记录
 - `data/.chatKey` - 聊天记录加密密钥
 - `data/todos.db` - 待办事项数据库
-- `data/pushedNews.json` - 已推送新闻记录
+- `data/llmConfig.json` - LLM 功能配置
+- `data/llmMemory.db` - LLM structured memory 数据库
+- `data/prompts.json` - LLM 提示词配置
 - `data/chatExport/` - 导出的聊天记录
 - `data/chatBackup/` - 聊天记录自动归档
 
