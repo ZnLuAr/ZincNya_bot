@@ -10,6 +10,8 @@ utils/core/consoleListener.py
 
 
 
+import asyncio
+
 from handlers.cli import handleConsoleCommand
 
 from utils.inputHelper import asyncInput

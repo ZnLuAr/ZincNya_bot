@@ -241,6 +241,78 @@ class AlternateScreen:
 # 终端信息获取
 # ============================================================================
 
+def getCursorPosition() -> tuple[int, int] | None:
+    """
+    查询当前光标位置（同步，跨平台）
+
+    返回:
+        (row, col) 元组（1-based），失败返回 None
+
+    注意：
+        - 不能在 prompt_toolkit 的 prompt_async() 期间调用
+        - Windows 使用 Win32 API，Unix 使用 ANSI 转义序列
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            import ctypes.wintypes
+
+            class COORD(ctypes.Structure):
+                _fields_ = [("X", ctypes.wintypes.SHORT), ("Y", ctypes.wintypes.SHORT)]
+
+            class SMALL_RECT(ctypes.Structure):
+                _fields_ = [
+                    ("Left", ctypes.wintypes.SHORT),
+                    ("Top", ctypes.wintypes.SHORT),
+                    ("Right", ctypes.wintypes.SHORT),
+                    ("Bottom", ctypes.wintypes.SHORT),
+                ]
+
+            class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
+                _fields_ = [
+                    ("dwSize", COORD),
+                    ("dwCursorPosition", COORD),
+                    ("wAttributes", ctypes.wintypes.WORD),
+                    ("srWindow", SMALL_RECT),
+                    ("dwMaximumWindowSize", COORD),
+                ]
+
+            kernel32 = ctypes.windll.kernel32
+            hConsole = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+            csbi = CONSOLE_SCREEN_BUFFER_INFO()
+
+            if kernel32.GetConsoleScreenBufferInfo(hConsole, ctypes.byref(csbi)):
+                return csbi.dwCursorPosition.Y + 1, csbi.dwCursorPosition.X + 1
+        except Exception:
+            return None
+    else:
+        try:
+            import termios
+            import tty
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                sys.stdout.write("\033[6n")
+                sys.stdout.flush()
+                response = ""
+                while True:
+                    ch = sys.stdin.read(1)
+                    response += ch
+                    if ch == 'R':
+                        break
+                if response.startswith("\033[") and response.endswith("R"):
+                    coords = response[2:-1].split(';')
+                    if len(coords) == 2:
+                        return int(coords[0]), int(coords[1])
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except Exception:
+            return None
+
+    return None
+
+
 def getTerminalSize() -> Tuple[int, int]:
     """
     获取终端尺寸。
@@ -293,3 +365,37 @@ rcp = restoreCursorPosition
 cls = clearScreen
 smcup = enterAlternateScreen
 rmcup = exitAlternateScreen
+
+
+# ============================================================================
+# 字符宽度与显示行数计算
+# ============================================================================
+
+import unicodedata as _unicodedata
+
+
+def charDisplayWidth(ch: str) -> int:
+    """返回单个字符的终端显示宽度（全角/宽字符占 2 列，其余占 1 列）"""
+    eaw = _unicodedata.east_asian_width(ch)
+    return 2 if eaw in ('W', 'F') else 1
+
+
+def strDisplayWidth(s: str) -> int:
+    """返回字符串在终端中的显示宽度（考虑全角字符）"""
+    return sum(charDisplayWidth(c) for c in s)
+
+
+def countDisplayLines(text: str, prefix: str, termWidth: int) -> int:
+    """
+    计算一段文本（含行首前缀）在终端中实际占用的显示行数。
+
+    参数:
+        text:      该行的正文内容
+        prefix:    行首前缀（如提示符 ">> " 或续行符 ".. "）
+        termWidth: 终端宽度（列数）
+
+    返回:
+        实际占用的显示行数（最少为 1）
+    """
+    total = strDisplayWidth(prefix) + strDisplayWidth(text)
+    return max(1, (total + termWidth - 1) // termWidth)

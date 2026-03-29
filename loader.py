@@ -22,9 +22,9 @@ register() 函数可以返回两种格式：
 
 import os
 import logging
+import pkgutil
 import functools
 import importlib
-import pkgutil
 from telegram.ext import Application
 
 from config import PROJECT_ROOT, AUTH_ENABLED
@@ -105,11 +105,27 @@ def loadHandlers(app: Application):
                 requireAuth = True
 
             # 注册 handlers（按需包装白名单鉴权）
+            #
+            # handlers 列表中的每一项可以是：
+            #   - 普通 Handler 对象（注册到默认 group 0）
+            #   - {"handler": Handler, "group": int}（注册到指定 group）
+            #
+            # PTB group 机制：
+            #   同一 group 内只有第一个匹配的 handler 执行；
+            #   不同 group 各自独立处理同一条消息，按 group 编号从小到大依次执行。
+            #   在某 group 的 handler 中抛出 ApplicationHandlerStop 可阻止所有后续 group 处理该消息。
+            # 
             handler_count = 0
-            for handler in handlers:
+            for item in handlers:
+                if isinstance(item, dict) and "handler" in item:
+                    handler = item["handler"]
+                    group = item.get("group", 0)
+                else:
+                    handler = item
+                    group = 0
                 if requireAuth and AUTH_ENABLED and hasattr(handler, "callback"):
                     handler.callback = _wrapWithAuth(handler.callback)
-                app.add_handler(handler)
+                app.add_handler(handler, group)
                 handler_count += 1
                 total_handlers += 1
 

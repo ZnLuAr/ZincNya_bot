@@ -46,11 +46,12 @@ env/
 
 
 # ============================================================
-# 日志和临时文件
+# 日志、临时文件与文档
 # ============================================================
 log/
 *.log
 *.log.*
+docs/
 
 
 # ============================================================
@@ -78,6 +79,10 @@ data/chatExport/
 data/chatBackup/
 data/todos.db
 data/operators.json
+data/pushedNews.json
+data/prompts.json
+data/llmConfig.json
+data/llmMemory.db
 # 但保留 .gitkeep 占位文件
 !data/.gitkeep
 

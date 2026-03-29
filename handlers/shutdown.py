@@ -15,7 +15,7 @@ import psutil
 from telegram import Update
 from datetime import datetime
 from telegram.constants import MessageEntityType
-from telegram.ext import CommandHandler , MessageHandler , ContextTypes , filters
+from telegram.ext import CommandHandler , MessageHandler , ContextTypes , filters , ApplicationHandlerStop
 
 
 from config import Permission
@@ -46,7 +46,7 @@ async def shutdown(update: Update , _: ContextTypes.DEFAULT_TYPE):
         childType=LogChildType.WITH_ONE_CHILD
     )
 
-    await update.message.reply_text("现在就关机喵——\n……瞼を閉じました……=  =")
+    await update.message.reply_text("现在就关机喵——\n\n……瞼を閉じました……=  =")
 
     # 通知 bot.py ，高雅不堪地关机
     getStateManager().requestShutdown()
@@ -69,7 +69,7 @@ async def restart(update: Update , _: ContextTypes.DEFAULT_TYPE):
         childType=LogChildType.WITH_ONE_CHILD
     )
 
-    await update.message.reply_text("现在就重启喵——\n……瞼を閉じました……=  =")
+    await update.message.reply_text("现在就重启喵——\n\n……瞼を閉じました……=  =")
 
     # 通知 bot.py 进行高雅不堪的关机后重启
     getStateManager().requestRestart()
@@ -124,7 +124,8 @@ async def status(update: Update , _: ContextTypes.DEFAULT_TYPE):
 
 
 
-# @ 关键词 → 处理函数 映射
+# @bot + 关键词 → 处理函数 映射
+# ops 可在群聊中 @bot 并跟上以下关键词来触发管理操作（不需要 /命令 前缀）
 _KEYWORD_MAP = {
     "关机": shutdown,
     "重启": restart,
@@ -138,7 +139,12 @@ _KEYWORD_MAP = {
 
 @handleTelegramErrors   # 实在想不到什么时候会触发这里的装饰器，但是防御性编程😋
 async def _mentionDispatch(update: Update , context: ContextTypes.DEFAULT_TYPE):
-    """ 处理 @bot + 关键词 的消息 """
+    """
+    处理 @bot + 关键词 的消息，匹配 _KEYWORD_MAP 并调用对应操作。
+
+    注册在 group 0（早于 LLM 消息处理器的 group 1）。
+    关键词命中后抛出 ApplicationHandlerStop，阻止后续 group 将同一条消息交给 LLM 处理。
+    """
     text = update.message.text
     botUsername = context.bot.username
 
@@ -151,6 +157,8 @@ async def _mentionDispatch(update: Update , context: ContextTypes.DEFAULT_TYPE):
     body = pattern.sub("", text).strip()
     if body in _KEYWORD_MAP:
         await _KEYWORD_MAP[body](update , context)
+        # 关键词已处理，阻止后续 group（如 LLM 消息处理器）再次处理同一条消息
+        raise ApplicationHandlerStop
 
 
 

@@ -22,6 +22,7 @@ from utils.logger import initLogger
 from utils.todos.reminder import todoReminderLoop
 from utils.core.stateManager import getStateManager
 from utils.core.resourceManager import cleanupAllResources
+from utils.llm.memory import initDatabase as initLLMMemoryDB
 from utils.todos.database import initDatabase as initTodosDB
 from utils.chatHistory import initDatabase as initChatHistoryDB
 from utils.newsAPI import registerResources as registerNewsResources
@@ -39,6 +40,8 @@ def buildApplication():
     return builder.build()
 
 
+
+
 def initializeApp(app):
     """初始化应用组件"""
     state = getStateManager()
@@ -53,6 +56,7 @@ def initializeApp(app):
     # 数据库初始化
     initChatHistoryDB()
     initTodosDB()
+    initLLMMemoryDB()
 
     loadHandlers(app)
     setupAsyncioErrorHandler(loop)
@@ -74,6 +78,8 @@ def initializeApp(app):
     app.add_handler(MessageHandler(filters.ALL, messageCollector), group=-1)
 
 
+
+
 async def startApp(app):
     """启动 Telegram Application"""
     await app.initialize()
@@ -82,6 +88,8 @@ async def startApp(app):
 
 
 _logger = logging.getLogger(__name__)
+
+
 
 
 async def stopApp(app):
@@ -96,6 +104,8 @@ async def stopApp(app):
             await coro
         except Exception as e:
             _logger.warning("关机阶段 %s 出错: %s", name, e)
+
+
 
 
 async def runBackgroundTasks(app, consoleTask):
@@ -127,6 +137,8 @@ async def runBackgroundTasks(app, consoleTask):
 
     # 等待任务取消完成
     await asyncio.gather(*pending, reminderTask, return_exceptions=True)
+
+
 
 
 def restartProcess():

@@ -89,13 +89,12 @@ from telegram import Bot
 from datetime import datetime
 from telegram.error import Forbidden
 
-
 from handlers.cli import parseArgsTokens
 
-from utils.logger import logAction, LogLevel, LogChildType
-from utils.inputHelper import asyncInput
 from utils.terminalUI import cls, smcup, rmcup
+from utils.inputHelper import asyncMultilineInput
 from utils.core.stateManager import getStateManager
+from utils.logger import logAction, LogLevel, LogChildType
 from utils.whitelistManager.ui import whitelistMenuController
 from utils.chatHistory import saveMessage, loadHistory, iterMessagesWithDateMarkers
 
@@ -181,6 +180,80 @@ async def sendMsg(bot: Bot , idList , atUser , text):
 
 
 
+def _getSenderName(message) -> str:
+    """提取消息发送者名称，缺失时回退为 Unknown。"""
+    from_user = getattr(message, "from_user", None)
+    if from_user:
+        return from_user.username or from_user.first_name or "Unknown"
+
+    chat = getattr(message, "chat", None)
+    if chat:
+        return getattr(chat, "title", None) or getattr(chat, "full_name", None) or "Unknown"
+
+    return "Unknown"
+
+
+
+def _printFormattedMessage(timestamp: str, sender: str, text: str):
+    """按统一规则打印单条消息，支持多行内容。"""
+    sender = sender or "Unknown"
+    text = text or ""
+
+    if '\n' in text:
+        lines = text.split('\n')
+        print(f"[{timestamp}] <{sender}> {lines[0]}")
+        # "[HH:MM:SS] <sender> " 的可视前缀长度近似为 len(sender) + 13
+        total = len(sender) + 13
+        indent = '· ' * (total // 2) + '| '
+        for line in lines[1:]:
+            print(f"{indent}{line}")
+    else:
+        print(f"[{timestamp}] <{sender}> {text}")
+
+
+
+def printMessage(mode, content):
+    """
+    打印消息到屏幕
+
+    参数:
+        mode: "incomingMessage" 或 "selfMessage"
+        content: incomingMessage 时为 Telegram Message 对象，selfMessage 时为字符串
+    """
+    match mode:
+        case "incomingMessage":
+            sender = _getSenderName(content)
+            text = content.text or ""
+        case "selfMessage":
+            sender = "ZincNya~"
+            text = content
+
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    _printFormattedMessage(timestamp, sender, text)
+
+
+
+
+async def displayHistory(targetChatID):
+    """显示历史聊天记录"""
+    history = await loadHistory(targetChatID)
+    if history:
+        print(f"─────── 历史记录 ───────\n")
+        for item_type, item_data in iterMessagesWithDateMarkers(history):
+            if item_type == "date":
+                print(f"[{item_data}]")
+            else:
+                msg = item_data
+                ts = msg["timestamp"].strftime("%H:%M:%S") if msg["timestamp"] else "??:??:??"
+                sender = msg["sender"] or "Unknown"
+                content = msg["content"]
+                _printFormattedMessage(ts, sender, content)
+        print(f"<以上 {len(history)} 条>")
+        print("\n─────── 实时聊天 ───────\n")
+
+
+
+
 async def chatScreen(app , bot: Bot , targetChatID: str):
     # 进入与指定 chatID 的用户/群聊的本地交互聊天界面
     state = getStateManager()
@@ -207,29 +280,6 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
 
 
     # ========================================================================
-    async def displayHistory():
-        """显示历史聊天记录"""
-        history = await loadHistory(targetChatID)
-        if history:
-            print(f"─────── 历史记录 ───────\n")
-
-            # 使用生成器遍历消息，自动插入日期分隔符
-            for item_type, item_data in iterMessagesWithDateMarkers(history):
-                if item_type == "date":
-                    # 日期分隔行
-                    print(f"[{item_data}]")
-                else:
-                    # 消息行（时间戳简化为 HH:MM:SS）
-                    msg = item_data
-                    ts = msg["timestamp"].strftime("%H:%M:%S") if msg["timestamp"] else "??:??:??"
-                    sender = msg["sender"] or "Unknown"
-                    content = msg["content"]
-                    print(f"[{ts}] <{sender}> {content}")
-
-            print(f"<以上 {len(history)} 条>")
-            print("\n─────── 实时聊天 ───────\n")
-
-
     async def receiverLoop():
         """后台协程：持续监听对方发来的消息并展示"""
 
@@ -252,7 +302,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
                         continue
 
                     # 保存消息到加密存储
-                    sender = msg.from_user.username or msg.from_user.first_name or "Unknown"
+                    sender = _getSenderName(msg)
                     content = msg.text or ""
                     await saveMessage(targetChatID, "incoming", sender, content)
 
@@ -269,34 +319,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
             for msg in nonTargetMessages:
                 await queue.put(msg)
 
-
-    async def inputLoop():
-        while True:
-            userInput = await asyncInput(">> ")
-
-            # 清除用户的原始输入，即不显示命令行的回显">> text"
-            sys.stdout.write("\033[F")      # 光标上移一行
-            sys.stdout.write("\033[K")      # 清除整行
-            sys.stdout.flush()
-
-            return userInput
-
-
-    def printMessage(mode , msg):
-        match mode:
-            case "incomingMessage":
-                sender = msg.from_user.username or msg.from_user.first_name
-                text = msg.text or ""
-            case "selfMessage":
-                sender = "ZincNya~"
-                text = msg
-
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        sys.stdout.write(f"\r[{timestamp}] <{sender}> {text}\n")
-        sys.stdout.write("" if sender == "ZincNya~" else ">> ")
-        sys.stdout.flush()
     # ========================================================================
-
 
     receiverTask = asyncio.create_task(receiverLoop())
 
@@ -310,28 +333,55 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         print(
             "已进入聊天界面喵",
             f"\n与 {targetChatID} 的实时聊天已连接",
-            "\n发送文字即可直接发出；输入 ':q' 退出\n",
+            "\n直接按 Enter 换行，Alt+Enter / Ctrl+S 发送；输入 ':q' 退出\n",
             "=" * 64,
             "\n"
         )
 
         # 显示历史记录
-        await displayHistory()
+        await displayHistory(targetChatID)
+
+        shutdownEvent = state.getShutdownEvent()
 
         while True:
-            userInput = await inputLoop()
+            # 关机时退出，避免 prompt_async() 永久阻塞
+            if shutdownEvent.is_set():
+                break
+
+            # 使用 asyncMultilineInput 读取用户输入
+            # 支持多行输入，直接按 Enter 换行，Alt+Enter 提交
+            # patch_stdout 会在日志输出或聊天窗口中其他人发言时时自动清除并重绘提示符
+            userInput = await asyncMultilineInput(
+                prompt=">> ",
+                continuation_prompt=".. "
+            )
 
             if userInput is None:
                 continue
 
-            if userInput.strip() == ":q":
+            # 去除首尾空白后检查退出命令（允许像 "  :q  " 这样的输入）
+            stripped = userInput.strip()
+            if stripped == ":q":
                 break
 
+            # LLM 审核队列查看命令
+            if stripped == ":review":
+                from utils.command.llm import handleConsoleReview
+                await handleConsoleReview(bot)
+                continue
+
+            # 空消息不发送
+            if not stripped:
+                continue
+
+            # 发送前去除尾部空行（只保留首部空白，去除尾部）
+            textToSend = userInput.rstrip('\n')
+
             try:
-                printMessage("selfMessage" , userInput)
-                await bot.send_message(chat_id=targetChatID , text=userInput)
+                printMessage("selfMessage" , textToSend)
+                await bot.send_message(chat_id=targetChatID , text=textToSend)
                 # 保存发送的消息到加密存储
-                await saveMessage(targetChatID, "outgoing", "ZincNya~", userInput)
+                await saveMessage(targetChatID, "outgoing", "ZincNya~", textToSend)
             except Forbidden:
                 print(f"    被 Forbidden 了……这可能是对方还没有跟咱开始聊天的缘故哦")
             except Exception as e:
@@ -346,10 +396,12 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         receiverTask.cancel()
         try:
             await receiverTask
-        except Exception:
+        except asyncio.CancelledError:
             pass
 
-        print("退出聊天界面喵——\n\n")
+        # 关机时不打印退出消息
+        if not shutdownEvent.is_set():
+            print("退出聊天界面喵——\n\n")
 
 
 

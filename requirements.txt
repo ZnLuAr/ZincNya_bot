@@ -33,3 +33,6 @@ jionlp==1.5.27
 
 # 进程和系统信息（bot 管理命令）
 psutil==6.1.1
+
+# LLM 支持（Claude API）
+anthropic>=0.18.0
