@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 # 项目根目录（所有路径的锚点）
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# 加载 .env 文件中的环境变量
-load_dotenv()
+# 加载 .env 文件中的环境变量（使用绝对路径，确保无论从哪里启动都能找到）
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 
 
@@ -30,6 +30,8 @@ TELEGRAM_PROXY = os.getenv("TELEGRAM_PROXY", None)
 # 数据目录（确保存在）
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
+
+
 
 
 DEFAULT_FILE_CACHE_TTL = 480  # 秒
@@ -65,7 +67,7 @@ LOG_DIR = os.path.join(PROJECT_ROOT, "log")
 
 
 # cli 相关常量
-COMMAND_DIR = os.path.join(PROJECT_ROOT, "utils", "command")    # 文件系统路径
+COMMAND_DIR = os.path.join(PROJECT_ROOT, "utils", "command")     # 文件系统路径
 COMMAND_MODULE = "utils.command"                                 # Python 模块路径
 
 
@@ -88,6 +90,7 @@ class Permission(str, Enum):
     RESTART = "restart"
     STATUS = "status"
     NOTIFY = "notify"
+    LLM = "llm"
 
     def __str__(self):
         return self.value
@@ -133,9 +136,24 @@ NEWS_DATA_FILE = os.path.join(CHAT_DATA_DIR, "pushedNews.json")                 
 
 
 
-# Todos 功能相关常量
+# TODOS 相关常量
 TODOS_DB_PATH = os.path.join(CHAT_DATA_DIR, "todos.db")
 TODOS_ITEMS_PER_PAGE = 6                                                        # 每页显示的待办数量
 TODOS_REMINDER_CHECK_INTERVAL = 60                                              # 提醒检查间隔（秒）
 TODOS_CONTENT_MAX_LENGTH = 200                                                  # 待办内容最大长度
 TODOS_CONTENT_PREVIEW_LENGTH = 15                                               # 列表中内容预览长度（字符数）
+
+
+
+
+# LLM 相关常量
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", None)
+LLM_CONFIG_PATH = os.path.join(DATA_DIR, "llmConfig.json")
+LLM_PROMPTS_PATH = os.path.join(DATA_DIR, "prompts.json")
+LLM_DEFAULT_MODEL = "claude-sonnet-4-6"
+LLM_MAX_CONTEXT_MESSAGES = 20                                  # 单次记忆最大读取条数
+LLM_RATE_LIMIT_SECONDS = 5
+LLM_DEBOUNCE_SECONDS = 1.5                                     # 防抖等待时间（秒）
+LLM_PENDING_MSG_LIMIT = 10                                     # 每用户防抖缓冲最大条数
+LLM_REVIEW_TTL_SECONDS = 86400                                 # 审核条目 TTL（秒，默认 24h）
+LLM_MEMORY_DB_PATH = os.path.join(DATA_DIR, "llmMemory.db")    # structured memory 数据库

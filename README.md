@@ -30,7 +30,7 @@ pip install -r requirements.txt
 
 ### 3. 配置环境变量
 
-把 `.env.example` 复制一份改名叫 `.env`，然后填上你的秘密喵：
+把 `.env.example` 复制一份改名叫 `.env`，然后填上你的秘密：
 
 ```bash
 cp .env.example .env
@@ -80,6 +80,9 @@ python bot.py
 
 咱是这样被构成的——
 
+<details>
+<summary>展开查看完整结构……</summary>
+
 ```
 ZincNya_bot/
 ├── bot.py                      # Bot 主程序
@@ -96,6 +99,10 @@ ZincNya_bot/
 │   ├── .chatKey                # 聊天记录加密密钥（不会被提交）
 │   ├── todos.db                # 待办事项数据库（不会被提交）
 │   ├── pushedNews.json         # 已推送新闻记录（不会被提交）
+│   ├── llmConfig.json          # LLM 功能配置（不会被提交）
+│   ├── llmMemory.db            # LLM structured memory 数据库（不会被提交）
+│   ├── prompts.json            # LLM 提示词配置（不会被提交）
+│   ├── prompts.example.json    # LLM 提示词模板
 │   └── ZincNyaQuotes.json      # 语录数据喵
 │
 ├── ffmpeg/                     # FFmpeg 可执行文件
@@ -108,6 +115,7 @@ ZincNya_bot/
 │   ├── nya.py                  # /nya 语录功能
 │   ├── book.py                 # /book 书籍搜索
 │   ├── todos.py                # /todos 待办事项管理
+│   ├── llm.py                  # LLM 自动回复与审核回调
 │   └── shutdown.py             # 远程关机/重启/状态（仅 ops）
 │
 ├── utils/                      # 工具模块
@@ -119,6 +127,7 @@ ZincNya_bot/
 │   │   ├── nya.py              # /nya 语录管理
 │   │   ├── log.py              # /log 日志管理
 │   │   ├── todos.py            # /todos 待办事项管理（控制台）
+│   │   ├── llm.py              # /llm LLM 功能控制与控制台审核
 │   │   ├── clear.py            # /clear 清屏
 │   │   └── shutdown.py         # /shutdown 关闭
 │   │
@@ -131,6 +140,15 @@ ZincNya_bot/
 │   │   ├── resourceManager.py  # 资源清理管理器（退出时回调）
 │   │   ├── stateManager.py     # 全局状态管理器
 │   │   └── tuiBase.py          # TUI 控制器基类
+│   │
+│   ├── llm/                    # LLM 集成模块
+│   │   ├── config.py           # 配置管理（开关、模式、提示词，读写 JSON）
+│   │   ├── state.py            # 运行时状态（审核队列、速率限制、防抖、one-shot）
+│   │   ├── client.py           # Anthropic API 封装
+│   │   ├── contextBuilder.py   # 上下文组装（memory + history + 当前消息）
+│   │   └── memory/             # Structured memory 子系统
+│   │       ├── __init__.py
+│   │       └── database.py     # SQLite 存储、CRUD、分层检索
 │   │
 │   ├── todos/                  # 待办事项子系统
 │   │   ├── database.py         # SQLite 数据存储
@@ -169,6 +187,8 @@ ZincNya_bot/
     └── error_YYYY-MM-DD.log    # 错误日志（每天一个）
 ```
 
+</details>
+
 ---
 
 
@@ -184,6 +204,7 @@ ZincNya_bot/
 | `/history` | 预览或导出聊天历史记录 |
 | `/nya` | 语录相关功能 |
 | `/todos` | 管理待办事项 |
+| `/llm` | 控制 LLM 功能开关、审核模式和模型 |
 | `/log` | 管理日志文件 |
 | `/clear` | 清理控制台 |
 | `/shutdown` | 关闭 Bot |
@@ -205,6 +226,7 @@ ZincNya_bot/
 | `/shutdown` | 远程关闭 Bot |
 | `/restart` | 远程重启 Bot |
 | `/status` | 查看 Bot 运行状态 |
+| `/llm` | 查看 LLM 开关状态 |
 | `@bot 关机` | 通过 @ 提及触发关机 |
 | `@bot 重启` | 通过 @ 提及触发重启 |
 | `@bot 运行状态` | 通过 @ 提及查看状态 |
@@ -217,6 +239,7 @@ Operator 权限位（在 `operators.json` 中配置）：
 | `restart` | 允许远程重启 |
 | `status` | 允许查看运行状态 |
 | `notify` | 接收未授权用户访问通知 |
+| `llm` | 接收 LLM 生成内容的 Telegram 审核消息 |
 
 想知道更详细的用法，就输入 `/help <command>` 喵！
 
@@ -239,18 +262,18 @@ Operator 权限位（在 `operators.json` 中配置）：
 ### 数据文件
 
 这些文件包含敏感信息，不会被提交到 git：
-- `.env` - Bot token 等环境变量喵
-- `data/whitelist.json` - 用户白名单喵
-- `data/operators.json` - 管理员权限配置喵
-- `data/chatHistory.db` - 加密的聊天记录喵
-- `data/.chatKey` - 聊天记录加密密钥喵
-- `data/todos.db` - 待办事项数据库喵
-- `data/pushedNews.json` - 已推送新闻记录喵
-- `data/chatExport/` - 导出的聊天记录喵
-- `data/chatBackup/` - 聊天记录自动归档喵
+- `.env` - Bot token 等环境变量
+- `data/whitelist.json` - 用户白名单
+- `data/operators.json` - 管理员权限配置
+- `data/chatHistory.db` - 加密的聊天记录
+- `data/.chatKey` - 聊天记录加密密钥
+- `data/todos.db` - 待办事项数据库
+- `data/pushedNews.json` - 已推送新闻记录
+- `data/chatExport/` - 导出的聊天记录
+- `data/chatBackup/` - 聊天记录自动归档
 
 第一次部署的时候需要手动创建 `.env` 文件，
-其他数据文件会在使用时自动生成喵——
+其他数据文件会在使用时自动生成。
 它们是属于你的秘密，请注意保护好它们喵——
 
 ---
@@ -281,6 +304,41 @@ Operator 权限位（在 `operators.json` 中配置）：
 **错误：`找不到 ffmpeg`**
 - 运行 `python scripts/setup_ffmpeg.py` 自动配置
 - 或者参考 `ffmpeg/README.md` 手动配置
+- Windows：确认 `ffmpeg/bin/ffmpeg.exe` 存在；Linux：确认 `ffmpeg` 在 `$PATH` 中（`which ffmpeg`）
+
+**错误：`data/prompts.json 不存在`**
+- 从模板复制一份：`cp data/prompts.example.json data/prompts.json`
+- 根据需要修改 `system` 提示词
+
+### LLM 功能
+
+**LLM 无响应 / API 报错**
+- 检查 `.env` 中 `ANTHROPIC_API_KEY` 是否填写正确（不能有多余空格或 BOM）
+- 401 错误：API key 无效或已过期，前往 [console.anthropic.com](https://console.anthropic.com) 重新生成
+- 超时 / 无响应：可能是 Anthropic 服务侧的临时故障，稍后重试；查看 `log/` 中的错误日志确认
+
+**LLM 触发不了（发消息没有反应）**
+- 确认已在控制台执行 `/llm on` 开启功能
+- 确认发消息的用户在白名单中（`/whitelist` 查看）
+- 群聊中需要 @ bot 才会触发；私聊直接发即可
+- 查看控制台日志，确认消息是否被 handler 接收
+
+**审核消息显示 `[已过期]`**
+- Bot 重启后 `bot_data` 会清空，重启前未处理的审核消息均会过期，属于正常现象
+
+### 权限 / 管理员命令
+
+**`/status`、`/shutdown`、`/restart` 在 Telegram 中无响应**
+- 检查 `data/operators.json`，确认你的用户 ID 已添加，且 `permissions` 中包含对应权限位（`status`、`shutdown`、`restart`）
+- 示例配置：
+  ```json
+  {
+    "123456789": {
+      "name": "你的名字",
+      "permissions": ["shutdown", "restart", "status", "notify", "llm"]
+    }
+  }
+  ```
 
 ### 其他问题
 

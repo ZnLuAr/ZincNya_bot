@@ -7,18 +7,22 @@ utils/inputHelper.py
 使用示例：
     from utils.inputHelper import asyncInput
 
-    user_input = await asyncInput("请输入: ")
+    user_input = await asyncInput(">> ")
 """
 
+
+
+
 import sys
+import shutil
 import asyncio
 import threading
 
-from concurrent.futures import ThreadPoolExecutor
 from prompt_toolkit import PromptSession
+from utils.terminalUI import countDisplayLines
+from concurrent.futures import ThreadPoolExecutor
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
-
-
 
 
 session: PromptSession = None
@@ -42,7 +46,13 @@ def getPromptSession() -> PromptSession:
 
 
 def getExecutor() -> ThreadPoolExecutor:
-    """获取或创建全局线程池"""
+    """
+    获取或创建全局线程池
+
+    副作用：首次调用时会向 resourceManager 注册 _shutdownExecutor 清理回调。
+    这是有意为之的 lazy 初始化 —— executor 仅在实际需要时创建，
+    避免在不使用控制台输入的环境中创建无用线程。
+    """
     global executor
     if executor is None:
         executor = ThreadPoolExecutor(max_workers=1)
@@ -118,9 +128,22 @@ def interruptInput():
             pass
     else:
         try:
-            sys.stdin.close()
+            import os
+            import fcntl
+            import termios
+
+            # Unix: 优先向 TTY 输入队列注入一个回车，可靠唤醒阻塞中的 readline()
+            # 注意：使用的 TIOCSTI，在一些较新的 Linux 发行版或安全配置下可能被禁用
+            fd = sys.stdin.fileno()
+            if os.isatty(fd):
+                fcntl.ioctl(fd, termios.TIOCSTI, b'\n')
+            else:
+                sys.stdin.close()
         except Exception:
-            pass
+            try:
+                sys.stdin.close()
+            except Exception:
+                pass
 
 
 
@@ -159,3 +182,83 @@ async def asyncInput(prompt: str = "") -> str:
     loop = asyncio.get_event_loop()
     executor = getExecutor()
     return await loop.run_in_executor(executor, syncInput, prompt)
+
+
+
+
+async def asyncMultilineInput(
+    prompt: str = ">> ",
+    continuation_prompt: str = ".. ",
+    erase_after_submit: bool = True
+) -> str:
+    """
+    异步多行输入函数，支持自动重绘提示符
+
+    使用 prompt_toolkit 的 prompt_async() 实现多行输入和提示符重绘。
+    适用于需要输入多行文本的场景（如聊天界面）。
+
+    操作方式：
+        - 直接按回车                     换行
+        - Alt+Enter 或 Esc+Enter        提交输入
+        - Ctrl+S                        提交输入（Windows Terminal 下 Alt+Enter 被截走时的替代）
+        - Ctrl+C                        取消输入（返回空字符串）
+
+    参数:
+        prompt: 主提示符（第一行）
+        continuation_prompt: 续行提示符（第二行及以后）
+        erase_after_submit: 提交后是否清除输入回显（默认 True）
+
+    返回:
+        用户输入的多行字符串（保留换行符）
+
+    注意：
+        - 此函数使用 prompt_async()，在某些 Windows 环境下可能阻塞事件循环
+        - 建议仅在独立的交互界面（如备用屏幕缓冲区）中使用
+        - 自动启用 patch_stdout，确保日志输出时提示符能正确重绘
+        - 不支持并发调用（共享全局 PromptSession）
+    """
+    session = getPromptSession()
+
+    # Ctrl+S 作为额外提交键（Windows Terminal 会拦截 Alt+Enter 用于切换全屏）
+    kb = KeyBindings()
+    kb.add('c-s')(lambda event: event.current_buffer.validate_and_handle())
+
+    try:
+        with patch_stdout():
+            result = await session.prompt_async(
+                prompt,
+                multiline=True,
+                key_bindings=kb,
+                prompt_continuation=lambda width, line_number, is_soft_wrap: continuation_prompt
+            )
+
+        # 清除输入回显。
+        # 不依赖 getCursorPosition()（xterm.js / SSH 等终端的 CPR 行号不可靠），
+        # 改为根据输入内容 + 终端宽度自行计算实际占用行数。
+        if erase_after_submit:
+            try:
+                termWidth = shutil.get_terminal_size().columns or 80
+            except Exception:
+                termWidth = 80
+
+            inputLines = result.split('\n') if result else ['']
+            linesToClear = sum(
+                countDisplayLines(line, prompt if i == 0 else continuation_prompt, termWidth)
+                for i, line in enumerate(inputLines)
+            )
+
+            # 从当前行向上逐行清除，最后清起点行并将光标归位
+            for _ in range(linesToClear - 1):
+                sys.stdout.write("\033[2K")  # 清除当前整行
+                sys.stdout.write("\033[1A")  # 光标上移一行
+            sys.stdout.write("\033[2K\r")    # 清除起点行，光标回行首
+            sys.stdout.flush()
+
+        return result
+
+    except KeyboardInterrupt:
+        # Ctrl+C 取消输入
+        return ""
+    except EOFError:
+        # Ctrl+D 或 EOF
+        return ""

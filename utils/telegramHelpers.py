@@ -25,3 +25,35 @@ async def safeEditMessage(message, text: str, **kwargs) -> bool:
         if "Message is not modified" in str(e):
             return False
         raise
+
+
+def isMentioned(message, botUsername: str) -> bool:
+    """
+    检测消息是否 @ 了 bot（纯 Telegram 语义）。
+
+    参数:
+        message: telegram.Message 对象
+        botUsername: bot 的用户名（如 "MyZincNyaBot"）
+
+    返回:
+        True 如果消息中包含 @botUsername
+    """
+    if not message.text:
+        return False
+    return f"@{botUsername}".lower() in message.text.lower()
+
+
+def removeMention(text: str, botUsername: str) -> str:
+    """
+    去除消息中的 @bot 前缀，返回纯文本。
+
+    参数:
+        text: 消息文本
+        botUsername: bot 的用户名
+
+    返回:
+        去除 @bot 后的纯文本
+    """
+    import re
+    pattern = re.compile(re.escape(f"@{botUsername}"), re.IGNORECASE)
+    return pattern.sub("", text).strip()

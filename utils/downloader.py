@@ -457,7 +457,7 @@ async def deleteLater(context, chatId, messageId, filePath, deleteDelay):
     await asyncio.sleep(deleteDelay)
     try:
        await context.bot.delete_message(chatId, message_id=messageId)
-    except Exception as e:
+    except:
         pass
 
     if filePath:  # 添加 None 检查
@@ -495,7 +495,7 @@ def registerFileCleanup(filePath: str):
     """
     from utils.core.resourceManager import getResourceManager
     getResourceManager().register(
-        f"Cleanup {os.path.basename(filePath)}",
+        f"已清除 {os.path.basename(filePath)}",
         lambda: _cleanupFile(filePath),
         priority=0
     )

@@ -91,11 +91,12 @@ _CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
 
 
 def sanitizeForLog(text: str) -> str:
-    """剥离 ANSI 转义序列和控制字符，防止日志注入"""
+    """剥离 ANSI 转义序列和控制字符，防止日志注入；换行符转义为 \\n"""
     if not text:
         return text
     text = _ANSI_ESCAPE_RE.sub('', text)
     text = _CONTROL_CHAR_RE.sub('', text)
+    text = text.replace('\n', '\\n')
     return text
 
 
@@ -243,7 +244,7 @@ class TreeLogger:
         """根据子节点类型格式化控制台输出"""
         match childType:
             case LogChildType.NONE:
-                return f"[{timestamp}] [{level.value}] @{userName}: {event}\n                   └─┤ {details}\n\n"
+                return f"[{timestamp}] [{level.value}] @{userName}: {event}\n\n"
 
             case LogChildType.WITH_CHILD:
                 return f"[{timestamp}] [{level.value}] @{userName}: {event}\n                   └─┤ {details}"
