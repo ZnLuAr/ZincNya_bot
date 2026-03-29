@@ -147,8 +147,8 @@ ZincNya_bot/
 │   │   ├── client.py           # Anthropic API 封装
 │   │   ├── contextBuilder.py   # 上下文组装（memory + history + 当前消息）
 │   │   └── memory/             # Structured memory 子系统
-│   │       ├── __init__.py
-│   │       └── database.py     # SQLite 存储、CRUD、分层检索
+│   │       ├── database.py     # SQLite 存储、CRUD、分层检索
+│   │       └── ui.py           # LLM 记忆管理 UI
 │   │
 │   ├── todos/                  # 待办事项子系统
 │   │   ├── database.py         # SQLite 数据存储
