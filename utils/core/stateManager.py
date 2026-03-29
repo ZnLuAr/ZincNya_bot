@@ -11,7 +11,7 @@ utils/core/stateManager.py
 
 import asyncio
 import threading
-from typing import Optional
+from typing import Optional, Callable
 from contextlib import contextmanager
 
 
@@ -34,6 +34,9 @@ class StateManager:
         # 核心状态
         self._interactiveMode: bool = False
         self._messageQueue: Optional[asyncio.Queue] = None
+
+        # 控制台输出回调（用于聊天界面接管 logger 输出）
+        self._consoleOutputCallback: Optional[Callable[[str], None]] = None
 
         # 远程关机/重启信号
         self._shutdownEvent: asyncio.Event = asyncio.Event()
@@ -139,6 +142,30 @@ class StateManager:
         """检查是否请求重启"""
         with self._stateLock:
             return self._restartRequested
+
+
+    # ========================================================================
+    # 控制台输出回调管理（用于聊天界面接管 logger 输出）
+    # ========================================================================
+
+    def setConsoleOutputCallback(self, callback: Optional[Callable[[str], None]]):
+        """
+        设置控制台输出回调函数。
+
+        当回调存在时，logger 的 console 输出将通过此回调路由到 UI，
+        而不是直接 print 到 stdout。
+
+        Args:
+            callback: 接收字符串参数的回调函数，或 None 清除回调
+        """
+        with self._stateLock:
+            self._consoleOutputCallback = callback
+
+
+    def getConsoleOutputCallback(self) -> Optional[Callable[[str], None]]:
+        """获取当前设置的控制台输出回调函数。"""
+        with self._stateLock:
+            return self._consoleOutputCallback
 
 
     # ========================================================================

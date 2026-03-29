@@ -242,16 +242,22 @@ async def asyncMultilineInput(
                 termWidth = 80
 
             inputLines = result.split('\n') if result else ['']
-            linesToClear = sum(
+            inputDisplayRows = sum(
                 countDisplayLines(line, prompt if i == 0 else continuation_prompt, termWidth)
                 for i, line in enumerate(inputLines)
             )
 
-            # 从当前行向上逐行清除，最后清起点行并将光标归位
-            for _ in range(linesToClear - 1):
-                sys.stdout.write("\033[2K")  # 清除当前整行
-                sys.stdout.write("\033[1A")  # 光标上移一行
-            sys.stdout.write("\033[2K\r")    # 清除起点行，光标回行首
+            # prompt_toolkit 提交后，光标通常会落到输入块下方的新一行。
+            # 因此需要清除：
+            #   1. 当前这条落点行
+            #   2. 整个输入块实际占用的显示行数
+            totalRowsToClear = inputDisplayRows + 1
+
+            # 从当前落点行开始向上逐行清除，最后清除输入块首行并回到行首
+            for _ in range(totalRowsToClear - 1):
+                sys.stdout.write("\033[2K")
+                sys.stdout.write("\033[1A")
+            sys.stdout.write("\033[2K\r")
             sys.stdout.flush()
 
         return result

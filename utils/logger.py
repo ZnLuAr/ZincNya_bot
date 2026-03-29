@@ -73,31 +73,19 @@ TreeLogger 是单例模式的日志记录器，负责管理日志文件的创建
                          └─┤ 成功 42 张，失败 0 张
 """
 
-
-
-
 import os
 import re
-from datetime import datetime
+import asyncio
 from enum import Enum
 from typing import Optional
-import asyncio
+from datetime import datetime
+
 from config import LOG_DIR
 
 
 # 匹配 ANSI 转义序列（如 \x1b[31m）和其他 C0/C1 控制字符
 _ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b[^[]?')
 _CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
-
-
-def sanitizeForLog(text: str) -> str:
-    """剥离 ANSI 转义序列和控制字符，防止日志注入；换行符转义为 \\n"""
-    if not text:
-        return text
-    text = _ANSI_ESCAPE_RE.sub('', text)
-    text = _CONTROL_CHAR_RE.sub('', text)
-    text = text.replace('\n', '\\n')
-    return text
 
 
 
@@ -120,6 +108,16 @@ class LogChildType(str , Enum):
     ONLY_RESULT = "only_result"                                 # 仅结果
 
 
+
+
+def sanitizeForLog(text: str) -> str:
+    """剥离 ANSI 转义序列和控制字符，防止日志注入；换行符转义为 \\n"""
+    if not text:
+        return text
+    text = _ANSI_ESCAPE_RE.sub('', text)
+    text = _CONTROL_CHAR_RE.sub('', text)
+    text = text.replace('\n', '\\n')
+    return text
 
 
 
@@ -223,7 +221,17 @@ class TreeLogger:
 
         if writeInLog:
             try:
-                await asyncio.to_thread(self._writeLogSync, consoleText, logLine)
+                # 检查是否有 callback —— 如果有，console 输出走 UI 而不是直接 print
+                from utils.core.stateManager import getStateManager
+                callback = getStateManager().getConsoleOutputCallback()
+
+                if callback:
+                    # UI 模式：同步写文件，console 输出走 callback（延迟0.025s让消息先入队）
+                    await asyncio.sleep(0.025)
+                    await asyncio.to_thread(self._writeLogSync, consoleText, logLine, callback)
+                else:
+                    # CLI 模式：同步写文件 + print
+                    await asyncio.to_thread(self._writeLogSync, consoleText, logLine, None)
 
                 # 如果是 ERROR 级别且有异常对象，双写到错误日志
                 if level == LogLevel.ERROR and exception is not None:
@@ -237,7 +245,13 @@ class TreeLogger:
             except Exception as e:
                 print(f"[{timestamp}] [{level.value}] @锌酱：咦？日志写入失败了喵……？\n             └─┤ 报错在这里——{e}")
         else:
-            print(consoleText)
+            # 不写文件，只输出 console
+            from utils.core.stateManager import getStateManager
+            callback = getStateManager().getConsoleOutputCallback()
+            if callback:
+                callback(consoleText)
+            else:
+                print(consoleText)
 
 
     def _formatConsoleText(self, timestamp, userName, event, details, level: LogLevel, childType: LogChildType):
@@ -279,14 +293,25 @@ class TreeLogger:
 
 
 
-    def _writeLogSync(self , consoleText , logLine):
-        """同步写入日志"""
+    def _writeLogSync(self, consoleText: str, logLine: str, callback):
+        """
+        同步写入日志。
+
+        Args:
+            consoleText: 控制台输出文本（当 callback 为 None 时 print，否则传给 callback）
+            logLine: 单行日志文本（写入文件）
+            callback: UI 回调函数或 None
+        """
         # 首次写入时，先写入启动分隔符和启动信息
         self._writeStartupHeader()
 
         with open(self._logPath, "a", encoding="utf-8") as f:
             f.write(logLine)
-        print(consoleText)
+
+        if callback:
+            callback(consoleText)
+        else:
+            print(consoleText)
 
 
     @staticmethod

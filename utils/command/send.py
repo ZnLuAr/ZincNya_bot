@@ -39,35 +39,33 @@ sendMsg(bot, idList, atUser, text)
 
 ================================================================================
 本地交互式聊天界面（核心功能）
-包含 chatScreen() 及其内部的 receiverLoop() / inputLoop() / printMessage() / displayHistory()
+包含 chatScreen() 及其内部的 receiverLoop() / printMessage() / displayHistory()
 
 chatScreen(app , bot: Bot , targetChatID: str)
     用于进入与某一 chatID 的实时聊天界面。
 
-其操作模式为 CLI 聊天窗口：
-    · 使用 terminalUI 的备用屏幕缓冲区（smcup/rmcup），不污染主终端
-    · 进入时显示历史聊天记录（从 chatHistory 模块加载）
-    · 上方自动展示来自对方的消息（telegram -> bot -> 全局 messageQueue）
-    · 底部由用户以 ">> " 输入并发送消息
+其操作模式为全屏 CLI 聊天窗口：
+    · 使用 prompt_toolkit full_screen Application 管理终端布局
+    · 上方：滚动聊天记录区（历史 + 实时消息）
+    · 底部：固定多行输入区（Enter 换行，Ctrl+S / Esc+Enter 发送）
     · 收发的消息会自动保存到加密数据库（chatHistory 模块）
-    · 输入 ":q" 退出界面
+    · 按 Esc 或 Ctrl+C 退出界面
 
 内部结构：
-    - 设置 app.bot_data["state"]["interactiveMode"] = True，暂停外层 CLI
-    - displayHistory() 进入时显示历史聊天记录
+    - 设置 interactiveMode = True，暂停外层 CLI
+    - ChatScreenApp (utils/chatUI.py) 管理 prompt_toolkit 全屏布局
     - receiverLoop() 后台协程，持续监听 messageQueue 中的消息
         · 使用 asyncio.wait_for() 带超时读取，避免阻塞
-        · 筛选属于当前 chatID 的消息并打印到屏幕
-        · 循环条件依赖 interactiveMode 标志
-    - inputLoop() 使用 asyncInput() 等待用户输入，并自动清理输入行的回显
-    - printMessage() 用于统一格式化输出聊天内容
+        · 筛选属于当前 chatID 的消息并更新 UI
+        · 检测 shutdownEvent 时主动触发 UI 退出
+    - 主循环每轮调用 ui.run() 事件驱动，提交后处理发送逻辑
 
-    正常情况下，用户输入 ":q" 退出函数
+    正常情况下，用户按 Esc 或 Ctrl+C 退出函数
 
 退出时的清理工作（finally 块）：
-    1. 切回主屏幕缓冲区（rmcup）
-    2. 恢复 interactiveMode 为 False
-    3. 取消 receiverTask 协程
+    1. 恢复 interactiveMode 为 False
+    2. 取消 receiverTask 协程
+    3. 将非目标消息放回队列
 
 
 ================================================================================
@@ -77,13 +75,13 @@ chatScreen(app , bot: Bot , targetChatID: str)
 
 聊天记录通过 chatHistory 模块进行加密存储和读取。
 异步输入通过 inputHelper 模块的 asyncInput() 实现（基于 run_in_executor）。
+聊天界面使用 ChatScreenApp (utils/chatUI.py) 管理，基于 prompt_toolkit 全屏 Application。
 
 """
 
 
 
 
-import sys
 import asyncio
 from telegram import Bot
 from datetime import datetime
@@ -91,8 +89,6 @@ from telegram.error import Forbidden
 
 from handlers.cli import parseArgsTokens
 
-from utils.terminalUI import cls, smcup, rmcup
-from utils.inputHelper import asyncMultilineInput
 from utils.core.stateManager import getStateManager
 from utils.logger import logAction, LogLevel, LogChildType
 from utils.whitelistManager.ui import whitelistMenuController
@@ -194,27 +190,33 @@ def _getSenderName(message) -> str:
 
 
 
-def _printFormattedMessage(timestamp: str, sender: str, text: str):
-    """按统一规则打印单条消息，支持多行内容。"""
+def _formatMessageLines(timestamp: str, sender: str, text: str) -> list[str]:
+    """按统一规则将单条消息格式化为行列表，支持多行内容。"""
     sender = sender or "Unknown"
     text = text or ""
 
     if '\n' in text:
         lines = text.split('\n')
-        print(f"[{timestamp}] <{sender}> {lines[0]}")
-        # "[HH:MM:SS] <sender> " 的可视前缀长度近似为 len(sender) + 13
-        total = len(sender) + 13
-        indent = '· ' * (total // 2) + '| '
+        result = [f"[{timestamp}] <{sender}> {lines[0]}"]
+        indent = "          | "
         for line in lines[1:]:
-            print(f"{indent}{line}")
+            result.append(f"{indent}{line}")
+        return result
     else:
-        print(f"[{timestamp}] <{sender}> {text}")
+        return [f"[{timestamp}] <{sender}> {text}"]
+
+
+def _printFormattedMessage(timestamp: str, sender: str, text: str):
+    """按统一规则打印单条消息（兼容现有调用点）。"""
+    for line in _formatMessageLines(timestamp, sender, text):
+        print(line)
 
 
 
-def printMessage(mode, content):
+def _formatMessage(mode, content) -> tuple[str, str, str]:
     """
-    打印消息到屏幕
+    格式化单条消息，返回 (timestamp, sender, text)。
+    供 UI 层与 print 层共用。
 
     参数:
         mode: "incomingMessage" 或 "selfMessage"
@@ -229,33 +231,60 @@ def printMessage(mode, content):
             text = content
 
     timestamp = datetime.now().strftime("%H:%M:%S")
+    return timestamp, sender, text
+
+
+def printMessage(mode, content):
+    """打印消息到屏幕（兼容现有调用点）。"""
+    timestamp, sender, text = _formatMessage(mode, content)
     _printFormattedMessage(timestamp, sender, text)
 
 
 
 
-async def displayHistory(targetChatID):
-    """显示历史聊天记录"""
+async def buildHistoryLines(targetChatID) -> list[str]:
+    """将历史聊天记录格式化为行列表，不打印。"""
     history = await loadHistory(targetChatID)
+    lines: list[str] = []
     if history:
-        print(f"─────── 历史记录 ───────\n")
+        lines.append("─────── 历史记录 ───────")
+        lines.append("")
         for item_type, item_data in iterMessagesWithDateMarkers(history):
             if item_type == "date":
-                print(f"[{item_data}]")
+                lines.append(f"[{item_data}]")
             else:
                 msg = item_data
                 ts = msg["timestamp"].strftime("%H:%M:%S") if msg["timestamp"] else "??:??:??"
                 sender = msg["sender"] or "Unknown"
                 content = msg["content"]
-                _printFormattedMessage(ts, sender, content)
-        print(f"<以上 {len(history)} 条>")
-        print("\n─────── 实时聊天 ───────\n")
+                lines.extend(_formatMessageLines(ts, sender, content))
+        lines.append(f"<以上 {len(history)} 条>")
+        lines.append("")
+        lines.append("─────── 实时聊天 ───────")
+        lines.append("")
+    return lines
+
+
+async def displayHistory(targetChatID):
+    """显示历史聊天记录（兼容现有调用点）。"""
+    for line in await buildHistoryLines(targetChatID):
+        print(line)
 
 
 
 
 async def chatScreen(app , bot: Bot , targetChatID: str):
-    # 进入与指定 chatID 的用户/群聊的本地交互聊天界面
+    """
+    进入与指定 chatID 的用户/群聊的本地交互聊天界面。
+
+    业务编排入口，负责：
+        - interactiveMode 管理
+        - 目标聊天选择
+        - 后台 receiverLoop 启动与清理
+        - 将 UI 交互委托给 ChatScreenApp
+    """
+    from utils.chatUI import ChatScreenApp
+
     state = getStateManager()
 
     # 设置交互模式，暂停外层 CLI 的输入读取
@@ -267,31 +296,48 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         targetChatID = await chatIDList(app , bot)
 
     if not targetChatID:
-        # 恢复外层 CLI 的命令读取
         state.setInteractiveMode(False)
         return
 
     # chatIDList 会把 interactiveMode 设为 False，需要重新设为 True
     state.setInteractiveMode(True)
 
-    # 切换到备用屏幕缓冲区
-    smcup()
-    sys.stdout.flush()
+    shutdownEvent = state.getShutdownEvent()
+
+    # ── 初始化 UI ──
+    # 先构建初始内容（历史记录 + 欢迎信息）
+    initialLines = await buildHistoryLines(targetChatID)
+    initialLines.extend([
+        "",
+        f"已进入聊天界面喵",
+        f"与 {targetChatID} 的实时聊天已连接",
+        "=" * 64,
+    ])
+    ui = ChatScreenApp(targetChatID, initialLines=initialLines)
+
+    # 注册控制台输出回调，让 logger 输出路由到 UI transcript
+    def _consoleOutputHandler(text: str):
+        lines = text.rstrip('\n').split('\n')
+        ui.appendLines(lines)
+
+    state.setConsoleOutputCallback(_consoleOutputHandler)
 
 
     # ========================================================================
     async def receiverLoop():
-        """后台协程：持续监听对方发来的消息并展示"""
-
-        nonTargetMessages = []  # 积攒非目标聊天的消息，退出时回填队列
+        """后台协程：持续监听对方发来的消息并展示到 UI"""
+        nonTargetMessages = []
 
         try:
             while state.isInteractive():
                 try:
-                    # 使用 wait_for 添加超时，避免永久阻塞
                     try:
                         msg = await asyncio.wait_for(queue.get(), timeout=0.5)
                     except asyncio.TimeoutError:
+                        # 检测外部关机信号，强制退出 UI
+                        if shutdownEvent.is_set():
+                            ui.requestExit()
+                            break
                         continue
 
                     if not msg:
@@ -301,97 +347,73 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
                         nonTargetMessages.append(msg)
                         continue
 
-                    # 保存消息到加密存储
                     sender = _getSenderName(msg)
                     content = msg.text or ""
                     await saveMessage(targetChatID, "incoming", sender, content)
 
-                    printMessage("incomingMessage" , msg)
+                    ts, sndr, txt = _formatMessage("incomingMessage", msg)
+                    ui.appendIncomingMessage(ts, sndr, txt)
 
                 except asyncio.CancelledError:
                     break
-
                 except Exception:
-                    # 忽略零星的单次读取异常，继续循环
                     pass
         finally:
-            # 将非目标消息回填队列，防止永久丢失
             for msg in nonTargetMessages:
                 await queue.put(msg)
-
     # ========================================================================
 
+
     receiverTask = asyncio.create_task(receiverLoop())
-
-    # 等待 receiverLoop 启动
     await asyncio.sleep(0.1)
-    print(f"[chatScreen] receiverTask 状态: {'运行中' if not receiverTask.done() else '已结束'}")
 
-    # 主循环，从控制台读取输入并发送消息
+
+    # ── 主循环：UI 事件驱动 ──
     try:
-        cls()  # 清屏
-        print(
-            "已进入聊天界面喵",
-            f"\n与 {targetChatID} 的实时聊天已连接",
-            "\n直接按 Enter 换行，Alt+Enter / Ctrl+S 发送；输入 ':q' 退出\n",
-            "=" * 64,
-            "\n"
-        )
+        while not shutdownEvent.is_set():
+            # 运行 UI，等待用户提交
+            userInput = await ui.run()
 
-        # 显示历史记录
-        await displayHistory(targetChatID)
-
-        shutdownEvent = state.getShutdownEvent()
-
-        while True:
-            # 关机时退出，避免 prompt_async() 永久阻塞
-            if shutdownEvent.is_set():
-                break
-
-            # 使用 asyncMultilineInput 读取用户输入
-            # 支持多行输入，直接按 Enter 换行，Alt+Enter 提交
-            # patch_stdout 会在日志输出或聊天窗口中其他人发言时时自动清除并重绘提示符
-            userInput = await asyncMultilineInput(
-                prompt=">> ",
-                continuation_prompt=".. "
-            )
-
+            # 用户 Ctrl+C 退出或外部请求退出
             if userInput is None:
-                continue
-
-            # 去除首尾空白后检查退出命令（允许像 "  :q  " 这样的输入）
-            stripped = userInput.strip()
-            if stripped == ":q":
                 break
 
-            # LLM 审核队列查看命令
+            # 清空 composer 以准备下一轮输入
+            ui.clearComposer()
+
+            stripped = userInput.strip()
+
+            # LLM 审核队列查看命令（兼容模式：临时退出 UI）
             if stripped == ":review":
                 from utils.command.llm import handleConsoleReview
+                # 临时退出全屏 UI
+                ui.showStatus("进入审核模式...")
                 await handleConsoleReview(bot)
+                ui.showStatus(
+                    "Enter 换行 | Alt+Enter / Ctrl+S 发送 | Esc 退出 | Ctrl+X 清空"
+                    f" | 聊天对象: {targetChatID}"
+                )
                 continue
 
             # 空消息不发送
             if not stripped:
                 continue
 
-            # 发送前去除尾部空行（只保留首部空白，去除尾部）
             textToSend = userInput.rstrip('\n')
 
             try:
-                printMessage("selfMessage" , textToSend)
+                ts, sndr, txt = _formatMessage("selfMessage", textToSend)
+                ui.appendSelfMessage(ts, sndr, txt)
                 await bot.send_message(chat_id=targetChatID , text=textToSend)
-                # 保存发送的消息到加密存储
                 await saveMessage(targetChatID, "outgoing", "ZincNya~", textToSend)
             except Forbidden:
-                print(f"    被 Forbidden 了……这可能是对方还没有跟咱开始聊天的缘故哦")
+                ui.showStatus("被 Forbidden 了……对方可能还没跟咱开始聊天")
             except Exception as e:
-                print(f"    呜喵……发送失败了喵…… | {e}\n")
+                ui.showStatus(f"发送失败: {e}")
 
     finally:
-        # 切回主屏幕缓冲区
-        rmcup()
-        sys.stdout.flush()
-
+        # 注销控制台输出回调
+        state.setConsoleOutputCallback(None)
         state.setInteractiveMode(False)
         receiverTask.cancel()
         try:
@@ -399,7 +421,6 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
         except asyncio.CancelledError:
             pass
 
-        # 关机时不打印退出消息
         if not shutdownEvent.is_set():
             print("退出聊天界面喵——\n\n")
 
