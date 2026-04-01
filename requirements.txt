@@ -34,5 +34,7 @@ jionlp==1.5.27
 # 进程和系统信息（bot 管理命令）
 psutil==6.1.1
 
-# LLM 支持（Claude API）
-anthropic>=0.18.0
+# LLM 支持
+anthropic>=0.18.0        # Claude API
+openai>=1.30.0           # OpenAI / DeepSeek 等兼容端点
+google-genai>=1.0.0      # Google Gemini API

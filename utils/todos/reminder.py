@@ -48,7 +48,8 @@ async def todoReminderLoop(app):
                             LogChildType.WITH_ONE_CHILD,
                         )
                         if not getStateManager().isInteractive():
-                            print(
+                            from utils.core.stateManager import safePrint
+                            safePrint(
                                 f"\n⏰ 控制台待办提醒——\n"
                                 f"  [{todo['id']}] {todo['content']}\n"
                                 f"  优先：{pri} {todo['priority']}\n"

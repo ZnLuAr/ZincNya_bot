@@ -41,13 +41,14 @@ class ChatScreenApp:
             text="",
             multiline=True,
             scrollbar=True,
-            wrap_lines=False,
+            wrap_lines=True,
             focus_on_click=False,
             read_only=True,
         )
         self._transcriptWindow = Window(
             content=self._transcriptArea.control,
             height=Dimension(min=5),
+            wrap_lines=True,
         )
 
         # ── 输入区 ──
@@ -66,7 +67,7 @@ class ChatScreenApp:
         self._statusText = self._defaultStatus()
         self._statusBar = Window(
             content=FormattedTextControl(
-                text=lambda: [("reverse", self._statusText)],
+                text=lambda: [("reverse", self._statusText.ljust(self._getTermWidth()))],
                 focusable=False,
             ),
             height=1,
@@ -98,11 +99,11 @@ class ChatScreenApp:
         def _pageDown(event):
             self._scrollDown(self._getWindowHeight())
 
-        @kb.add("up")
+        @kb.add("c-up")
         def _lineUp(event):
             self._scrollUp(1)
 
-        @kb.add("down")
+        @kb.add("c-down")
         def _lineDown(event):
             self._scrollDown(1)
 
@@ -197,10 +198,17 @@ class ChatScreenApp:
         return cls._fmtLinesFn(timestamp, sender, text)
 
 
+    def _getTermWidth(self) -> int:
+        try:
+            return self._app.output.get_size().columns
+        except Exception:
+            return 80
+
+
     def _defaultStatus(self) -> str:
         return (
             "Enter 换行 | Ctrl+S / Alt+Enter 发送 | Esc 退出 | Ctrl+X 清空"
-            f" | ↑↓ PgUp PgDn 滚动 | 聊天对象: {self._targetChatID}"
+            f" | Ctrl+↑↓ / PgUp PgDn 滚动历史 | 聊天对象: {self._targetChatID}"
         )
 
 
@@ -210,7 +218,7 @@ class ChatScreenApp:
         else:
             pending = f"  ▼ {self._pendingNewMessages} 条新消息" if self._pendingNewMessages else ""
             self._statusText = (
-                f"[历史浏览] PgDn/↓ 向下 | PgUp/↑ 向上 | 偏移 {self._scrollOffset} 行{pending}"
+                f"[历史浏览] PgDn/Ctrl+↓ 向下 | PgUp/Ctrl+↑ 向上 | 偏移 {self._scrollOffset} 行{pending}"
                 f"  |  Esc 退出 | 聊天对象: {self._targetChatID}"
             )
         self._app.invalidate()

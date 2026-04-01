@@ -222,3 +222,23 @@ def getStateManager() -> StateManager:
                 _stateManager = StateManager()
 
     return _stateManager
+
+
+
+
+def safePrint(text: str):
+    """
+    安全输出文本到控制台。
+
+    当 consoleOutputCallback 已设置时（TUI 模式），通过回调路由到 UI，
+    避免直接 print 破坏 TUI 布局；否则 fallback 到 print。
+    用于替代后台任务、错误处理器等场景中的直接 print()。
+    """
+    try:
+        callback = getStateManager().getConsoleOutputCallback()
+        if callback:
+            callback(text)
+            return
+    except Exception:
+        pass
+    print(text)
