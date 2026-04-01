@@ -27,6 +27,7 @@ utils/core/resourceManager.py
 
 import threading
 from typing import Callable, Awaitable
+from utils.core.stateManager import safePrint
 
 
 
@@ -69,7 +70,7 @@ class ResourceManager:
                 await cleanupFunc()
             except Exception as e:
                 # 静默失败，不中断其他资源清理
-                print(f"清理 {name} 时出错: {e}")
+                safePrint(f"清理 {name} 时出错: {e}")
 
 
     def getRegisteredResources(self) -> list[str]:

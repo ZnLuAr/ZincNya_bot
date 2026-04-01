@@ -236,6 +236,12 @@ async def _dispatchLLMReply(
         combinedText = "\n".join(text for text, _ in parts)
         includeContext = any(flag for _, flag in parts) or consumeContextOnce()
 
+        # 显示 typing 状态
+        try:
+            await context.bot.send_chat_action(chat_id=chatID, action="typing")
+        except Exception:
+            pass
+
         # 调用 LLM
         try:
             reply = await generateReply(combinedText, chatID, includeContext=includeContext, userID=userID)

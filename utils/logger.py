@@ -243,7 +243,8 @@ class TreeLogger:
                         context=f"User: {userName}, Event: {event}"
                     )
             except Exception as e:
-                print(f"[{timestamp}] [{level.value}] @锌酱：咦？日志写入失败了喵……？\n             └─┤ 报错在这里——{e}")
+                from utils.core.stateManager import safePrint
+                safePrint(f"[{timestamp}] [{level.value}] @锌酱：咦？日志写入失败了喵……？\n             └─┤ 报错在这里——{e}")
         else:
             # 不写文件，只输出 console
             from utils.core.stateManager import getStateManager
