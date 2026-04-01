@@ -90,7 +90,6 @@ from cryptography.fernet import Fernet
 from config import (
     DB_PATH,
     KEY_PATH,
-    CHAT_DATA_DIR,
     CHAT_BACKUP_DIR,
     CHAT_HISTORY_LIMIT,
 )
@@ -281,7 +280,7 @@ async def saveMessage(chatID: str, direction: str, sender: str, content: str) ->
 
     参数：
         chatID:     聊天对象 ID
-        direction:  消息方向，'incoming' 或 'outgoing'
+        direction:  消息方向，'incoming' 或 'outgoing' 或 'reaction'
         sender:     发送者名称
         content:    消息内容（明文）
 

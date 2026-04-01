@@ -148,6 +148,11 @@ TODOS_CONTENT_PREVIEW_LENGTH = 15                                               
 
 # LLM 相关常量
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", None)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", None)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", None)
+DOUBAO_API_KEY = os.getenv("DOUBAO_API_KEY", None)
+LLM_OPENAI_BASE_URL = os.getenv("LLM_OPENAI_BASE_URL", None)
 LLM_CONFIG_PATH = os.path.join(DATA_DIR, "llmConfig.json")
 LLM_PROMPTS_PATH = os.path.join(DATA_DIR, "prompts.json")
 LLM_DEFAULT_MODEL = "claude-sonnet-4-6"
