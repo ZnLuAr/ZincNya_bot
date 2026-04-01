@@ -114,6 +114,7 @@ ZincNya_bot/
 │   ├── nya.py                  # /nya 语录功能
 │   ├── book.py                 # /book 书籍搜索
 │   ├── todos.py                # /todos 待办事项管理
+│   ├── reaction.py             # 消息 reaction 记录到聊天历史
 │   ├── llm.py                  # LLM 自动回复与审核回调
 │   ├── llmCommand.py           # Telegram 端 /llm 命令（ops 控制）
 │   └── shutdown.py             # 远程关机/重启/状态（仅 ops）
@@ -144,8 +145,15 @@ ZincNya_bot/
 │   ├── llm/                    # LLM 集成模块
 │   │   ├── config.py           # 配置管理（开关、模式、提示词，读写 JSON）
 │   │   ├── state.py            # 运行时状态（审核队列、速率限制、防抖、one-shot）
-│   │   ├── client.py           # Anthropic API 封装
 │   │   ├── contextBuilder.py   # 上下文组装（memory + history + 当前消息）
+│   │   ├── client/             # 多模型 API 客户端
+│   │   │   ├── __init__.py     # 公共接口（generateReply / requestReply）
+│   │   │   ├── _base.py        # LLMProvider 抽象基类
+│   │   │   ├── _router.py      # 模型前缀路由 + 模糊匹配纠错
+│   │   │   ├── _guardrails.py  # 安全防护提示词
+│   │   │   ├── anthropic.py    # Anthropic Claude API
+│   │   │   ├── gemini.py       # Google Gemini API
+│   │   │   └── openaiCompat.py # OpenAI 兼容接口（OpenAI / DeepSeek / 豆包）
 │   │   └── memory/             # Structured memory 子系统
 │   │       ├── database.py     # SQLite 存储、CRUD、分层检索
 │   │       └── ui.py           # LLM 记忆管理 UI
@@ -315,10 +323,24 @@ Operator 权限位（在 `operators.json` 中配置）：
 
 ### LLM 功能
 
+**支持的模型**
+
+| 前缀 | 提供商 | API Key 环境变量 |
+|------|--------|-----------------|
+| `claude-` | Anthropic | `ANTHROPIC_API_KEY` |
+| `gemini-` | Google Gemini | `GEMINI_API_KEY` |
+| `gpt-`、`o1-`、`o3-` | OpenAI | `OPENAI_API_KEY` |
+| `deepseek-` | DeepSeek | `DEEPSEEK_API_KEY` |
+| `doubao-` | 豆包（火山引擎） | `DOUBAO_API_KEY` |
+
+模型切换命令：`/llm model switch <模型名>`（如 `claude-sonnet-4-6`、`gemini-2.5-flash`、`deepseek-chat`）
+
+> 输入错误的模型名时，系统会自动提示最接近的正确名称。
+
 **LLM 无响应 / API 报错**
-- 检查 `.env` 中 `ANTHROPIC_API_KEY` 是否填写正确（不能有多余空格或 BOM）
-- 401 错误：API key 无效或已过期，前往 [console.anthropic.com](https://console.anthropic.com) 重新生成
-- 超时 / 无响应：可能是 Anthropic 服务侧的临时故障，稍后重试；查看 `log/` 中的错误日志确认
+- 检查 `.env` 中对应 provider 的 API Key 是否填写正确（不能有多余空格或 BOM）
+- 401 错误：API key 无效或已过期，前往对应控制台重新生成
+- 超时 / 无响应：可能是服务侧的临时故障，稍后重试；查看 `log/` 中的错误日志确认
 
 **LLM 触发不了（发消息没有反应）**
 - 确认已在控制台执行 `/llm on` 开启功能

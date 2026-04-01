@@ -49,7 +49,8 @@ def saveLLMConfig(config: dict) -> bool:
             json.dump(config, f, ensure_ascii=False, indent=4)
         return True
     except OSError as e:
-        print(f"[LLM] 配置保存失败：{e}")
+        from utils.core.stateManager import safePrint
+        safePrint(f"[LLM] 配置保存失败：{e}")
         return False
 
 

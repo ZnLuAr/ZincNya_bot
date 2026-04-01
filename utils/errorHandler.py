@@ -116,6 +116,7 @@ from typing import Optional
 from collections import defaultdict
 
 from config import LOG_DIR
+from utils.core.stateManager import safePrint
 
 # 导入异常类型用于 isinstance 判断
 from telegram.error import (
@@ -218,9 +219,9 @@ class ErrorHandler:
         # 终端显示简洁摘要（在锁外执行 I/O）
         shortMessage = message[:60] + "..." if len(message) > 60 else message
         if count > 1:
-            print(f"记录了 {errorType}: {shortMessage} 喵 (今日第 {count} 次喵)\n")
+            safePrint(f"记录了 {errorType}: {shortMessage} 喵 (今日第 {count} 次喵)\n")
         else:
-            print(
+            safePrint(
                 f"[{timestamp}] @锌酱：刚刚发生了错误喵\n"
                 f"      └─ 已记录 {errorType}: {shortMessage}\n"
             )
@@ -266,7 +267,7 @@ class ErrorHandler:
                 f.write("\n".join(lines) + "\n")
         except Exception as e:
             # 日志写入失败时，至少在终端显示
-            print(f"        └─ 错误日志写入失败喵: {e}\n")
+            safePrint(f"        └─ 错误日志写入失败喵: {e}\n")
 
 
     def handleUncaughtException(self , excType , excValue , excTraceback):
