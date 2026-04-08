@@ -76,7 +76,7 @@ async def execute(app, args):
 
         case "auto":
             if not rest:
-                print(f"❌ 需要子参数：-on | -off | -console（当前：{getAutoMode()}）")
+                print(f"❌ 需要子参数哦：-on | -off | -console（当前：{getAutoMode()}）\n")
                 return
             mode = rest[0].lstrip("-").lower()
             try:
@@ -107,8 +107,8 @@ async def execute(app, args):
             await handleConsoleReview(app.bot)
 
         case _:
-            print(f"❌ 未知子命令：{cmd}")
-            print("用法：/llm [on|off|auto|model|memory|status|review]")
+            print(f"❌ 是未知的子命令 {cmd} 喵")
+            print("用法：/llm [on|off|auto|model|memory|status|review]\n")
 
 
 
@@ -135,7 +135,7 @@ async def _handleMemoryCommand(args, app=None):
             setContextOnce()
             await logAction("System", "LLM one-shot 记忆已设置", "下一次调用将带入历史上下文", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
         else:
-            print(f"❌ 无效参数：{val}（-on | -off | -once）\n")
+            print(f"❌ 无效的参数 {val} 喵（-on | -off | -once）\n")
         return
 
     match action:

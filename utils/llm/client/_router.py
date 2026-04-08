@@ -58,32 +58,35 @@ def _buildProviders() -> dict[str, LLMProvider]:
         DEEPSEEK_API_KEY,
         DOUBAO_API_KEY,
         LLM_OPENAI_BASE_URL,
+        LLM_PROXY,
     )
 
     providers: dict[str, LLMProvider] = {}
 
     try:
         from .anthropic import AnthropicProvider
-        providers["anthropic"] = AnthropicProvider(ANTHROPIC_API_KEY)
+        providers["anthropic"] = AnthropicProvider(ANTHROPIC_API_KEY, proxy=LLM_PROXY)
     except ImportError:
         pass
 
     try:
         from .gemini import GeminiProvider
-        providers["gemini"] = GeminiProvider(GEMINI_API_KEY)
+        providers["gemini"] = GeminiProvider(GEMINI_API_KEY, proxy=LLM_PROXY)
     except ImportError:
         pass
 
     try:
         from .openaiCompat import OpenAICompatProvider
-        providers["openai"] = OpenAICompatProvider(OPENAI_API_KEY)
+        providers["openai"] = OpenAICompatProvider(OPENAI_API_KEY, proxy=LLM_PROXY)
         providers["deepseek"] = OpenAICompatProvider(
             DEEPSEEK_API_KEY,
             baseURL=LLM_OPENAI_BASE_URL or "https://api.deepseek.com",
+            proxy=LLM_PROXY,
         )
         providers["doubao"] = OpenAICompatProvider(
             DOUBAO_API_KEY,
             baseURL="https://ark.cn-beijing.volces.com/api/v3",
+            proxy=LLM_PROXY,
         )
     except ImportError:
         pass

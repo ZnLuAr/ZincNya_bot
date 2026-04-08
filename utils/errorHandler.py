@@ -50,6 +50,11 @@ setupAsyncioErrorHandler(loop)
    - 这些库会在网络错误时输出完整 traceback 到 logging
    - 拦截后转换为简洁格式，避免刷屏
 
+5. unraisable 异常（通过 sys.unraisablehook）
+   - 捕获 __del__ 析构函数等场景中无法抛出的异常
+   - 这些异常默认会直接写入 stderr，绕过所有错误处理器
+   - 注册后通过 logError + safePrint 路由，TUI 模式下不会打乱布局
+
 
 ================================================================================
 支持的错误类型
@@ -159,6 +164,9 @@ class ErrorHandler:
         """
         # 注册全局未捕获异常处理器
         sys.excepthook = self.handleUncaughtException
+
+        # 注册 unraisable 异常处理器（捕获 __del__ 等场景中的异常）
+        sys.unraisablehook = self.handleUnraisable
 
         # 注册 Telegram Bot 错误处理器
         if app:
@@ -282,6 +290,24 @@ class ErrorHandler:
             message=str(excValue),
             exception=excValue,
             context="Uncaught Exception"
+        )
+
+
+    def handleUnraisable(self, unraisable):
+        """处理无法抛出的异常（如 __del__ 中的异常）"""
+        excType = type(unraisable.exc_value).__name__ if unraisable.exc_value else "Unknown"
+        message = str(unraisable.exc_value) if unraisable.exc_value else ""
+
+        # 从 object 提取来源信息作为 context
+        objStr = ""
+        if unraisable.object is not None:
+            objStr = str(unraisable.object)[:120]
+
+        self.logError(
+            errorType=excType,
+            message=message,
+            exception=unraisable.exc_value,
+            context=f"Unraisable in {objStr}" if objStr else "Unraisable"
         )
 
 

@@ -15,18 +15,23 @@ from ._base import LLMProvider
 class OpenAICompatProvider(LLMProvider):
     """OpenAI 兼容提供商（OpenAI、DeepSeek 等）。"""
 
-    def __init__(self, apiKey: str | None, baseURL: str | None = None):
+    def __init__(self, apiKey: str | None, baseURL: str | None = None, *, proxy: str | None = None):
         super().__init__(apiKey)
         self._baseURL = baseURL
+        self._proxy = proxy
         self._client: AsyncOpenAI | None = None
 
 
     def _getClient(self) -> AsyncOpenAI:
         if self._client is None:
-            self._client = AsyncOpenAI(
-                api_key=self._apiKey,
-                base_url=self._baseURL,
-            )
+            kwargs = {
+                "api_key": self._apiKey,
+                "base_url": self._baseURL,
+            }
+            if self._proxy:
+                import httpx
+                kwargs["http_client"] = httpx.AsyncClient(proxy=self._proxy)
+            self._client = AsyncOpenAI(**kwargs)
         return self._client
 
 

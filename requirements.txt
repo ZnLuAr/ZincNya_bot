@@ -38,3 +38,4 @@ psutil==6.1.1
 anthropic>=0.18.0        # Claude API
 openai>=1.30.0           # OpenAI / DeepSeek 等兼容端点
 google-genai>=1.0.0      # Google Gemini API
+httpx[socks]             # SOCKS 代理支持（anthropic / openai 等依赖）

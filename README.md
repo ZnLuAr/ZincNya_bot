@@ -48,9 +48,9 @@ BOT_TOKEN=your_bot_token_here
 > 3. 把获得的 token 复制下来就好了——
 
 
-### 4. 配置 FFmpeg（必需喵！）
+### 4. 配置 FFmpeg（FindSticker 功能需要）
 
-咱需要 FFmpeg 来处理媒体文件的……
+咱的 FindSticker 表情包下载功能，需要 FFmpeg 来转换媒体格式。
 
 **方式一：自动配置**
 
@@ -297,7 +297,7 @@ Operator 权限位（在 `operators.json` 中配置）：
 1. 克隆代码
 2. 安装依赖：`pip install -r requirements.txt` 
 3. 配置 `.env` 文件
-4. 配置 FFmpeg：`python scripts/setup_ffmpeg.py` 
+4. （可选）配置 FFmpeg：`python scripts/setup_ffmpeg.py`（FindSticker 功能需要）
 5. 启动：`python bot.py` 
 
 ---
@@ -312,14 +312,16 @@ Operator 权限位（在 `operators.json` 中配置）：
 **错误：`BOT_TOKEN 环境变量未设置`**
 - 确保已经创建了 `.env` 文件并填入有效的 token 喵
 
-**错误：`找不到 ffmpeg`**
-- 运行 `python scripts/setup_ffmpeg.py` 自动配置
-- 或者参考 `ffmpeg/README.md` 手动配置
-- Windows：确认 `ffmpeg/bin/ffmpeg.exe` 存在；Linux：确认 `ffmpeg` 在 `$PATH` 中（`which ffmpeg`）
-
 **错误：`data/prompts.json 不存在`**
 - 从模板复制一份：`cp data/prompts.example.json data/prompts.json`
 - 根据需要修改 `system` 提示词
+
+### FindSticker 功能
+
+**错误：`缺失 ffmpeg`**
+- 运行 `python scripts/setup_ffmpeg.py` 自动配置
+- 或者参考 `ffmpeg/README.md` 手动配置
+- Windows：确认 `ffmpeg/bin/ffmpeg.exe` 存在；Linux：确认 `ffmpeg` 在 `$PATH` 中（`which ffmpeg`）
 
 ### LLM 功能
 
@@ -334,8 +336,6 @@ Operator 权限位（在 `operators.json` 中配置）：
 | `doubao-` | 豆包（火山引擎） | `DOUBAO_API_KEY` |
 
 模型切换命令：`/llm model switch <模型名>`（如 `claude-sonnet-4-6`、`gemini-2.5-flash`、`deepseek-chat`）
-
-> 输入错误的模型名时，系统会自动提示最接近的正确名称。
 
 **LLM 无响应 / API 报错**
 - 检查 `.env` 中对应 provider 的 API Key 是否填写正确（不能有多余空格或 BOM）
