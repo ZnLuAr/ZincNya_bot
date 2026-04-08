@@ -145,7 +145,10 @@ async def _mentionDispatch(update: Update , context: ContextTypes.DEFAULT_TYPE):
     注册在 group 0（早于 LLM 消息处理器的 group 1）。
     关键词命中后抛出 ApplicationHandlerStop，阻止后续 group 将同一条消息交给 LLM 处理。
     """
-    text = update.message.text
+    message = update.message
+    if not message or not message.text:
+        return
+    text = message.text
     botUsername = context.bot.username
 
     # 检查是否提及了 bot 自己（不区分大小写）

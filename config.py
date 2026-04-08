@@ -153,6 +153,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", None)
 DOUBAO_API_KEY = os.getenv("DOUBAO_API_KEY", None)
 LLM_OPENAI_BASE_URL = os.getenv("LLM_OPENAI_BASE_URL", None)
+LLM_PROXY = os.getenv("LLM_PROXY", None)                        # HTTP/SOCKS 代理（可选），格式: "http://host:port"
 LLM_CONFIG_PATH = os.path.join(DATA_DIR, "llmConfig.json")
 LLM_PROMPTS_PATH = os.path.join(DATA_DIR, "prompts.json")
 LLM_DEFAULT_MODEL = "claude-sonnet-4-6"

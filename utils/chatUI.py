@@ -100,10 +100,12 @@ class ChatScreenApp:
             self._scrollDown(self._getWindowHeight())
 
         @kb.add("c-up")
+        @kb.add("escape", "up")
         def _lineUp(event):
             self._scrollUp(1)
 
         @kb.add("c-down")
+        @kb.add("escape", "down")
         def _lineDown(event):
             self._scrollDown(1)
 
@@ -177,8 +179,17 @@ class ChatScreenApp:
             pass
 
 
+    def resetExitFlag(self):
+        """重置退出标记（编辑模式中 Esc 取消编辑时调用，避免误退出聊天界面）。"""
+        self._exitRequested = False
+
+
     async def run(self) -> str | None:
         result = await self._app.run_async()
+        # 退出全屏后重置终端状态，清除残留的状态栏
+        self._app.output.reset_attributes()
+        self._app.output.flush()
+        print()
         return None if self._exitRequested else result
 
 
@@ -208,7 +219,7 @@ class ChatScreenApp:
     def _defaultStatus(self) -> str:
         return (
             "Enter 换行 | Ctrl+S / Alt+Enter 发送 | Esc 退出 | Ctrl+X 清空"
-            f" | Ctrl+↑↓ / PgUp PgDn 滚动历史 | 聊天对象: {self._targetChatID}"
+            f" | Alt+↑↓ / PgUp PgDn 滚动历史 | 聊天对象: {self._targetChatID}"
         )
 
 
@@ -216,9 +227,9 @@ class ChatScreenApp:
         if self._scrollOffset == 0:
             self._statusText = self._defaultStatus()
         else:
-            pending = f"  ▼ {self._pendingNewMessages} 条新消息" if self._pendingNewMessages else ""
+            pending = f"  ▼ 有 {self._pendingNewMessages} 条新消息喵" if self._pendingNewMessages else ""
             self._statusText = (
-                f"[历史浏览] PgDn/Ctrl+↓ 向下 | PgUp/Ctrl+↑ 向上 | 偏移 {self._scrollOffset} 行{pending}"
+                f"[历史浏览] PgDn/Alt+↓ 向下 | PgUp/Alt+↑ 向上 | 偏移 {self._scrollOffset} 行{pending}"
                 f"  |  Esc 退出 | 聊天对象: {self._targetChatID}"
             )
         self._app.invalidate()
@@ -226,6 +237,7 @@ class ChatScreenApp:
 
     def _getWindowHeight(self) -> int:
         """获取 transcript 区的实际渲染高度（行数）。"""
+        # 孩子们是 snake_case，我们没救了
         render_info = self._transcriptWindow.render_info
         if render_info is not None:
             return max(1, render_info.window_height)
@@ -253,9 +265,9 @@ class ChatScreenApp:
 
     def _clampOffset(self):
         """确保 offset 不超过可滚动范围。"""
-        window_height = self._getWindowHeight()
+        windowHeight = self._getWindowHeight()
         total = len(self._allLines)
-        max_offset = max(0, total - window_height)
+        max_offset = max(0, total - windowHeight)
         self._scrollOffset = min(self._scrollOffset, max_offset)
 
 
@@ -264,25 +276,25 @@ class ChatScreenApp:
         刷新聊天记录显示。
         根据 _scrollOffset 计算应显示的内容，通过 buffer.set_document 更新。
         """
-        window_height = self._getWindowHeight()
+        windowHeight = self._getWindowHeight()
         total = len(self._allLines)
 
         # 计算可见范围
         if self._scrollOffset == 0:
-            # 跟随最新：显示最后 window_height 行
-            start = max(0, total - window_height)
-            visible_lines = self._allLines[start:]
+            # 跟随最新：显示最后 windowHeight 行
+            start = max(0, total - windowHeight)
+            visibleLines = self._allLines[start:]
         else:
             # 历史浏览：从底部往上偏移 _scrollOffset
             end = max(0, total - self._scrollOffset)
-            start = max(0, end - window_height)
-            visible_lines = self._allLines[start:end]
+            start = max(0, end - windowHeight)
+            visibleLines = self._allLines[start:end]
 
         # 确保显示固定行数，顶部不足补空行
-        while len(visible_lines) < window_height:
-            visible_lines.insert(0, "")
+        while len(visibleLines) < windowHeight:
+            visibleLines.insert(0, "")
 
-        text = "\n".join(visible_lines)
+        text = "\n".join(visibleLines)
 
         # 更新 Buffer（read_only=True 时需要用 bypass_readonly）
         buf = self._transcriptArea.buffer

@@ -302,6 +302,8 @@ async def handleBookCommand(update: Update , context: ContextTypes.DEFAULT_TYPE)
 async def handleBookTrigger(update: Update , context: ContextTypes.DEFAULT_TYPE):
     """处理 "找书 xxx" / "搜书 xxx" 触发词"""
 
+    if not update.message or not update.message.text:
+        return
     message = update.message.text.strip()
 
     # 提取搜索词（去掉触发词）

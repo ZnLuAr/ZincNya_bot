@@ -15,14 +15,19 @@ from ._base import LLMProvider
 class AnthropicProvider(LLMProvider):
     """Anthropic Claude 提供商。"""
 
-    def __init__(self, apiKey: str | None):
+    def __init__(self, apiKey: str | None, *, proxy: str | None = None):
         super().__init__(apiKey)
+        self._proxy = proxy
         self._client: AsyncAnthropic | None = None
 
 
     def _getClient(self) -> AsyncAnthropic:
         if self._client is None:
-            self._client = AsyncAnthropic(api_key=self._apiKey)
+            kwargs = {"api_key": self._apiKey}
+            if self._proxy:
+                import httpx
+                kwargs["http_client"] = httpx.AsyncClient(proxy=self._proxy)
+            self._client = AsyncAnthropic(**kwargs)
         return self._client
 
 

@@ -15,14 +15,19 @@ from ._base import LLMProvider
 class GeminiProvider(LLMProvider):
     """Google Gemini 提供商。"""
 
-    def __init__(self, apiKey: str | None):
+    def __init__(self, apiKey: str | None, *, proxy: str | None = None):
         super().__init__(apiKey)
+        self._proxy = proxy
         self._client: genai.Client | None = None
 
 
     def _getClient(self) -> genai.Client:
         if self._client is None:
-            self._client = genai.Client(api_key=self._apiKey)
+            kwargs = {"api_key": self._apiKey}
+            if self._proxy:
+                import httpx
+                kwargs["http_options"] = {"client": httpx.AsyncClient(proxy=self._proxy)}
+            self._client = genai.Client(**kwargs)
         return self._client
 
 
