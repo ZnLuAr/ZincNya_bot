@@ -18,21 +18,21 @@ import sys
 from handlers.cli import parseArgsTokens
 from utils.logger import logAction, LogLevel, LogChildType
 from utils.llm import (
-    getLLMEnabled,
-    setLLMEnabled,
-    getAutoMode,
-    setAutoMode,
     getModel,
     setModel,
-    getMemoryEnabled,
-    setMemoryEnabled,
-    setContextOnce,
-    isContextOnceSet,
     addMemory,
-    getMemoryByID,
+    getAutoMode,
+    setAutoMode,
     getMemories,
-    updateMemory,
     deleteMemory,
+    updateMemory,
+    getLLMEnabled,
+    getMemoryByID,
+    setLLMEnabled,
+    setContextOnce,
+    getMemoryEnabled,
+    isContextOnceSet,
+    setMemoryEnabled,
     MEMORY_SCOPE_GLOBAL,
 )
 from config import LLM_RATE_LIMIT_SECONDS
@@ -241,25 +241,20 @@ async def _handleMemoryCommand(args, app=None):
             print("❌ 用法：/llm memory [-on|-off|-once|list|add|edit|del|ui]\n")
 
 
+
+
 # ============================================================================
-# 控制台审核处理（由 chatScreen 调用）
+# 控制台审核处理
 # ============================================================================
 
 async def handleConsoleReview(bot):
     """
-    处理控制台审核队列。
+    独立 CLI 模式的控制台审核（/llm review）。
 
-    在 chatScreen 中输入 :review 时调用此函数。
-
-    流程：
-    1. 从 getReviewQueue() 获取队列
-    2. 如果队列为空，打印提示并返回
-    3. 弹出一条待审核消息
-    4. 等待用户输入 A/E/R/C
-    5. 根据选择执行对应操作
+    从审核队列取一条消息，通过 asyncInput 交互后执行操作。
     """
-    from utils.llm import generateReply
-    from utils.inputHelper import asyncInput
+    from utils.llm.review import reviewSend, reviewRetry, reviewCancel
+    from utils.inputHelper import asyncInput, asyncMultilineInput
 
     queue = getReviewQueue()
 
@@ -284,68 +279,130 @@ ZincNya 的回复：
 操作：[A]ccept / [E]dit / [R]etry / [C]ancel > """,
 end=""
     )
-    
+
     sys.stdout.flush()
 
     try:
         choice = (await asyncInput("")).strip().lower()
     except Exception:
-        # 放回队列
         queue.put_nowait(item)
         return
 
     if choice in ("a", ""):
-        # 发送
         try:
-            await bot.send_message(chat_id=item["chatID"], text=item["reply"])
-            await logAction("System", "LLM 控制台审核", f"发送：{item['originalMsg']}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            await reviewSend(bot, item)
         except Exception as e:
-            print(f"[审核] ❌ 发送失败：{e}\n\n")
+            print(f"[审核] 发送失败：{e}\n\n")
             queue.put_nowait(item)
 
     elif choice in ("e", "edit"):
-        # 编辑后发送
         print("编辑回复（Alt+Enter 提交，:q 取消）：")
-        from utils.inputHelper import asyncMultilineInput
         newText = await asyncMultilineInput(prompt=">> ", continuation_prompt=".. ")
         if newText.strip() and newText.strip() != ":q":
             try:
-                await bot.send_message(chat_id=item["chatID"], text=newText.rstrip('\n'))
-                print(f"[审核] ✅ 已发送编辑内容至 {item['chatID']}")
-                await logAction("System", "LLM 控制台审核：编辑发送", f"原文：{item['originalMsg']}", LogLevel.INFO, LogChildType.WITH_CHILD)
-                await logAction("System", "", f"发送内容：{newText.rstrip(chr(10))}", LogLevel.INFO, LogChildType.LAST_CHILD)
+                await reviewSend(bot, {**item, "reply": newText.rstrip('\n')})
+                print(f"[审核] 已发送编辑内容至 {item['chatID']}")
             except Exception as e:
-                print(f"[审核] ❌ 发送失败：{e}")
+                print(f"[审核] 发送失败：{e}")
                 queue.put_nowait(item)
         else:
             print("[审核] 取消编辑喵")
             queue.put_nowait(item)
 
     elif choice in ("r", "retry"):
-        # 重新生成
         print("[审核] 重新生成喵……")
         try:
-            newReply = await generateReply(
-                item["originalMsg"],
-                item["chatID"],
-                includeContext=bool(item.get("includeContext")),
-                userID=item.get("userID"),
-            )
-            # 放回队列，重新显示
-            queue.put_nowait({**item, "reply": newReply})
-            print(f"[审核] 🔄 已重新生成喵，再次输入 :review 就可以查看了")
-            await logAction("System", "LLM 控制台审核：重新生成", f"原文：{item['originalMsg']}", LogLevel.INFO, LogChildType.WITH_CHILD)
-            await logAction("System", "", f"生成的消息：{newReply}", LogLevel.INFO, LogChildType.LAST_CHILD)
+            newQueueItem = await reviewRetry(item)
+            queue.put_nowait(newQueueItem)
+            print("[审核] 已重新生成喵，再次输入 :review 就可以查看了")
         except Exception as e:
-            print(f"[审核] ❌ 重试失败喵：{e}\n\n")
+            print(f"[审核] 重试失败喵：{e}\n\n")
             queue.put_nowait(item)
 
     elif choice in ("c", "cancel"):
-        await logAction("System", "LLM 控制台审核：取消", f"原文：{item['originalMsg']}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+        await reviewCancel(item)
 
     else:
-        print(f"[审核] ❌ 无效选项：{choice!r}（A/E/R/C）")
+        print(f"[审核] 无效选项：{choice!r}（A/E/R/C）")
         queue.put_nowait(item)
+
+
+
+
+async def handleChatScreenReviewCommand(command: str, bot, ui) -> dict | None:
+    """
+    chatScreen 内审核命令处理（:ra/:re/:rr/:rc/:rq）。
+
+    参数:
+        command: 用户输入的命令（已 strip）
+        bot: Telegram Bot 实例
+        ui: ChatScreenApp 实例
+
+    返回:
+        进入编辑模式时返回审核项 dict，否则返回 None。
+    """
+    from utils.llm.review import reviewSend, reviewRetry, reviewCancel
+
+    queue = getReviewQueue()
+
+    if command == ":rq":
+        ui.showStatus(f" 待审核队列：{queue.qsize()} 条" if queue.qsize() > 0 else "审核队列为空")
+        return None
+
+    if queue.empty():
+        ui.showStatus(" 审核队列空了喵")
+        return None
+
+    item = queue.get_nowait()
+
+    if command == ":ra":
+        try:
+            await reviewSend(bot, item)
+            ui.showStatus(f" LLM 生成消息已发送至 {item['chatID']} 喵")
+        except Exception as e:
+            queue.put_nowait(item)
+            ui.showStatus(f" LLM 生成消息发送失败喵：{e}")
+
+    elif command == ":re":
+        ui._composerArea.text = item["reply"]
+        ui.showStatus(" LLM 生成消息编辑审核中 | Ctrl+S 提交 | Esc 取消编辑")
+        return item
+
+    elif command == ":rr":
+        try:
+            newQueueItem = await reviewRetry(item)
+            queue.put_nowait(newQueueItem)
+            ui.showStatus(" LLM 消息已重新生成喵")
+        except Exception as e:
+            queue.put_nowait(item)
+            ui.showStatus(f" LLM 消息生成重试失败喵：{e}")
+
+    elif command == ":rc":
+        await reviewCancel(item)
+        ui.showStatus(" 已丢弃该条 LLM 消息喵")
+
+    return None
+
+
+async def handleChatScreenEditSubmit(editItem: dict, editedText: str, ui) -> None:
+    """
+    chatScreen 编辑模式提交处理。
+
+    参数:
+        editItem: 正在编辑的审核项
+        editedText: 用户编辑后的文本
+        ui: ChatScreenApp 实例
+    """
+    from utils.llm.review import reviewEditSubmit
+
+    queue = getReviewQueue()
+    result = await reviewEditSubmit(editItem, editedText)
+    queue.put_nowait(result)
+
+    if editedText.strip():
+        ui.showStatus(" LLM 消息编辑完成，重新入队待审核 | :ra 发送 :re 编辑 :rr 重试 :rc 取消")
+    else:
+        ui.showStatus(" 编辑内容为空喵，LLM 生成原内容已放回队列")
 
 
 

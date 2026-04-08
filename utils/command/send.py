@@ -412,62 +412,8 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
 
             # ── LLM 审核命令 ──
             if stripped in (":ra", ":re", ":rr", ":rc", ":rq"):
-                from utils.llm.state import getReviewQueue
-                reviewQueue = getReviewQueue()
-
-                if stripped == ":rq":
-                    ui.showStatus(f" 待审核队列：{reviewQueue.qsize()} 条" if reviewQueue.qsize() > 0 else "审核队列为空")
-                    continue
-
-                if reviewQueue.empty():
-                    ui.showStatus(" 审核队列空了喵")
-                    continue
-
-                item = reviewQueue.get_nowait()
-
-                if stripped == ":ra":
-                    # Accept：发送回复
-                    try:
-                        await bot.send_message(
-                            chat_id=item["chatID"],
-                            text=item["reply"],
-                            reply_to_message_id=item.get("messageID"),
-                        )
-                        await logAction("System", "LLM 控制台审核：发送", f"原文：{item['originalMsg']}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
-                        ui.showStatus(f" LLM 生成消息已发送至 {item['chatID']} 喵")
-                    except Exception as e:
-                        reviewQueue.put_nowait(item)
-                        ui.showStatus(f" LLM 生成消息发送失败喵：{e}")
-
-                elif stripped == ":re":
-                    # Edit：将 reply 载入 composer，进入编辑模式
-                    _reviewEditItem = item
-                    ui._composerArea.text = item["reply"]
-                    ui.showStatus(" LLM 生成消息编辑审核中 | Ctrl+S 提交 | Esc 取消编辑")
-                    continue
-
-                elif stripped == ":rr":
-                    # Retry：重新生成
-                    try:
-                        from utils.llm import generateReply
-                        newReply = await generateReply(
-                            item["originalMsg"], item["chatID"],
-                            includeContext=bool(item.get("includeContext")),
-                            userID=item.get("userID"),
-                        )
-                        reviewQueue.put_nowait({**item, "reply": newReply})
-                        await logAction("System", "LLM 控制台审核：重新生成", f"原文：{item['originalMsg']}", LogLevel.INFO, LogChildType.WITH_CHILD)
-                        await logAction("System", "", f"生成的消息：{newReply}", LogLevel.INFO, LogChildType.LAST_CHILD)
-                        ui.showStatus(" LLM 消息已重新生成喵")
-                    except Exception as e:
-                        reviewQueue.put_nowait(item)
-                        ui.showStatus(f" LLM 消息生成重试失败喵：{e}")
-
-                elif stripped == ":rc":
-                    # Cancel：丢弃
-                    await logAction("System", "LLM 控制台审核：取消", f"原文：{item['originalMsg']}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
-                    ui.showStatus(" 已丢弃该条 LLM 消息喵")
-
+                from utils.command.llm import handleChatScreenReviewCommand
+                _reviewEditItem = await handleChatScreenReviewCommand(stripped, bot, ui)
                 continue
 
             # 空消息不发送
@@ -476,18 +422,8 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
 
             # 编辑模式提交 → 放回审核队列，不直接发送
             if _reviewEditItem is not None:
-                editText = userInput.rstrip('\n')
-                if editText.strip():
-                    from utils.llm.state import getReviewQueue
-                    editedItem = {**_reviewEditItem, "reply": editText}
-                    getReviewQueue().put_nowait(editedItem)
-                    await logAction("System", "LLM 控制台审核：编辑完成", f"原文：{_reviewEditItem['originalMsg']}", LogLevel.INFO, LogChildType.WITH_CHILD)
-                    await logAction("System", "", f"编辑后：{editText[:200]}", LogLevel.INFO, LogChildType.LAST_CHILD)
-                    ui.showStatus(" LLM 消息编辑完成，重新入队待审核 | :ra 发送 :re 编辑 :rr 重试 :rc 取消")
-                else:
-                    from utils.llm.state import getReviewQueue
-                    getReviewQueue().put_nowait(_reviewEditItem)
-                    ui.showStatus(" 编辑内容为空喵，LLM 生成原内容已放回队列")
+                from utils.command.llm import handleChatScreenEditSubmit
+                await handleChatScreenEditSubmit(_reviewEditItem, userInput.rstrip('\n'), ui)
                 _reviewEditItem = None
                 continue
 
