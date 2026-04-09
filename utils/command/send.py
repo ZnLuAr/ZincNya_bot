@@ -340,10 +340,11 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
                             break
                         # 定期检查审核队列，更新状态栏提示
                         try:
-                            from utils.llm.state import getReviewQueue
+                            from utils.llm.state import getReviewQueue, peekReviewHint
                             rq = getReviewQueue()
                             if rq.qsize() > 0:
-                                ui.showStatus(f" LLM 生成消息待审核: {rq.qsize()} 条 | :ra 发送 :re 编辑 :rr 重试 :rc 取消")
+                                hint = peekReviewHint() or ""
+                                ui.showStatus(f" 待审核: ({rq.qsize()} 条) | :ra 通过 :re 编辑 :rr 重试 :rc 取消 | {hint} ")
                         except Exception:
                             pass
                         continue
@@ -378,7 +379,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
     # 审核编辑模式状态（局部变量，仅 chatScreen 内使用）
     _reviewEditItem: dict | None = None
 
-    # ── 辅助：恢复默认状态栏 ──
+    # ── 恢复默认状态栏 ──
     def _restoreDefaultStatus():
         ui.showStatus(
             " Enter 换行 | Ctrl+S / Alt+Enter 发送 | Esc 退出 | Ctrl+X 清空"

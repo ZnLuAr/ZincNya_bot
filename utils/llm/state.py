@@ -2,7 +2,8 @@
 utils/llm/state.py
 
 LLM 运行时状态管理：
-    - 待审核消息队列（控制台审核模式）
+    - 多类型审核队列（reply + memory，console / chatScreen 共用）
+    - 队首预览（peekReviewHint，供 chatScreen 状态栏显示）
     - 每用户速率限制
     - 消息防抖缓冲（聚合短时间内分多次发送的消息）
     - 全局 one-shot context 标记（memory -once）
@@ -40,6 +41,34 @@ def getReviewQueue() -> asyncio.Queue:
     return _llmReviewQueue
 
 
+def peekReviewHint() -> str | None:
+    """
+    窥视队首审核项，返回类型+内容预览字符串。
+    队列为空时返回 None。不消费队列项。
+    """
+    # asyncio.Queue 内部使用 collections.deque
+    if not _llmReviewQueue._queue:
+        return None
+    item = _llmReviewQueue._queue[0]
+    kind = item.get("kind", "reply")
+    if kind == "memory":
+        action = item.get("action", {})
+        actionType = action.get("action", "?")
+        content = action.get("content") or action.get("originalContent") or ""
+        memoryID = action.get("memoryID")
+        if content:
+            preview = content[:16] + "…" if len(content) > 16 else content
+        elif memoryID is not None:
+            preview = f"#{memoryID}"
+        else:
+            preview = ""
+        return f"当前操作的是：[记忆:{actionType}] {preview}" if preview else f"当前操作的是：[记忆:{actionType}]"
+    else:
+        reply = item.get("reply") or ""
+        preview = reply[:16] + "…" if len(reply) > 16 else reply
+        return f"当前操作的是：[回复] {preview}" if preview else "当前操作的是：[回复]"
+
+
 
 
 def addReviewItem(
@@ -62,6 +91,7 @@ def addReviewItem(
         opsID: 审核通知发送给哪个 ops
     """
     _llmReviewQueue.put_nowait({
+        "kind": "reply",
         "chatID": chatID,
         "messageID": messageID,
         "originalMsg": originalMsg,
@@ -69,6 +99,34 @@ def addReviewItem(
         "opsID": opsID,
         "userID": str(userID) if userID is not None else None,
         "includeContext": includeContext,
+    })
+
+
+def addMemoryReviewItem(
+    *,
+    action: dict,
+    chatID: str,
+    originalMsg: str,
+    opsID: str,
+    userID: str | int | None = None,
+):
+    """
+    将 LLM 记忆操作加入审核队列。
+
+    参数:
+        action: MemoryAction 的 dict 形式
+        chatID: 原始聊天 ID
+        originalMsg: 触发该操作的用户消息
+        opsID: 审核通知发送给哪个 ops
+        userID: 触发用户 ID
+    """
+    _llmReviewQueue.put_nowait({
+        "kind": "memory",
+        "action": action,
+        "chatID": chatID,
+        "originalMsg": originalMsg,
+        "opsID": opsID,
+        "userID": str(userID) if userID is not None else None,
     })
 
 

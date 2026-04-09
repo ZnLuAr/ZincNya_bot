@@ -2,11 +2,12 @@
 utils/llm/client/
 
 多模型 LLM 客户端。
-对外导出 generateReply 和 requestReply，签名与原 client.py 完全一致。
+按模型名前缀路由至 Anthropic / Gemini / OpenAI / DeepSeek / 豆包等 provider。
+对外导出 generateReply 和 requestReply。
 """
 
 from ._router import getProvider
-from ._guardrails import SYSTEM_GUARDRAILS
+from ._guardrails import SYSTEM_GUARDRAILS, MEMORY_ACTION_INSTRUCTIONS
 from ..config import getModel, loadPrompts
 from ..contextBuilder import buildConversationContext
 
@@ -24,6 +25,7 @@ def _buildSystemMessages(prompts: dict) -> list[str]:
         parts = [str(raw)]
 
     parts.extend(SYSTEM_GUARDRAILS)
+    parts.extend(MEMORY_ACTION_INSTRUCTIONS)
     return parts
 
 

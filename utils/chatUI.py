@@ -237,7 +237,7 @@ class ChatScreenApp:
 
     def _getWindowHeight(self) -> int:
         """获取 transcript 区的实际渲染高度（行数）。"""
-        # 孩子们是 snake_case，我们没救了
+        # 孩子们是强制 snake_case 命名变量，我们没救了
         render_info = self._transcriptWindow.render_info
         if render_info is not None:
             return max(1, render_info.window_height)

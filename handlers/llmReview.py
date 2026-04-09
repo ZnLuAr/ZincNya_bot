@@ -8,6 +8,10 @@ Telegram 端 LLM 审核回调处理器。
     - 处理审核按钮回调（发送 / 重试 / 取消）
     - 处理 ops 对审核消息的 :edit 编辑
     - 管理 bot_data 中的审核状态（含过期清理）
+
+支持两类审核项：
+    - llm_review_*：回复审核（发送 / 重试 / 取消 / :edit 编辑）
+    - llm_memreview_*：LLM 记忆操作审核（批准 / 取消 / :edit 编辑 add/update）
 """
 
 import time
@@ -15,6 +19,7 @@ from telegram.ext import ContextTypes, CallbackQueryHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 
 from utils.llm import generateReply
+from utils.llm.memory.action import MemoryAction, executeAction
 from utils.operators import hasPermission
 from config import Permission, LLM_REVIEW_TTL_SECONDS
 from utils.logger import logAction, LogLevel, LogChildType
@@ -63,6 +68,56 @@ def _buildReviewKeyboard(chatID, msgID) -> InlineKeyboardMarkup:
     ])
 
 
+# ---------------------------------------------------------------------------
+# 记忆审核格式化与键盘
+# ---------------------------------------------------------------------------
+
+def _formatMemoryReviewText(action: dict, originalMsg: str) -> str:
+    """构造记忆审核消息文本"""
+    actionType = action.get("action", "?").upper()
+    scopeType = action.get("scopeType", "?")
+    scopeID = action.get("scopeID", "")
+    content = action.get("content") or action.get("originalContent") or ""
+    tags = action.get("tags") or []
+    priority = action.get("priority", 0)
+    reason = action.get("reason", "")
+    memoryID = action.get("memoryID")
+
+    lines = [
+        f"[记忆操作待审核] {actionType}",
+        f"范围: {scopeType}:{scopeID or 'global'}",
+    ]
+    if memoryID is not None:
+        lines.append(f"目标 ID: #{memoryID}")
+    if content:
+        displayContent = _truncate(content, 500)
+        lines.append(f"内容: {displayContent}")
+    if tags:
+        lines.append(f"标签: {', '.join(tags)}")
+    if priority:
+        lines.append(f"优先级: {priority}")
+    if reason:
+        lines.append(f"理由: {reason}")
+    lines.append(f"\n触发消息: {originalMsg}")
+
+    actionTypeLower = action.get("action", "")
+    if actionTypeLower in ("add", "update"):
+        lines.append("\n💡 回复此消息并以 :edit 开头修改记忆内容")
+
+    text = "\n".join(lines)
+    return _truncate(text, _TG_MAX_LEN)
+
+
+def _buildMemoryReviewKeyboard(chatID, msgID) -> InlineKeyboardMarkup:
+    """构造记忆审核 inline keyboard"""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ 批准", callback_data=f"llm:memreview:approve:{chatID}:{msgID}"),
+            InlineKeyboardButton("❌ 取消", callback_data=f"llm:memreview:cancel:{chatID}:{msgID}"),
+        ],
+    ])
+
+
 
 
 async def handleEditReply(message, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -83,9 +138,15 @@ async def handleEditReply(message, context: ContextTypes.DEFAULT_TYPE) -> bool:
 
     replyToID = message.reply_to_message.message_id
     reviewKey = None
+    isMemoryReview = False
     for k, v in (context.bot_data or {}).items():
-        if k.startswith("llm_review_") and str(v.get("opsID")) == senderID and k.split("_")[-1] == str(replyToID):
+        if not (k.startswith("llm_review_") or k.startswith("llm_memreview_")):
+            continue
+        if str(v.get("opsID")) != senderID:
+            continue
+        if k.split("_")[-1] == str(replyToID):
             reviewKey = k
+            isMemoryReview = k.startswith("llm_memreview_")
             break
     if not reviewKey:
         return True
@@ -96,15 +157,30 @@ async def handleEditReply(message, context: ContextTypes.DEFAULT_TYPE) -> bool:
 
     newText = message.text[6:].strip()
     if newText:
-        context.bot_data[reviewKey]["reply"] = newText
-        chatIDEdit = reviewData["chatID"]
-        msgIDEdit = reviewKey.split("_")[-1]
-        await context.bot.edit_message_text(
-            chat_id=senderID,
-            message_id=replyToID,
-            text=_formatReviewText(reviewData["originalMsg"], newText),
-            reply_markup=_buildReviewKeyboard(chatIDEdit, msgIDEdit),
-        )
+        if isMemoryReview:
+            # 记忆审核编辑，只允许 add/update
+            actionData = reviewData.get("action", {})
+            if actionData.get("action") not in ("add", "update"):
+                return True
+            context.bot_data[reviewKey]["action"]["content"] = newText
+            chatIDEdit = reviewData["chatID"]
+            msgIDEdit = reviewKey.split("_")[-1]
+            await context.bot.edit_message_text(
+                chat_id=senderID,
+                message_id=replyToID,
+                text=_formatMemoryReviewText(context.bot_data[reviewKey]["action"], reviewData["originalMsg"]),
+                reply_markup=_buildMemoryReviewKeyboard(chatIDEdit, msgIDEdit),
+            )
+        else:
+            context.bot_data[reviewKey]["reply"] = newText
+            chatIDEdit = reviewData["chatID"]
+            msgIDEdit = reviewKey.split("_")[-1]
+            await context.bot.edit_message_text(
+                chat_id=senderID,
+                message_id=replyToID,
+                text=_formatReviewText(reviewData["originalMsg"], newText),
+                reply_markup=_buildReviewKeyboard(chatIDEdit, msgIDEdit),
+            )
         await message.delete()
     return True
 
@@ -152,12 +228,53 @@ async def sendReviewMessage(
 
 
 
+async def sendMemoryReviewMessage(
+    bot,
+    opsID: int,
+    action: dict,
+    originalMsg: str,
+    chatID: int | str,
+    context: ContextTypes.DEFAULT_TYPE,
+    userID: int | str | None = None,
+):
+    """
+    发送 Telegram 记忆操作审核消息（带 inline keyboard），并存储审核状态到 bot_data。
+
+    参数:
+        action: MemoryAction 的 dict 形式
+        originalMsg: 触发该操作的用户消息
+        chatID: 原始聊天 ID
+    """
+    sent = await bot.send_message(
+        chat_id=opsID,
+        text=_formatMemoryReviewText(action, originalMsg),
+    )
+    reviewMsgID = sent.message_id
+    await bot.edit_message_reply_markup(
+        chat_id=opsID,
+        message_id=reviewMsgID,
+        reply_markup=_buildMemoryReviewKeyboard(chatID, reviewMsgID),
+    )
+
+    context.bot_data[f"llm_memreview_{chatID}_{reviewMsgID}"] = {
+        "action": action,
+        "originalMsg": originalMsg,
+        "chatID": chatID,
+        "opsID": opsID,
+        "userID": userID,
+        "createdAt": time.time(),
+    }
+
+
+
+
 def _cleanupExpiredReviews(bot_data: dict):
-    """清理 bot_data 中已过期的审核条目"""
+    """清理 bot_data 中已过期的审核条目（包括回复审核和记忆审核）"""
     cutoff = time.time() - LLM_REVIEW_TTL_SECONDS
     expired = [
         k for k, v in bot_data.items()
-        if k.startswith("llm_review_") and v.get("createdAt", 0) < cutoff
+        if (k.startswith("llm_review_") or k.startswith("llm_memreview_"))
+        and v.get("createdAt", 0) < cutoff
     ]
     for k in expired:
         del bot_data[k]
@@ -244,12 +361,89 @@ async def handleReviewCallback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 
+@handleTelegramErrors(errorReply="……诶、操作好像出了点问题喵……")
+async def handleMemoryReviewCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理记忆审核按钮点击。无权用户点击时静默忽略。"""
+    query = update.callback_query
+    clickerID = str(query.from_user.id) if query.from_user else None
+    if not clickerID:
+        return
+
+    _cleanupExpiredReviews(context.bot_data)
+
+    parts = query.data.split(":")
+    if len(parts) != 5:
+        await query.answer()
+        await query.edit_message_text("[无效的操作喵]")
+        return
+    action, chatID, msgID = parts[2:]
+
+    key = f"llm_memreview_{chatID}_{msgID}"
+    reviewData = context.bot_data.get(key)
+    if not reviewData:
+        await query.answer()
+        await query.edit_message_text("[记忆审核已过期喵]")
+        return
+
+    opsID = str(reviewData["opsID"])
+    if clickerID != opsID or not hasPermission(clickerID, Permission.LLM):
+        return
+
+    await query.answer()
+
+    actionData = reviewData["action"]
+
+    if action == "approve":
+        memAction = MemoryAction(
+            action=actionData["action"],
+            scopeType=actionData["scopeType"],
+            scopeID=actionData.get("scopeID", ""),
+            content=actionData.get("content"),
+            tags=actionData.get("tags"),
+            priority=actionData.get("priority"),
+            memoryID=actionData.get("memoryID"),
+            reason=actionData.get("reason", ""),
+        )
+        success = await executeAction(memAction)
+        status = "成功" if success else "失败"
+
+        resultText = (
+            f"[记忆操作已批准 - {status}]\n\n"
+            f"操作: {actionData.get('action', '?').upper()}\n"
+            f"范围: {actionData.get('scopeType', '?')}:{actionData.get('scopeID', 'global')}\n"
+        )
+        if actionData.get("content"):
+            resultText += f"内容: {_truncate(actionData['content'], 300)}\n"
+        await query.edit_message_text(_truncate(resultText, _TG_MAX_LEN))
+
+        del context.bot_data[key]
+        await logAction(
+            "System",
+            f"LLM 记忆操作审核通过 ({status})",
+            f"action={actionData.get('action')}, scope={actionData.get('scopeType')}:{actionData.get('scopeID', '')}, content={str(actionData.get('content', ''))[:100]}",
+            LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
+        )
+
+    elif action == "cancel":
+        await query.edit_message_text("[记忆操作已取消]")
+        del context.bot_data[key]
+        await logAction(
+            "System",
+            f"LLM 记忆操作审核取消",
+            f"action={actionData.get('action')}, scope={actionData.get('scopeType')}:{actionData.get('scopeID', '')}",
+            LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
+        )
+
+
+
+
 def register():
     return {
         "handlers": [
             CallbackQueryHandler(handleReviewCallback, pattern=r"^llm:review:"),
+            CallbackQueryHandler(handleMemoryReviewCallback, pattern=r"^llm:memreview:"),
         ],
         "name": "LLM Telegram 审核",
-        "description": "Telegram 端 LLM 审核按钮回调",
+        "description": "Telegram 端 LLM 审核按钮回调（回复与记忆操作）",
         "auth": False,
     }
