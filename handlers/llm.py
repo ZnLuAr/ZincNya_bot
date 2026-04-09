@@ -8,6 +8,8 @@ LLM 消息处理器。
     - 权限检查（whitelist + llmEnabled）
     - 调用 LLM 生成回复
     - 根据 autoMode 分发结果（直接发送 / Telegram 审核 / 控制台审核）
+    - 解析回复中的 <MEMORY_ACTION> 块，按 autoMode 分流记忆操作审核
+    - 支持 memoryAutoApprove 自动执行模式
 """
 
 
@@ -41,13 +43,22 @@ from utils.llm import (
     consumeContextOnce,
     popPendingMessages,
     appendPendingMessage,
+    getMemoryAutoApprove,
 )
-from config import Permission, LLM_DEBOUNCE_SECONDS
+from utils.llm.memory.action import (
+    validateAction,
+    parseMemoryActions,
+    LLM_MEMORY_MAX_ACTIONS,
+    executeAction as executeMemoryAction,
+)
+
 from utils.operators import loadOperators
-from utils.logger import logAction, LogLevel, LogChildType
+from utils.llm.state import addMemoryReviewItem
+from config import Permission, LLM_DEBOUNCE_SECONDS
 from utils.telegramHelpers import isMentioned, removeMention
 from utils.whitelistManager.data import whetherAuthorizedUser
-from handlers.llmReview import handleEditReply, sendReviewMessage, _truncate
+from utils.logger import logAction, logSystemEvent, LogLevel, LogChildType
+from handlers.llmReview import handleEditReply, sendReviewMessage, sendMemoryReviewMessage, _truncate
 
 
 _TG_MAX_LEN = 4096
@@ -115,7 +126,7 @@ async def _dispatchLLMReply(
     不直接持有 update 对象（可能已过期），改用 chatID 和 triggerMsgID。
     """
     try:
-        # 防抖等待：window 内若有新消息，旧 task 被 cancel，新 task 重新计时
+        # 防抖等待，window 内若有新消息，旧 task 被 cancel，新 task 重新计时
         await asyncio.sleep(LLM_DEBOUNCE_SECONDS)
 
         # 取出并合并该防抖轮次中的所有待聚合消息
@@ -125,7 +136,7 @@ async def _dispatchLLMReply(
         combinedText = "\n".join(text for text, _ in parts)
         includeContext = any(flag for _, flag in parts) or consumeContextOnce()
 
-        # 显示 typing 状态
+        # 在 Telegram 上边栏显示 typing... 状态
         try:
             await context.bot.send_chat_action(chat_id=chatID, action="typing")
         except Exception:
@@ -145,68 +156,156 @@ async def _dispatchLLMReply(
         # 记录调用时间（速率限制基于轮次，而非单条消息）
         addRateLimit(userID)
 
-        # 根据审核模式分发（Telegram API 调用统一包装，防止超时逃逸到 Task）
+        # 解析记忆操作（仅在 includeContext 时生效）
+        memoryActions = []
+        if includeContext:
+            reply, memoryActions = parseMemoryActions(reply)
+            # 截断超出上限的操作，并逐一校验
+            if len(memoryActions) > LLM_MEMORY_MAX_ACTIONS:
+                await logSystemEvent(
+                    "LLM 记忆操作数量超限",
+                    f"请求 {len(memoryActions)} 个，上限 {LLM_MEMORY_MAX_ACTIONS}，截断",
+                    LogLevel.WARNING,
+                )
+                memoryActions = memoryActions[:LLM_MEMORY_MAX_ACTIONS]
+
+            validatedActions = []
+            for act in memoryActions:
+                err = await validateAction(act)
+                if err:
+                    await logSystemEvent(
+                        "LLM 记忆操作校验失败",
+                        f"{act.action} | {err}",
+                        LogLevel.WARNING,
+                    )
+                else:
+                    validatedActions.append(act)
+            memoryActions = validatedActions
+
+        # 根据审核模式分发
         try:
             autoMode = getAutoMode()
+            opsList = _getOpsWithLLMPermission()
 
-            if autoMode == "on":
-                await context.bot.send_message(
-                    chat_id=chatID,
-                    text=_truncate(reply, _TG_MAX_LEN),
-                    reply_to_message_id=triggerMsgID,
-                )
-                await logAction("System", f"LLM 生成内容直接发送至 @{username}（{chatID}）", f"原文：{combinedText}", LogLevel.INFO, LogChildType.WITH_CHILD)
-                await logAction("System", "", f"生成的消息：{reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
-
-            elif autoMode == "off":
-                opsList = _getOpsWithLLMPermission()
-                if not opsList:
+            # 发送回复
+            if reply.strip():
+                if autoMode == "on":
                     await context.bot.send_message(
                         chat_id=chatID,
-                        text="诶——等等……管理员配置貌似有缺位……💦\n得有人为锌酱说的话负责，锌酱才可以畅所欲言不逾矩的喵……"
+                        text=_truncate(reply, _TG_MAX_LEN),
+                        reply_to_message_id=triggerMsgID,
                     )
-                    return
-                for opsID in opsList:
-                    await sendReviewMessage(
-                        bot=context.bot,
-                        opsID=int(opsID),
-                        originalMsg=combinedText,
-                        reply=reply,
-                        chatID=int(chatID),
-                        context=context,
-                        triggerMsgID=triggerMsgID,
-                        userID=userID,
-                        includeContext=includeContext,
-                    )
-                await context.bot.set_message_reaction(
-                    chat_id=chatID,
-                    message_id=triggerMsgID,
-                    reaction=[ReactionTypeEmoji(emoji="👀")],
-                )
-                await logAction("System", f"LLM 生成内容待审核：@{username}（{chatID}）", f"原文：{combinedText}", LogLevel.INFO, LogChildType.WITH_CHILD)
-                await logAction("System", "", f"生成的消息：{reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
+                    await logAction("System", f"LLM 生成内容直接发送至 @{username}（{chatID}）", f"原文：{combinedText}", LogLevel.INFO, LogChildType.WITH_CHILD)
+                    await logAction("System", "", f"生成的消息：{reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
 
-            else:  # console
-                opsList = _getOpsWithLLMPermission()
-                if not opsList:
-                    await context.bot.send_message(chat_id=chatID, text="诶——等等……管理员配置貌似有缺位……💦\n得有人为锌酱说的话负责，锌酱才可以畅所欲言不逾矩的喵……")
-                    return
-                addReviewItem(
-                    chatID=chatID,
-                    messageID=triggerMsgID,
-                    originalMsg=combinedText,
-                    reply=reply,
-                    opsID=opsList[0],
-                    userID=userID,
-                    includeContext=includeContext,
-                )
-                await context.bot.set_message_reaction(
-                    chat_id=chatID,
-                    message_id=triggerMsgID,
-                    reaction=[ReactionTypeEmoji(emoji="👀")],
-                )
-                await logAction("System", f"LLM 生成内容等待控制台审核：@{username}（{chatID}）", f"原文：{combinedText}", LogLevel.INFO, LogChildType.WITH_CHILD)
-                await logAction("System", "", f"生成的消息：{reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
+                elif autoMode == "off":
+                    if not opsList:
+                        await context.bot.send_message(
+                            chat_id=chatID,
+                            text="诶——等等……管理员配置貌似有缺位……💦\n得有人为锌酱说的话负责，锌酱才可以畅所欲言不逾矩的喵……"
+                        )
+                    else:
+                        for opsID in opsList:
+                            await sendReviewMessage(
+                                bot=context.bot,
+                                opsID=int(opsID),
+                                originalMsg=combinedText,
+                                reply=reply,
+                                chatID=int(chatID),
+                                context=context,
+                                triggerMsgID=triggerMsgID,
+                                userID=userID,
+                                includeContext=includeContext,
+                            )
+                        await context.bot.set_message_reaction(
+                            chat_id=chatID,
+                            message_id=triggerMsgID,
+                            reaction=[ReactionTypeEmoji(emoji="👀")],
+                        )
+                        await logAction("System", f"LLM 生成内容待审核：@{username}（{chatID}）", f"原文：{combinedText}", LogLevel.INFO, LogChildType.WITH_CHILD)
+                        await logAction("System", "", f"生成的消息：{reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
+
+                else:  # Console 审核模式下
+                    if not opsList:
+                        await context.bot.send_message(chat_id=chatID, text="诶——等等……管理员配置貌似有缺位……💦\n得有人为锌酱说的话负责，锌酱才可以畅所欲言不逾矩的喵……")
+                    else:
+                        addReviewItem(
+                            chatID=chatID,
+                            messageID=triggerMsgID,
+                            originalMsg=combinedText,
+                            reply=reply,
+                            opsID=opsList[0],
+                            userID=userID,
+                            includeContext=includeContext,
+                        )
+                        await context.bot.set_message_reaction(
+                            chat_id=chatID,
+                            message_id=triggerMsgID,
+                            reaction=[ReactionTypeEmoji(emoji="👀")],
+                        )
+                        await logAction("System", f"LLM 生成内容等待控制台审核：@{username}（{chatID}）", f"原文：{combinedText}", LogLevel.INFO, LogChildType.WITH_CHILD)
+                        await logAction("System", "", f"生成的消息：{reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
+
+            # 分发记忆操作
+            if memoryActions:
+                memoryAutoApprove = getMemoryAutoApprove()
+
+                if memoryAutoApprove:
+                    # 直接执行，不审核
+                    from utils.llm.memory.action import _formatActionDetail
+                    for act in memoryActions:
+                        success = await executeMemoryAction(act)
+                        status = "成功" if success else "失败"
+                        await logAction(
+                            "System", f"LLM 记忆操作自动执行 ({status})",
+                            _formatActionDetail(act),
+                            LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
+                        )
+
+                elif not opsList:
+                    await logSystemEvent(
+                        "LLM 记忆操作无审核人",
+                        f"有 {len(memoryActions)} 个操作被丢弃（无 LLM ops）",
+                        LogLevel.WARNING,
+                    )
+                else:
+                    for act in memoryActions:
+                        actDict = {
+                            "action": act.action,
+                            "scopeType": act.scopeType,
+                            "scopeID": act.scopeID,
+                            "content": act.content,
+                            "tags": act.tags,
+                            "priority": act.priority,
+                            "memoryID": act.memoryID,
+                            "reason": act.reason,
+                        }
+                        # delete/update 缺少 content 时，查原记忆用于预览
+                        if act.memoryID is not None and not act.content:
+                            from utils.llm.memory.database import getMemoryByID
+                            target = await getMemoryByID(act.memoryID)
+                            if target:
+                                actDict["originalContent"] = target.get("content", "")
+                        if autoMode == "console":
+                            addMemoryReviewItem(
+                                action=actDict,
+                                chatID=chatID,
+                                originalMsg=combinedText,
+                                opsID=opsList[0],
+                                userID=userID,
+                            )
+                        else:
+                            # autoMode == "on" 或 "off" 均走 Telegram 审核
+                            # 只发给第一个 ops，避免重复批准
+                            await sendMemoryReviewMessage(
+                                bot=context.bot,
+                                opsID=int(opsList[0]),
+                                action=actDict,
+                                originalMsg=combinedText,
+                                chatID=int(chatID),
+                                context=context,
+                                userID=userID,
+                            )
 
         except NetworkError as e:
             await logAction("System", f"LLM 分发回复失败：{chatID}", str(e), LogLevel.ERROR, LogChildType.WITH_ONE_CHILD)
@@ -236,7 +335,8 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not message or not message.text:
         return
 
-    # 过滤指令消息（/ 开头）——filter 层已排除，此处保留作双重保障
+    # 过滤指令消息（/ 开头）
+    # 其实在 filter 层已经排除，此处保留作双重保障
     if message.text.startswith("/"):
         return
 

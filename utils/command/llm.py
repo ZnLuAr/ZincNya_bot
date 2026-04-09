@@ -5,9 +5,15 @@ LLM 功能控制台命令：
     /llm on | off
     /llm auto -on | -off | -console
     /llm model [switch <model>]
-    /llm memory -on | -off | -once
+    /llm memory -on | -off | -once | -autoapprove
+    /llm memory list | add | edit | del | ui
     /llm status
     /llm review
+
+控制台审核（/llm review）与 chatScreen 审核命令（:ra/:re/:rr/:rc/:rq）
+均支持两类审核项：
+    - reply：LLM 回复审核
+    - memory：LLM 自主记忆操作审核（add/update/delete）
 """
 
 
@@ -34,8 +40,20 @@ from utils.llm import (
     isContextOnceSet,
     setMemoryEnabled,
     MEMORY_SCOPE_GLOBAL,
+    getMemoryAutoApprove,
+    setMemoryAutoApprove,
 )
 from config import LLM_RATE_LIMIT_SECONDS
+from utils.llm.review import (
+    reviewSend,
+    reviewRetry,
+    reviewCancel,
+    reviewEditSubmit,
+    canEditReviewItem,
+    canRetryReviewItem,
+    formatReviewItemText,
+    getReviewItemActions,
+)
 from utils.llm.state import getReviewQueue
 
 
@@ -49,6 +67,7 @@ def _printStatus():
     print(f"  审核模式：{modeMap.get(auto, auto)}")
     print(f"  当前模型：{getModel()}")
     print(f"  记忆模式：{'开启' if getMemoryEnabled() else '关闭'}")
+    print(f"  记忆自动批准：{'开启' if getMemoryAutoApprove() else '关闭'}")
     print(f"  One-shot：{'已设置（下次调用生效）' if isContextOnceSet() else '未设置'}")
     print(f"  速率限制：{LLM_RATE_LIMIT_SECONDS} 秒")
     qsize = getReviewQueue().qsize()
@@ -134,8 +153,13 @@ async def _handleMemoryCommand(args, app=None):
         elif val == "once":
             setContextOnce()
             await logAction("System", "LLM one-shot 记忆已设置", "下一次调用将带入历史上下文", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+        elif val == "autoapprove":
+            current = getMemoryAutoApprove()
+            setMemoryAutoApprove(not current)
+            newState = "开启" if not current else "关闭"
+            await logAction("System", f"LLM 记忆自动批准{newState}", "OK", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
         else:
-            print(f"❌ 无效的参数 {val} 喵（-on | -off | -once）\n")
+            print(f"❌ 无效的参数 {val} 喵（-on | -off | -once | -autoapprove）\n")
         return
 
     match action:
@@ -252,8 +276,8 @@ async def handleConsoleReview(bot):
     独立 CLI 模式的控制台审核（/llm review）。
 
     从审核队列取一条消息，通过 asyncInput 交互后执行操作。
+    支持 reply 和 memory 两类审核项。
     """
-    from utils.llm.review import reviewSend, reviewRetry, reviewCancel
     from utils.inputHelper import asyncInput, asyncMultilineInput
 
     queue = getReviewQueue()
@@ -263,9 +287,15 @@ async def handleConsoleReview(bot):
         return
 
     item = queue.get_nowait()
+    kind = item.get("kind", "reply")
+    actionsHint = getReviewItemActions(item)
 
-    print(
-        f"""
+    if kind == "memory":
+        print(f"\n{formatReviewItemText(item)}\n")
+        print(f"操作：{actionsHint} > ", end="")
+    else:
+        print(
+            f"""
 [消息待审核喵]
 原始消息：{item['originalMsg']}
 
@@ -276,9 +306,9 @@ ZincNya 的回复：
 
 {'-' * 30}
 
-操作：[A]ccept / [E]dit / [R]etry / [C]ancel > """,
+操作：{actionsHint} > """,
 end=""
-    )
+        )
 
     sys.stdout.flush()
 
@@ -292,24 +322,45 @@ end=""
         try:
             await reviewSend(bot, item)
         except Exception as e:
-            print(f"[审核] 发送失败：{e}\n\n")
+            print(f"[审核] 操作失败：{e}\n\n")
             queue.put_nowait(item)
 
     elif choice in ("e", "edit"):
-        print("编辑回复（Alt+Enter 提交，:q 取消）：")
+        if not canEditReviewItem(item):
+            print("[审核] 当前审核项不可编辑喵")
+            queue.put_nowait(item)
+            return
+
+        if kind == "memory":
+            currentContent = item.get("action", {}).get("content") or ""
+            print(f"编辑记忆内容（当前：{currentContent[:100]}）：")
+        else:
+            print("编辑回复（Alt+Enter 提交，:q 取消）：")
+
         newText = await asyncMultilineInput(prompt=">> ", continuation_prompt=".. ")
         if newText.strip() and newText.strip() != ":q":
             try:
-                await reviewSend(bot, {**item, "reply": newText.rstrip('\n')})
-                print(f"[审核] 已发送编辑内容至 {item['chatID']}")
+                editedItem = await reviewEditSubmit(item, newText.rstrip('\n'))
+                if kind == "memory":
+                    # console memory 编辑后立即批准
+                    await reviewSend(bot, editedItem)
+                    print("[审核] 记忆操作编辑后已执行")
+                else:
+                    await reviewSend(bot, editedItem)
+                    print(f"[审核] 已发送编辑内容至 {item['chatID']}")
             except Exception as e:
-                print(f"[审核] 发送失败：{e}")
+                print(f"[审核] 操作失败：{e}")
                 queue.put_nowait(item)
         else:
             print("[审核] 取消编辑喵")
             queue.put_nowait(item)
 
     elif choice in ("r", "retry"):
+        if not canRetryReviewItem(item):
+            print("[审核] 当前审核项不支持重试喵")
+            queue.put_nowait(item)
+            return
+
         print("[审核] 重新生成喵……")
         try:
             newQueueItem = await reviewRetry(item)
@@ -323,7 +374,7 @@ end=""
         await reviewCancel(item)
 
     else:
-        print(f"[审核] 无效选项：{choice!r}（A/E/R/C）")
+        print(f"[审核] 无效选项：{choice!r}")
         queue.put_nowait(item)
 
 
@@ -341,8 +392,6 @@ async def handleChatScreenReviewCommand(command: str, bot, ui) -> dict | None:
     返回:
         进入编辑模式时返回审核项 dict，否则返回 None。
     """
-    from utils.llm.review import reviewSend, reviewRetry, reviewCancel
-
     queue = getReviewQueue()
 
     if command == ":rq":
@@ -354,32 +403,44 @@ async def handleChatScreenReviewCommand(command: str, bot, ui) -> dict | None:
         return None
 
     item = queue.get_nowait()
+    kind = item.get("kind", "reply")
 
     if command == ":ra":
         try:
             await reviewSend(bot, item)
-            ui.showStatus(f" LLM 生成消息已发送至 {item['chatID']} 喵")
         except Exception as e:
             queue.put_nowait(item)
-            ui.showStatus(f" LLM 生成消息发送失败喵：{e}")
+            ui.showStatus(f" 操作失败喵：{e}")
 
     elif command == ":re":
-        ui._composerArea.text = item["reply"]
-        ui.showStatus(" LLM 生成消息编辑审核中 | Ctrl+S 提交 | Esc 取消编辑")
+        if not canEditReviewItem(item):
+            queue.put_nowait(item)
+            ui.showStatus(" 当前审核项不可编辑喵")
+            return None
+
+        if kind == "memory":
+            ui._composerArea.text = item.get("action", {}).get("content", "")
+            ui.showStatus(" 记忆内容编辑审核中 | Ctrl+S 提交 | Esc 取消编辑")
+        else:
+            ui._composerArea.text = item["reply"]
+            ui.showStatus(" LLM 生成消息编辑审核中 | Ctrl+S 提交 | Esc 取消编辑")
         return item
 
     elif command == ":rr":
+        if not canRetryReviewItem(item):
+            queue.put_nowait(item)
+            ui.showStatus(" 当前审核项不支持重试喵")
+            return None
+
         try:
             newQueueItem = await reviewRetry(item)
             queue.put_nowait(newQueueItem)
-            ui.showStatus(" LLM 消息已重新生成喵")
         except Exception as e:
             queue.put_nowait(item)
             ui.showStatus(f" LLM 消息生成重试失败喵：{e}")
 
     elif command == ":rc":
         await reviewCancel(item)
-        ui.showStatus(" 已丢弃该条 LLM 消息喵")
 
     return None
 
@@ -393,16 +454,9 @@ async def handleChatScreenEditSubmit(editItem: dict, editedText: str, ui) -> Non
         editedText: 用户编辑后的文本
         ui: ChatScreenApp 实例
     """
-    from utils.llm.review import reviewEditSubmit
-
     queue = getReviewQueue()
     result = await reviewEditSubmit(editItem, editedText)
     queue.put_nowait(result)
-
-    if editedText.strip():
-        ui.showStatus(" LLM 消息编辑完成，重新入队待审核 | :ra 发送 :re 编辑 :rr 重试 :rc 取消")
-    else:
-        ui.showStatus(" 编辑内容为空喵，LLM 生成原内容已放回队列")
 
 
 
@@ -418,6 +472,7 @@ def getHelp():
             "/llm auto -on|-off|-console          切换审核模式\n"
             "/llm model [switch <model>]          显示或切换模型\n"
             "/llm memory -on|-off|-once           开启/关闭记忆模式，或仅下一次带入历史\n"
+            "/llm memory -autoapprove             切换记忆自动批准（跳过审核）\n"
             "/llm memory list [-all] [-scope <type> -id <id>] [-limit n]\n"
             "/llm memory add -scope <type> [-id <id>] -text <content> [-tags ...] [-priority n] [-off]\n"
             "/llm memory edit -mid <id> [-text ...] [-tags ...] [-priority n] [-enabled on|off]\n"
@@ -429,6 +484,7 @@ def getHelp():
             "/llm on                              开启 LLM\n"
             "/llm auto -console                   切换到控制台审核模式\n"
             "/llm memory -on                      开启全局记忆模式\n"
+            "/llm memory -autoapprove             切换记忆自动批准\n"
             "/llm memory list                     列出所有启用的 memory\n"
             "/llm memory add -scope global -text '偏好简体中文'\n"
             "/llm memory edit -mid 1 -priority 10\n"

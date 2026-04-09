@@ -115,7 +115,8 @@ ZincNya_bot/
 │   ├── book.py                 # /book 书籍搜索
 │   ├── todos.py                # /todos 待办事项管理
 │   ├── reaction.py             # 消息 reaction 记录到聊天历史
-│   ├── llm.py                  # LLM 自动回复与审核回调
+│   ├── llm.py                  # LLM 自动回复、记忆操作解析与审核分发
+│   ├── llmReview.py            # Telegram 端 LLM 审核回调（回复与记忆操作）
 │   ├── llmCommand.py           # Telegram 端 /llm 命令（ops 控制）
 │   └── shutdown.py             # 远程关机/重启/状态（仅 ops）
 │
@@ -144,19 +145,21 @@ ZincNya_bot/
 │   │
 │   ├── llm/                    # LLM 集成模块
 │   │   ├── config.py           # 配置管理（开关、模式、提示词，读写 JSON）
-│   │   ├── state.py            # 运行时状态（审核队列、速率限制、防抖、one-shot）
+│   │   ├── state.py            # 运行时状态（多类型审核队列、速率限制、防抖、one-shot）
+│   │   ├── review.py           # 审核共享操作（console / chatScreen 的 send/retry/cancel）
 │   │   ├── contextBuilder.py   # 上下文组装（memory + history + 当前消息）
 │   │   ├── client/             # 多模型 API 客户端
 │   │   │   ├── __init__.py     # 公共接口（generateReply / requestReply）
 │   │   │   ├── _base.py        # LLMProvider 抽象基类
 │   │   │   ├── _router.py      # 模型前缀路由 + 模糊匹配纠错
-│   │   │   ├── _guardrails.py  # 安全防护提示词
+│   │   │   ├── _guardrails.py  # 安全防护提示词与记忆操作指令
 │   │   │   ├── anthropic.py    # Anthropic Claude API
 │   │   │   ├── gemini.py       # Google Gemini API
 │   │   │   └── openaiCompat.py # OpenAI 兼容接口（OpenAI / DeepSeek / 豆包）
 │   │   └── memory/             # Structured memory 子系统
 │   │       ├── database.py     # SQLite 存储、CRUD、分层检索
-│   │       └── ui.py           # LLM 记忆管理 UI
+│   │       ├── action.py       # LLM 自主记忆操作（解析、校验、执行）
+│   │       └── ui.py           # LLM 记忆管理 TUI
 │   │
 │   ├── todos/                  # 待办事项子系统
 │   │   ├── database.py         # SQLite 数据存储
@@ -213,7 +216,7 @@ ZincNya_bot/
 | `/history` | 预览或导出聊天历史记录 |
 | `/nya` | 语录相关功能 |
 | `/todos` | 管理待办事项 |
-| `/llm` | 控制 LLM 功能开关、审核模式和模型 |
+| `/llm` | 控制 LLM 功能开关、审核模式、模型与记忆管理 |
 | `/log` | 管理日志文件 |
 | `/clear` | 清理控制台 |
 | `/shutdown` | 关闭 Bot |
@@ -248,7 +251,7 @@ Operator 权限位（在 `operators.json` 中配置）：
 | `restart` | 允许远程重启 |
 | `status` | 允许查看运行状态 |
 | `notify` | 接收未授权用户访问通知 |
-| `llm` | 接收 LLM 生成内容的 Telegram 审核消息 |
+| `llm` | 接收 LLM 生成内容与记忆操作的 Telegram 审核消息 |
 
 想知道更详细的用法，就输入 `/help <command>` 喵！
 
@@ -350,6 +353,12 @@ Operator 权限位（在 `operators.json` 中配置）：
 
 **审核消息显示 `[已过期]`**
 - Bot 重启后 `bot_data` 会清空，重启前未处理的审核消息均会过期，属于正常现象
+
+**LLM 记忆操作**
+- LLM 可以在回复中通过 `<MEMORY_ACTION>` 块自主申请新增/更新/删除记忆
+- 所有记忆操作默认需要审核后才生效（Telegram 按钮审核或控制台审核，取决于 `autoMode`）
+- 执行 `/llm memory -autoapprove` 可切换为自动批准模式（跳过审核）
+- LLM 只能操作 `source=inferred` 的记忆，不能修改手动创建的记忆
 
 ### 权限 / 管理员命令
 

@@ -7,7 +7,8 @@ LLM structured memory 数据库模块。
     - memory_entries 表初始化
     - CRUD 接口
     - 分层检索（global -> chat -> user -> session）
-    - 上下文格式化与检索摘要
+    - 上下文格式化（含 id/src，供 LLM 识别可操作的 inferred 记忆）
+    - 检索摘要
 """
 
 
@@ -382,7 +383,8 @@ def buildMemoryContextBlock(memories: list[dict[str, Any]]) -> str:
         content = item.get("content", "")
         tags = item.get("tags") or []
 
-        header = f"- ({scopeType}:{scopeID}, p={priority}) {content}"
+        source = item.get("source", "manual")
+        header = f"- ({scopeType}:{scopeID}, p={priority}, id={item['id']}, src={source}) {content}"
         if tags:
             header += f" [tags: {', '.join(tags)}]"
         lines.append(header)

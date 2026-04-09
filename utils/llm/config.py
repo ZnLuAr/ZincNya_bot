@@ -2,7 +2,7 @@
 utils/llm/config.py
 
 LLM 配置管理：
-    - 加载/保存 llmConfig.json（enabled、autoMode、model、memoryEnabled）
+    - 加载/保存 llmConfig.json（enabled、autoMode、model、memoryEnabled、memoryAutoApprove）
     - 加载 prompts.json（不存在时 fallback 到 prompts.example.json）
 """
 
@@ -26,6 +26,7 @@ _DEFAULT_CONFIG = {
     "autoMode": "console",  # "on" | "off" | "console"
     "model": LLM_DEFAULT_MODEL,
     "memoryEnabled": False,
+    "memoryAutoApprove": False,
 }
 
 
@@ -110,6 +111,14 @@ def getMemoryEnabled() -> bool:
 
 def setMemoryEnabled(enabled: bool):
     _setConfig(memoryEnabled=enabled)
+
+
+def getMemoryAutoApprove() -> bool:
+    return loadLLMConfig()["memoryAutoApprove"]
+
+
+def setMemoryAutoApprove(enabled: bool):
+    _setConfig(memoryAutoApprove=enabled)
 
 
 
