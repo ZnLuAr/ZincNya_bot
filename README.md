@@ -149,7 +149,6 @@ ZincNya_bot/
 │   │   ├── review.py           # 审核共享操作（console / chatScreen 的 send/retry/cancel）
 │   │   ├── contextBuilder.py   # 上下文组装（memory + history + 当前消息）
 │   │   ├── client/             # 多模型 API 客户端
-│   │   │   ├── __init__.py     # 公共接口（generateReply / requestReply）
 │   │   │   ├── _base.py        # LLMProvider 抽象基类
 │   │   │   ├── _router.py      # 模型前缀路由 + 模糊匹配纠错
 │   │   │   ├── _guardrails.py  # 安全防护提示词与记忆操作指令

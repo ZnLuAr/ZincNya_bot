@@ -9,6 +9,7 @@ LLM 自主记忆操作：
 
 import re
 import json
+import asyncio
 from typing import Optional
 from dataclasses import dataclass
 
@@ -51,6 +52,33 @@ class MemoryAction:
     priority: Optional[int] = None
     memoryID: Optional[int] = None
     reason: str = ""
+
+    def toDict(self) -> dict:
+        """序列化为内部 dict（camelCase 键名）。"""
+        return {
+            "action": self.action,
+            "scopeType": self.scopeType,
+            "scopeID": self.scopeID,
+            "content": self.content,
+            "tags": self.tags,
+            "priority": self.priority,
+            "memoryID": self.memoryID,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def fromDict(cls, data: dict) -> "MemoryAction":
+        """从内部 dict（camelCase 键名）反序列化。"""
+        return cls(
+            action=data["action"],
+            scopeType=data["scopeType"],
+            scopeID=data.get("scopeID", ""),
+            content=data.get("content"),
+            tags=data.get("tags"),
+            priority=data.get("priority"),
+            memoryID=data.get("memoryID"),
+            reason=data.get("reason", ""),
+        )
 
 
 
@@ -111,7 +139,7 @@ def _parseActionDict(data: dict) -> MemoryAction:
     )
 
 
-def _formatActionDetail(act: MemoryAction) -> str:
+def formatActionDetail(act: MemoryAction) -> str:
     """格式化单个记忆操作的日志详情。"""
     detail = f"{act.action} | scope={act.scopeType}:{act.scopeID}"
     if act.memoryID is not None:
@@ -139,13 +167,12 @@ def parseMemoryActions(text: str) -> tuple[str, list[MemoryAction]]:
                 act = _parseActionDict(item)
                 actions.append(act)
                 try:
-                    import asyncio
                     loop = asyncio.get_running_loop()
                     loop.create_task(
                         logAction(
                             "System",
                             "LLM 请求操作 Memory",
-                            _formatActionDetail(act),
+                            formatActionDetail(act),
                             level=LogLevel.INFO,
                             childType=LogChildType.WITH_ONE_CHILD,
                         )
@@ -155,7 +182,6 @@ def parseMemoryActions(text: str) -> tuple[str, list[MemoryAction]]:
         except Exception as e:
             details = block if len(block) <= 300 else block[:300] + "……"
             try:
-                import asyncio
                 loop = asyncio.get_running_loop()
                 loop.create_task(
                     logSystemEvent(

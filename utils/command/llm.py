@@ -473,11 +473,11 @@ def getHelp():
             "/llm model [switch <model>]          显示或切换模型\n"
             "/llm memory -on|-off|-once           开启/关闭记忆模式，或仅下一次带入历史\n"
             "/llm memory -autoapprove             切换记忆自动批准（跳过审核）\n"
+            "/llm memory del <id>                 删除一条 memory\n"
+            "/llm memory ui                       打开 Memory 管理界面\n"
             "/llm memory list [-all] [-scope <type> -id <id>] [-limit n]\n"
             "/llm memory add -scope <type> [-id <id>] -text <content> [-tags ...] [-priority n] [-off]\n"
             "/llm memory edit -mid <id> [-text ...] [-tags ...] [-priority n] [-enabled on|off]\n"
-            "/llm memory del <id>                 删除一条 memory\n"
-            "/llm memory ui                        打开 Memory 管理界面\n"
         ),
         "example": (
             "/llm status                          查看当前配置\n"
@@ -486,8 +486,8 @@ def getHelp():
             "/llm memory -on                      开启全局记忆模式\n"
             "/llm memory -autoapprove             切换记忆自动批准\n"
             "/llm memory list                     列出所有启用的 memory\n"
+            "/llm memory del 3                    删除 memory #3\n"
             "/llm memory add -scope global -text '偏好简体中文'\n"
             "/llm memory edit -mid 1 -priority 10\n"
-            "/llm memory del 3                    删除 memory #3\n"
         ),
     }
