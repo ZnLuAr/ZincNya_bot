@@ -50,6 +50,7 @@ from utils.llm.memory.action import (
     parseMemoryActions,
     LLM_MEMORY_MAX_ACTIONS,
     executeAction as executeMemoryAction,
+    formatActionDetail,
 )
 
 from utils.operators import loadOperators
@@ -252,13 +253,12 @@ async def _dispatchLLMReply(
 
                 if memoryAutoApprove:
                     # 直接执行，不审核
-                    from utils.llm.memory.action import _formatActionDetail
                     for act in memoryActions:
                         success = await executeMemoryAction(act)
                         status = "成功" if success else "失败"
                         await logAction(
                             "System", f"LLM 记忆操作自动执行 ({status})",
-                            _formatActionDetail(act),
+                            formatActionDetail(act),
                             LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
                         )
 
@@ -270,16 +270,7 @@ async def _dispatchLLMReply(
                     )
                 else:
                     for act in memoryActions:
-                        actDict = {
-                            "action": act.action,
-                            "scopeType": act.scopeType,
-                            "scopeID": act.scopeID,
-                            "content": act.content,
-                            "tags": act.tags,
-                            "priority": act.priority,
-                            "memoryID": act.memoryID,
-                            "reason": act.reason,
-                        }
+                        actDict = act.toDict()
                         # delete/update 缺少 content 时，查原记忆用于预览
                         if act.memoryID is not None and not act.content:
                             from utils.llm.memory.database import getMemoryByID

@@ -17,6 +17,27 @@ from utils.logger import logAction, LogLevel, LogChildType
 
 
 # ---------------------------------------------------------------------------
+# 共享字段提取
+# ---------------------------------------------------------------------------
+
+def extractMemoryActionFields(action: dict) -> dict:
+    """
+    从 action dict 中提取标准化展示字段。
+    处理 None 安全（content/originalContent fallback），供格式化函数共用。
+    """
+    return {
+        "actionType": action.get("action", "?"),
+        "scopeType": action.get("scopeType", "?"),
+        "scopeID": action.get("scopeID", ""),
+        "content": action.get("content") or action.get("originalContent") or "",
+        "tags": action.get("tags") or [],
+        "priority": action.get("priority", 0),
+        "reason": action.get("reason", ""),
+        "memoryID": action.get("memoryID"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # 能力判断辅助函数
 # ---------------------------------------------------------------------------
 
@@ -45,31 +66,23 @@ def formatReviewItemText(item: dict) -> str:
     kind = item.get("kind", "reply")
 
     if kind == "memory":
-        action = item.get("action", {})
-        actionType = action.get("action", "?")
-        scopeType = action.get("scopeType", "?")
-        scopeID = action.get("scopeID", "")
-        content = action.get("content") or action.get("originalContent") or ""
-        tags = action.get("tags") or []
-        priority = action.get("priority", 0)
-        reason = action.get("reason", "")
-        memoryID = action.get("memoryID")
+        f = extractMemoryActionFields(item.get("action", {}))
 
         lines = [
-            f"[记忆操作审核] {actionType.upper()}",
-            f"  范围: {scopeType}:{scopeID or 'global'}",
+            f"[记忆操作审核] {f['actionType'].upper()}",
+            f"  范围: {f['scopeType']}:{f['scopeID'] or 'global'}",
         ]
-        if memoryID is not None:
-            lines.append(f"  目标 ID: #{memoryID}")
-        if content:
-            displayContent = content if len(content) <= 200 else content[:200] + "..."
+        if f["memoryID"] is not None:
+            lines.append(f"  目标 ID: #{f['memoryID']}")
+        if f["content"]:
+            displayContent = f["content"] if len(f["content"]) <= 200 else f["content"][:200] + "..."
             lines.append(f"  内容: {displayContent}")
-        if tags:
-            lines.append(f"  标签: {', '.join(tags)}")
-        if priority:
-            lines.append(f"  优先级: {priority}")
-        if reason:
-            lines.append(f"  理由: {reason}")
+        if f["tags"]:
+            lines.append(f"  标签: {', '.join(f['tags'])}")
+        if f["priority"]:
+            lines.append(f"  优先级: {f['priority']}")
+        if f["reason"]:
+            lines.append(f"  理由: {f['reason']}")
         lines.append(f"  触发消息: {item.get('originalMsg', '?')}")
         return "\n".join(lines)
 
@@ -113,16 +126,7 @@ async def reviewSend(bot, item: dict) -> None:
 
     if kind == "memory":
         actionData = item["action"]
-        action = MemoryAction(
-            action=actionData["action"],
-            scopeType=actionData["scopeType"],
-            scopeID=actionData.get("scopeID", ""),
-            content=actionData.get("content"),
-            tags=actionData.get("tags"),
-            priority=actionData.get("priority"),
-            memoryID=actionData.get("memoryID"),
-            reason=actionData.get("reason", ""),
-        )
+        action = MemoryAction.fromDict(actionData)
         success = await executeAction(action)
         status = "成功" if success else "失败"
         detail = f"scope={action.scopeType}:{action.scopeID}"

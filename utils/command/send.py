@@ -91,6 +91,7 @@ from handlers.cli import parseArgsTokens
 
 from utils.core.stateManager import getStateManager
 from utils.logger import logAction, LogLevel, LogChildType
+from utils.llm.state import getReviewQueue, peekReviewHint
 from utils.whitelistManager.ui import whitelistMenuController
 from utils.chatHistory import saveMessage, loadHistory, iterMessagesWithDateMarkers
 
@@ -340,7 +341,6 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
                             break
                         # 定期检查审核队列，更新状态栏提示
                         try:
-                            from utils.llm.state import getReviewQueue, peekReviewHint
                             rq = getReviewQueue()
                             if rq.qsize() > 0:
                                 hint = peekReviewHint() or ""
@@ -397,7 +397,6 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
             if userInput is None:
                 if _reviewEditItem is not None:
                     # 编辑模式中 Esc → 取消编辑，放回队列，不退出聊天
-                    from utils.llm.state import getReviewQueue
                     getReviewQueue().put_nowait(_reviewEditItem)
                     _reviewEditItem = None
                     ui.resetExitFlag()
@@ -443,7 +442,6 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
     finally:
         # 编辑模式中退出 → 放回队列
         if _reviewEditItem is not None:
-            from utils.llm.state import getReviewQueue
             getReviewQueue().put_nowait(_reviewEditItem)
             _reviewEditItem = None
 

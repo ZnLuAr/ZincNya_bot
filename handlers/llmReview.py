@@ -20,6 +20,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 
 from utils.llm import generateReply
 from utils.llm.memory.action import MemoryAction, executeAction
+from utils.llm.review import extractMemoryActionFields
 from utils.operators import hasPermission
 from config import Permission, LLM_REVIEW_TTL_SECONDS
 from utils.logger import logAction, LogLevel, LogChildType
@@ -30,6 +31,14 @@ _TG_MAX_LEN = 4096
 _REPLY_PREVIEW_LEN = 1800  # 审核消息中 reply 预留长度（正文 + 框架文字后仍留余量）
 
 
+
+
+def _deleteReviewEntry(bot_data: dict, key: str):
+    """删除审核条目及其反向索引。"""
+    bot_data.pop(key, None)
+    # key 格式: llm_review_{chatID}_{msgID} 或 llm_memreview_{chatID}_{msgID}
+    msgID = key.rsplit("_", 1)[-1]
+    bot_data.pop(f"llm_editidx_{msgID}", None)
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -74,34 +83,26 @@ def _buildReviewKeyboard(chatID, msgID) -> InlineKeyboardMarkup:
 
 def _formatMemoryReviewText(action: dict, originalMsg: str) -> str:
     """构造记忆审核消息文本"""
-    actionType = action.get("action", "?").upper()
-    scopeType = action.get("scopeType", "?")
-    scopeID = action.get("scopeID", "")
-    content = action.get("content") or action.get("originalContent") or ""
-    tags = action.get("tags") or []
-    priority = action.get("priority", 0)
-    reason = action.get("reason", "")
-    memoryID = action.get("memoryID")
+    f = extractMemoryActionFields(action)
 
     lines = [
-        f"[记忆操作待审核] {actionType}",
-        f"范围: {scopeType}:{scopeID or 'global'}",
+        f"[记忆操作待审核] {f['actionType'].upper()}",
+        f"范围: {f['scopeType']}:{f['scopeID'] or 'global'}",
     ]
-    if memoryID is not None:
-        lines.append(f"目标 ID: #{memoryID}")
-    if content:
-        displayContent = _truncate(content, 500)
+    if f["memoryID"] is not None:
+        lines.append(f"目标 ID: #{f['memoryID']}")
+    if f["content"]:
+        displayContent = _truncate(f["content"], 500)
         lines.append(f"内容: {displayContent}")
-    if tags:
-        lines.append(f"标签: {', '.join(tags)}")
-    if priority:
-        lines.append(f"优先级: {priority}")
-    if reason:
-        lines.append(f"理由: {reason}")
+    if f["tags"]:
+        lines.append(f"标签: {', '.join(f['tags'])}")
+    if f["priority"]:
+        lines.append(f"优先级: {f['priority']}")
+    if f["reason"]:
+        lines.append(f"理由: {f['reason']}")
     lines.append(f"\n触发消息: {originalMsg}")
 
-    actionTypeLower = action.get("action", "")
-    if actionTypeLower in ("add", "update"):
+    if f["actionType"] in ("add", "update"):
         lines.append("\n💡 回复此消息并以 :edit 开头修改记忆内容")
 
     text = "\n".join(lines)
@@ -137,23 +138,15 @@ async def handleEditReply(message, context: ContextTypes.DEFAULT_TYPE) -> bool:
         return True
 
     replyToID = message.reply_to_message.message_id
-    reviewKey = None
-    isMemoryReview = False
-    for k, v in (context.bot_data or {}).items():
-        if not (k.startswith("llm_review_") or k.startswith("llm_memreview_")):
-            continue
-        if str(v.get("opsID")) != senderID:
-            continue
-        if k.split("_")[-1] == str(replyToID):
-            reviewKey = k
-            isMemoryReview = k.startswith("llm_memreview_")
-            break
+    reviewKey = (context.bot_data or {}).get(f"llm_editidx_{replyToID}")
     if not reviewKey:
         return True
 
-    reviewData = context.bot_data[reviewKey]
-    if str(reviewData.get("opsID")) != senderID:
+    reviewData = context.bot_data.get(reviewKey)
+    if not reviewData or str(reviewData.get("opsID")) != senderID:
         return True
+
+    isMemoryReview = reviewKey.startswith("llm_memreview_")
 
     newText = message.text[6:].strip()
     if newText:
@@ -214,7 +207,8 @@ async def sendReviewMessage(
     )
 
     # 存储审核状态（重启后失效可接受）
-    context.bot_data[f"llm_review_{chatID}_{reviewMsgID}"] = {
+    key = f"llm_review_{chatID}_{reviewMsgID}"
+    context.bot_data[key] = {
         "reply": reply,
         "originalMsg": originalMsg,
         "chatID": chatID,
@@ -224,6 +218,7 @@ async def sendReviewMessage(
         "includeContext": includeContext,
         "createdAt": time.time(),
     }
+    context.bot_data[f"llm_editidx_{reviewMsgID}"] = key
 
 
 
@@ -264,20 +259,21 @@ async def sendMemoryReviewMessage(
         "userID": userID,
         "createdAt": time.time(),
     }
+    context.bot_data[f"llm_editidx_{reviewMsgID}"] = f"llm_memreview_{chatID}_{reviewMsgID}"
 
 
 
 
 def _cleanupExpiredReviews(bot_data: dict):
-    """清理 bot_data 中已过期的审核条目（包括回复审核和记忆审核）"""
+    """清理 bot_data 中已过期的审核条目（包括回复审核、记忆审核及其反向索引）"""
     cutoff = time.time() - LLM_REVIEW_TTL_SECONDS
     expired = [
         k for k, v in bot_data.items()
         if (k.startswith("llm_review_") or k.startswith("llm_memreview_"))
-        and v.get("createdAt", 0) < cutoff
+        and isinstance(v, dict) and v.get("createdAt", 0) < cutoff
     ]
     for k in expired:
-        del bot_data[k]
+        _deleteReviewEntry(bot_data, k)
 
 
 
@@ -329,7 +325,7 @@ async def handleReviewCallback(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         await query.edit_message_text(_truncate(sentText, _TG_MAX_LEN))
 
-        del context.bot_data[key]
+        _deleteReviewEntry(context.bot_data, key)
         await logAction("System", f"LLM 生成内容审核通过：{chatID}", f"原文：{reviewData['originalMsg']}", LogLevel.INFO, LogChildType.WITH_CHILD)
         await logAction("System", "", f"生成的消息：{reviewData['reply']}", LogLevel.INFO, LogChildType.LAST_CHILD)
 
@@ -355,7 +351,7 @@ async def handleReviewCallback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     elif action == "cancel":
         await query.edit_message_text("[已取消]")
-        del context.bot_data[key]
+        _deleteReviewEntry(context.bot_data, key)
         await logAction("System", f"LLM 生成内容审核取消：{chatID}", f"原文：{reviewData['originalMsg']}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
 
 
@@ -394,16 +390,7 @@ async def handleMemoryReviewCallback(update: Update, context: ContextTypes.DEFAU
     actionData = reviewData["action"]
 
     if action == "approve":
-        memAction = MemoryAction(
-            action=actionData["action"],
-            scopeType=actionData["scopeType"],
-            scopeID=actionData.get("scopeID", ""),
-            content=actionData.get("content"),
-            tags=actionData.get("tags"),
-            priority=actionData.get("priority"),
-            memoryID=actionData.get("memoryID"),
-            reason=actionData.get("reason", ""),
-        )
+        memAction = MemoryAction.fromDict(actionData)
         success = await executeAction(memAction)
         status = "成功" if success else "失败"
 
@@ -416,7 +403,7 @@ async def handleMemoryReviewCallback(update: Update, context: ContextTypes.DEFAU
             resultText += f"内容: {_truncate(actionData['content'], 300)}\n"
         await query.edit_message_text(_truncate(resultText, _TG_MAX_LEN))
 
-        del context.bot_data[key]
+        _deleteReviewEntry(context.bot_data, key)
         await logAction(
             "System",
             f"LLM 记忆操作审核通过 ({status})",
@@ -426,7 +413,7 @@ async def handleMemoryReviewCallback(update: Update, context: ContextTypes.DEFAU
 
     elif action == "cancel":
         await query.edit_message_text("[记忆操作已取消]")
-        del context.bot_data[key]
+        _deleteReviewEntry(context.bot_data, key)
         await logAction(
             "System",
             f"LLM 记忆操作审核取消",
