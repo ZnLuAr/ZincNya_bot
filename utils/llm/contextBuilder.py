@@ -96,8 +96,15 @@ async def buildConversationContext(
     userID: str | int | None = None,
     sessionID: str | int | None = None,
     includeContext: bool = False,
+    hasImages: bool = False,
 ) -> str:
-    """组装最终 user content。"""
+    """
+    组装最终 user content。
+
+    参数:
+        hasImages: 本轮是否携带图片。为 True 时大幅缩减历史条数，
+                   避免无关历史抢占模型对图片的注意力。
+    """
     blocks = [
         "[任务说明]",
         "请只回答最后这条用户消息。",
@@ -111,7 +118,10 @@ async def buildConversationContext(
             userID=userID,
             sessionID=sessionID,
         )
-        historyBlock = await buildHistoryContext(chatID)
+        # 有图片时不加载历史，避免无关上下文干扰图片识别
+        historyBlock = ""
+        if not hasImages:
+            historyBlock = await buildHistoryContext(chatID)
 
         if memoryBlock:
             blocks.append(memoryBlock)

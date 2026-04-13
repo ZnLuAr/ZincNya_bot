@@ -39,7 +39,7 @@ class OpenAICompatProvider(LLMProvider):
         self,
         *,
         systemMessages: list[str],
-        userContent: str,
+        userContent: str | list,
         model: str,
         maxTokens: int,
         temperature: float,
@@ -47,13 +47,29 @@ class OpenAICompatProvider(LLMProvider):
         client = self._getClient()
         systemText = "\n\n".join(systemMessages)
 
+        # 多模态：将通用中间格式翻译为 OpenAI vision content array
+        if isinstance(userContent, list):
+            content = []
+            for block in userContent:
+                if block["type"] == "text":
+                    content.append({"type": "text", "text": block["text"]})
+                elif block["type"] == "image_base64":
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{block['mimeType']};base64,{block['data']}"
+                        },
+                    })
+        else:
+            content = userContent
+
         response = await client.chat.completions.create(
             model=model,
             max_tokens=maxTokens,
             temperature=temperature,
             messages=[
                 {"role": "system", "content": systemText},
-                {"role": "user", "content": userContent},
+                {"role": "user", "content": content},
             ],
         )
 

@@ -4,6 +4,8 @@ utils/llm/client/gemini.py
 Google Gemini 提供商实现。
 """
 
+import base64
+
 from google import genai
 from google.genai import types
 
@@ -35,7 +37,7 @@ class GeminiProvider(LLMProvider):
         self,
         *,
         systemMessages: list[str],
-        userContent: str,
+        userContent: str | list,
         model: str,
         maxTokens: int,
         temperature: float,
@@ -43,9 +45,23 @@ class GeminiProvider(LLMProvider):
         client = self._getClient()
         systemText = "\n\n".join(systemMessages)
 
+        # 多模态：将通用中间格式翻译为 Gemini Part 列表
+        if isinstance(userContent, list):
+            contents = []
+            for block in userContent:
+                if block["type"] == "text":
+                    contents.append(block["text"])
+                elif block["type"] == "image_base64":
+                    contents.append(types.Part.from_bytes(
+                        data=base64.b64decode(block["data"]),
+                        mime_type=block["mimeType"],
+                    ))
+        else:
+            contents = userContent
+
         response = await client.aio.models.generate_content(
             model=model,
-            contents=userContent,
+            contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=systemText,
                 max_output_tokens=maxTokens,

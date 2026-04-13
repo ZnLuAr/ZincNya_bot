@@ -130,7 +130,7 @@ async def handleEditReply(message, context: ContextTypes.DEFAULT_TYPE) -> bool:
         - 只有拥有 Permission.LLM 的 ops 本人才能编辑自己的审核消息
         - 无权用户或点错消息时静默忽略，不打断正常群聊/审核流程
     """
-    if not (message.reply_to_message and message.text.startswith(":edit ")):
+    if not (message.reply_to_message and message.text and message.text.startswith(":edit ")):
         return False
 
     senderID = str(message.from_user.id) if message.from_user else None
