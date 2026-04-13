@@ -4,8 +4,9 @@ handlers/llm.py
 LLM 消息处理器。
 
 职责：
-    - 监听群聊被 @ 和私聊消息
+    - 监听群聊被 @ 和私聊消息（文字 + 图片）
     - 权限检查（whitelist + llmEnabled）
+    - 提取图片（同消息 photo/document 或 reply_to_message 中的图片）
     - 调用 LLM 生成回复
     - 根据 autoMode 分发结果（直接发送 / Telegram 审核 / 控制台审核）
     - 解析回复中的 <MEMORY_ACTION> 块，按 autoMode 分流记忆操作审核
@@ -52,6 +53,7 @@ from utils.llm.memory.action import (
     executeAction as executeMemoryAction,
     formatActionDetail,
 )
+from utils.llm.vision import extractImageRefs, extractReplyImageRefs, downloadImages
 
 from utils.operators import loadOperators
 from utils.llm.state import addMemoryReviewItem
@@ -134,8 +136,18 @@ async def _dispatchLLMReply(
         parts = popPendingMessages(debounceKey)
         if not parts:
             return
-        combinedText = "\n".join(text for text, _ in parts)
-        includeContext = any(flag for _, flag in parts) or consumeContextOnce()
+        combinedText = "\n".join(text for text, _, _ in parts if text)
+        includeContext = any(flag for _, flag, _ in parts) or consumeContextOnce()
+
+        # 收集所有图片
+        allImages: list[dict] = []
+        for _, _, imgs in parts:
+            allImages.extend(imgs)
+
+        # 构造审核展示用的原始消息文本（含发送者和图片标注）
+        displayOriginalMsg = f"@{username}：{combinedText}"
+        if allImages:
+            displayOriginalMsg = f"[附带 {len(allImages)} 张图片]\n" + displayOriginalMsg
 
         # 在 Telegram 上边栏显示 typing... 状态
         try:
@@ -145,7 +157,7 @@ async def _dispatchLLMReply(
 
         # 调用 LLM
         try:
-            reply = await generateReply(combinedText, chatID, includeContext=includeContext, userID=userID)
+            reply = await generateReply(combinedText, chatID, includeContext=includeContext, userID=userID, images=(allImages or None))
         except Exception as e:
             await logAction("System", f"LLM 生成回复失败：{chatID}", str(e), LogLevel.ERROR, LogChildType.WITH_ONE_CHILD)
             try:
@@ -196,7 +208,7 @@ async def _dispatchLLMReply(
                         text=_truncate(reply, _TG_MAX_LEN),
                         reply_to_message_id=triggerMsgID,
                     )
-                    await logAction("System", f"LLM 生成内容直接发送至 @{username}（{chatID}）", f"原文：{combinedText}", LogLevel.INFO, LogChildType.WITH_CHILD)
+                    await logAction("System", f"LLM 生成内容直接发送至 @{username}（{chatID}）", f"原文：{displayOriginalMsg}", LogLevel.INFO, LogChildType.WITH_CHILD)
                     await logAction("System", "", f"生成的消息：{reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
 
                 elif autoMode == "off":
@@ -210,7 +222,7 @@ async def _dispatchLLMReply(
                             await sendReviewMessage(
                                 bot=context.bot,
                                 opsID=int(opsID),
-                                originalMsg=combinedText,
+                                originalMsg=displayOriginalMsg,
                                 reply=reply,
                                 chatID=int(chatID),
                                 context=context,
@@ -223,7 +235,7 @@ async def _dispatchLLMReply(
                             message_id=triggerMsgID,
                             reaction=[ReactionTypeEmoji(emoji="👀")],
                         )
-                        await logAction("System", f"LLM 生成内容待审核：@{username}（{chatID}）", f"原文：{combinedText}", LogLevel.INFO, LogChildType.WITH_CHILD)
+                        await logAction("System", f"LLM 生成内容待审核：@{username}（{chatID}）", f"原文：{displayOriginalMsg}", LogLevel.INFO, LogChildType.WITH_CHILD)
                         await logAction("System", "", f"生成的消息：{reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
 
                 else:  # Console 审核模式下
@@ -233,7 +245,7 @@ async def _dispatchLLMReply(
                         addReviewItem(
                             chatID=chatID,
                             messageID=triggerMsgID,
-                            originalMsg=combinedText,
+                            originalMsg=displayOriginalMsg,
                             reply=reply,
                             opsID=opsList[0],
                             userID=userID,
@@ -244,7 +256,7 @@ async def _dispatchLLMReply(
                             message_id=triggerMsgID,
                             reaction=[ReactionTypeEmoji(emoji="👀")],
                         )
-                        await logAction("System", f"LLM 生成内容等待控制台审核：@{username}（{chatID}）", f"原文：{combinedText}", LogLevel.INFO, LogChildType.WITH_CHILD)
+                        await logAction("System", f"LLM 生成内容等待控制台审核：@{username}（{chatID}）", f"原文：{displayOriginalMsg}", LogLevel.INFO, LogChildType.WITH_CHILD)
                         await logAction("System", "", f"生成的消息：{reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
 
             # 分发记忆操作
@@ -281,7 +293,7 @@ async def _dispatchLLMReply(
                             addMemoryReviewItem(
                                 action=actDict,
                                 chatID=chatID,
-                                originalMsg=combinedText,
+                                originalMsg=displayOriginalMsg,
                                 opsID=opsList[0],
                                 userID=userID,
                             )
@@ -292,7 +304,7 @@ async def _dispatchLLMReply(
                                 bot=context.bot,
                                 opsID=int(opsList[0]),
                                 action=actDict,
-                                originalMsg=combinedText,
+                                originalMsg=displayOriginalMsg,
                                 chatID=int(chatID),
                                 context=context,
                                 userID=userID,
@@ -314,8 +326,9 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     LLM 消息处理器（私聊 / 群聊被 @）。
 
+    支持纯文字、图片 + 触发、reply 含图消息三种路径。
     流程：LLM 开关检查 → :edit 审核捕获 → 白名单 + 速率限制 →
-          防抖缓冲（appendPendingMessage）→ 取消旧任务 → 创建新防抖任务
+          图片提取与下载 → 防抖缓冲 → 取消旧任务 → 创建新防抖任务
     实际调用 LLM 和分发回复在 _dispatchLLMReply 中异步执行。
     """
     # 1. 检查 LLM 功能是否启用
@@ -323,44 +336,60 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     message = update.message
-    if not message or not message.text:
+    if not message:
         return
+
+    rawText = message.text or message.caption or ""
 
     # 过滤指令消息（/ 开头）
     # 其实在 filter 层已经排除，此处保留作双重保障
-    if message.text.startswith("/"):
+    if rawText.startswith("/"):
         return
 
     # 检测 ops 对审核消息的 reply 编辑（reply 原消息并以 :edit 新内容 开头）
     if await handleEditReply(message, context):
         return
 
-    # 2. 检查用户是否在 whitelist
+    # 2. 提取图片引用：优先同消息图片，其次 reply 目标图片
+    imageRefs = extractImageRefs(message)
+    if not imageRefs:
+        imageRefs = extractReplyImageRefs(message)
+
+    # 纯图片无文字 → 不触发，静默忽略
+    if not rawText:
+        return
+
+    # 3. 检查用户是否在 whitelist
     userID = message.from_user.id
     if not whetherAuthorizedUser(userID):
         return
 
-    # 3. 检查速率限制（基于上一次完整轮次，而非单条消息）
+    # 4. 检查速率限制（基于上一次完整轮次，而非单条消息）
     if isRateLimited(userID):
         await message.reply_text("……发得太快啦，锌酱的笨脑要跟不上了喵💦")
         return
 
-    # 4. 群聊检测（私聊直接触发，群聊需要被 @）
+    # 5. 群聊检测（私聊直接触发，群聊需要被 @）
     isPrivate = update.effective_chat.type == "private"
     if not isPrivate:
         botUsername = context.bot.username
         if not isMentioned(message, botUsername):
             return
 
-    # 5. 提取纯文本和上下文标记（#context 标记 或 全局 memory）
-    pureText, includeContext = _extractPureMessage(message.text, context.bot.username)
+    # 6. 提取纯文本和上下文标记（#context 标记 或 全局 memory）
+    pureText, includeContext = _extractPureMessage(rawText, context.bot.username)
     if not pureText:
         return
 
-    # 6. 防抖：同一 chat + user 独立聚合，one-shot 延后到真正 dispatch 时再消费
+    # 7. 下载图片（在 handler 阶段完成，此时有 bot 引用）
+    downloadedImages: list[dict] = []
+    if imageRefs:
+        downloadedImages, _notes = await downloadImages(context.bot, imageRefs)
+
+    # 8. 防抖：同一 chat + user 独立聚合，one-shot 延后到真正 dispatch 时再消费
     chatID = str(update.effective_chat.id)
     debounceKey = makeDebounceKey(chatID, userID)
-    if not appendPendingMessage(debounceKey, pureText, includeContext):
+    if not appendPendingMessage(debounceKey, pureText, includeContext, images=downloadedImages):
         await message.reply_text("……消息太多了喵，等锌酱处理完再发吧💦")
         return
 
@@ -390,6 +419,12 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================================================
 
 def register():
+    # 群聊中 @mention 可能出现在 text 或 caption 中
+    _mentionOrCaptionMention = (
+        filters.Entity(MessageEntityType.MENTION)
+        | filters.CaptionEntity(MessageEntityType.MENTION)
+    )
+
     return {
         "handlers": [
             # 主消息处理器注册在 group 1，而非默认的 group 0。
@@ -398,14 +433,13 @@ def register():
             # _mentionDispatch 优先匹配；若关键词命中，_mentionDispatch 会
             # 抛出 ApplicationHandlerStop 阻止本 handler 运行。
             {"handler": MessageHandler(
-                filters.TEXT & ~filters.COMMAND & (
-                    filters.ChatType.PRIVATE
-                    | filters.Entity(MessageEntityType.MENTION)
-                ),
+                (filters.TEXT | filters.PHOTO | filters.Document.IMAGE)
+                & ~filters.COMMAND
+                & (filters.ChatType.PRIVATE | _mentionOrCaptionMention),
                 handleLLMMessage,
             ), "group": 1},
         ],
         "name": "LLM 聊天",
-        "description": "Claude LLM 自动回复",
+        "description": "Claude LLM 自动回复（支持图片）",
         "auth": False,  # 内部自行检查 whitelist + llmEnabled
     }

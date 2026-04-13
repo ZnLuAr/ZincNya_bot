@@ -35,7 +35,7 @@ class AnthropicProvider(LLMProvider):
         self,
         *,
         systemMessages: list[str],
-        userContent: str,
+        userContent: str | list,
         model: str,
         maxTokens: int,
         temperature: float,
@@ -43,13 +43,31 @@ class AnthropicProvider(LLMProvider):
         client = self._getClient()
         systemText = "\n\n".join(systemMessages)
 
+        # 多模态：将通用中间格式翻译为 Anthropic content array
+        if isinstance(userContent, list):
+            content = []
+            for block in userContent:
+                if block["type"] == "text":
+                    content.append({"type": "text", "text": block["text"]})
+                elif block["type"] == "image_base64":
+                    content.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": block["mimeType"],
+                            "data": block["data"],
+                        },
+                    })
+        else:
+            content = userContent
+
         response = await client.messages.create(
             model=model,
             max_tokens=maxTokens,
             temperature=temperature,
             system=systemText,
             messages=[
-                {"role": "user", "content": userContent}
+                {"role": "user", "content": content}
             ],
         )
 

@@ -31,6 +31,9 @@ def isMentioned(message, botUsername: str) -> bool:
     """
     检测消息是否 @ 了 bot（纯 Telegram 语义）。
 
+    同时检查 message.text 和 message.caption，
+    以支持图片消息在 caption 中 @bot 的场景。
+
     参数:
         message: telegram.Message 对象
         botUsername: bot 的用户名（如 "MyZincNyaBot"）
@@ -38,9 +41,10 @@ def isMentioned(message, botUsername: str) -> bool:
     返回:
         True 如果消息中包含 @botUsername
     """
-    if not message.text:
-        return False
-    return f"@{botUsername}".lower() in message.text.lower()
+    mention = f"@{botUsername}".lower()
+    text = message.text or ""
+    caption = message.caption or ""
+    return mention in text.lower() or mention in caption.lower()
 
 
 def removeMention(text: str, botUsername: str) -> str:

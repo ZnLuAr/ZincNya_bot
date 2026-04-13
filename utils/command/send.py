@@ -214,6 +214,54 @@ def _printFormattedMessage(timestamp: str, sender: str, text: str):
 
 
 
+def _extractDisplayText(msg) -> str:
+    """
+    从 Telegram Message 对象提取展示文本。
+
+    纯文字消息返回 text；带 caption 的媒体返回 caption；
+    其余媒体类型返回方括号标注（如 [图片]、[贴纸]）。
+    """
+    if msg.text:
+        return msg.text
+    if msg.caption:
+        prefix = ""
+        if msg.photo:
+            prefix = "[图片] "
+        elif msg.document:
+            prefix = "[文件] "
+        elif msg.video:
+            prefix = "[视频] "
+        elif msg.animation:
+            prefix = "[GIF] "
+        return prefix + msg.caption
+    if msg.photo:
+        return "[图片]"
+    if msg.sticker:
+        emoji = msg.sticker.emoji or ""
+        return f"[贴纸] {emoji}".strip()
+    if msg.animation:
+        return "[GIF]"
+    if msg.video:
+        return "[视频]"
+    if msg.voice:
+        return "[语音消息]"
+    if msg.video_note:
+        return "[视频留言]"
+    if msg.audio:
+        title = msg.audio.title or ""
+        return f"[音频] {title}".strip()
+    if msg.document:
+        name = msg.document.file_name or ""
+        return f"[文件] {name}".strip()
+    if msg.contact:
+        return "[联系人]"
+    if msg.location:
+        return "[位置]"
+    if msg.poll:
+        return f"[投票] {msg.poll.question}"
+    return ""
+
+
 def _formatMessage(mode, content) -> tuple[str, str, str]:
     """
     格式化单条消息，返回 (timestamp, sender, text)。
@@ -226,7 +274,7 @@ def _formatMessage(mode, content) -> tuple[str, str, str]:
     match mode:
         case "incomingMessage":
             sender = _getSenderName(content)
-            text = content.text or ""
+            text = _extractDisplayText(content)
         case "selfMessage":
             sender = "ZincNya~"
             text = content
@@ -357,7 +405,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
                         continue
 
                     sender = _getSenderName(msg)
-                    content = msg.text or ""
+                    content = _extractDisplayText(msg)
                     await saveMessage(targetChatID, "incoming", sender, content)
 
                     ts, sndr, txt = _formatMessage("incomingMessage", msg)

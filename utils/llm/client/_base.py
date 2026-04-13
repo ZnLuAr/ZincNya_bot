@@ -20,12 +20,18 @@ class LLMProvider(ABC):
         self,
         *,
         systemMessages: list[str],
-        userContent: str,
+        userContent: str | list,
         model: str,
         maxTokens: int,
         temperature: float,
     ) -> str:
-        """发送请求并返回文本回复。"""
+        """
+        发送请求并返回文本回复。
+
+        userContent 为 str 时表示纯文本；为 list 时表示多模态内容，
+        包含 {"type": "text", "text": "..."} 和
+        {"type": "image_base64", "data": "<b64>", "mimeType": "image/jpeg"} 块。
+        """
         ...
 
     def isAvailable(self) -> bool:

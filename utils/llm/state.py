@@ -27,7 +27,7 @@ _llmReviewQueue: asyncio.Queue = asyncio.Queue()
 _lastCallTime: dict[str, float] = {}
 
 # 消息防抖状态（聚合短时间内分多次发送的消息）
-_pendingMessages: dict[str, list[tuple[str, bool]]] = {}   # debounceKey -> [(text, includeContext)]
+_pendingMessages: dict[str, list[tuple[str, bool, list[dict]]]] = {}   # debounceKey -> [(text, includeContext, images)]
 _pendingTasks: dict[str, asyncio.Task] = {}   # debounceKey -> 当前防抖 Task
 
 # 全局 one-shot context 标记：下一次 LLM 调用强制带记忆，触发后自动清除
@@ -163,20 +163,28 @@ def makeDebounceKey(chatID: str | int, userID: str | int) -> str:
     return f"{chatID}:{userID}"
 
 
-def appendPendingMessage(debounceKey: str, text: str, includeContext: bool = False) -> bool:
+def appendPendingMessage(
+    debounceKey: str,
+    text: str,
+    includeContext: bool = False,
+    images: list[dict] | None = None,
+) -> bool:
     """
     将消息追加到防抖缓冲区。
+
+    参数:
+        images: 图片列表 [{"data": b64_str, "mimeType": "..."}, ...]
 
     返回 False 表示已达上限，消息被丢弃。
     """
     buf = _pendingMessages.setdefault(debounceKey, [])
     if len(buf) >= LLM_PENDING_MSG_LIMIT:
         return False
-    buf.append((text, includeContext))
+    buf.append((text, includeContext, images or []))
     return True
 
 
-def popPendingMessages(debounceKey: str) -> list[tuple[str, bool]]:
+def popPendingMessages(debounceKey: str) -> list[tuple[str, bool, list[dict]]]:
     """取出并清空该防抖键对应的待聚合消息列表"""
     return _pendingMessages.pop(debounceKey, [])
 

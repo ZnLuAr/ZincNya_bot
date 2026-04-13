@@ -163,3 +163,7 @@ LLM_DEBOUNCE_SECONDS = 1.5                                     # 防抖等待时
 LLM_PENDING_MSG_LIMIT = 10                                     # 每用户防抖缓冲最大条数
 LLM_REVIEW_TTL_SECONDS = 86400                                 # 审核条目 TTL（秒，默认 24h）
 LLM_MEMORY_DB_PATH = os.path.join(DATA_DIR, "llmMemory.db")    # structured memory 数据库
+LLM_IMAGE_MAX_BYTES = 20 * 1024 * 1024                         # 图片大小上限（20 MB）
+LLM_IMAGE_SUPPORTED_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+LLM_REQUEST_MAX_RETRIES = 2                                    # LLM 请求最大重试次数（不含首次）
+LLM_REQUEST_RETRY_DELAY = 3                                    # 重试间隔（秒）
