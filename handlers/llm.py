@@ -145,9 +145,10 @@ async def _dispatchLLMReply(
             allImages.extend(imgs)
 
         # 构造审核展示用的原始消息文本（含发送者和图片标注）
-        displayOriginalMsg = f"@{username}：{combinedText}"
         if allImages:
-            displayOriginalMsg = f"[附带 {len(allImages)} 张图片]\n" + displayOriginalMsg
+            displayOriginalMsg = f"@{username}：[附带 {len(allImages)} 张图片]\n {combinedText}"
+        else:
+            displayOriginalMsg = f"@{username}：{combinedText}"
 
         # 在 Telegram 上边栏显示 typing... 状态
         try:
