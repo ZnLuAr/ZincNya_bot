@@ -75,5 +75,12 @@ class AnthropicProvider(LLMProvider):
         if not textBlock:
             return ""
 
-        # Claude 可能在回复中包含 <thinking> 标签，需要过滤
-        return re.sub(r"<thinking>.*?</thinking>\s*", "", textBlock.text, flags=re.DOTALL).strip()
+        text = textBlock.text
+
+        # 仅在 thinking block 存在时才做 <thinking> 标签清理，
+        # 避免误 strip 将全部内容视为 thinking 的边界情况
+        hasThinkingBlock = any(b.type == "thinking" for b in response.content)
+        if hasThinkingBlock:
+            text = re.sub(r"<thinking>.*?</thinking>\s*", "", text, flags=re.DOTALL).strip()
+
+        return text

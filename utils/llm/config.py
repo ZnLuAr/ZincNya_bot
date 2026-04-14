@@ -25,6 +25,7 @@ _DEFAULT_CONFIG = {
     "enabled": False,
     "autoMode": "console",  # "on" | "off" | "console"
     "model": LLM_DEFAULT_MODEL,
+    "visionModel": "claude-sonnet-4-6",
     "memoryEnabled": False,
     "memoryAutoApprove": False,
 }
@@ -99,6 +100,15 @@ def getModel() -> str:
 
 def setModel(model: str):
     _setConfig(model=model)
+
+
+def getVisionModel() -> str:
+    """返回图片描述专用模型名（默认 claude-sonnet-4-6）。"""
+    return loadLLMConfig()["visionModel"]
+
+
+def setVisionModel(model: str):
+    _setConfig(visionModel=model)
 
 
 

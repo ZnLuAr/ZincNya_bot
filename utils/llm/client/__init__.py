@@ -9,11 +9,15 @@ utils/llm/client/
 import asyncio
 
 from ._router import getProvider
-from ._guardrails import SYSTEM_GUARDRAILS, MEMORY_ACTION_INSTRUCTIONS
-from ..config import getModel, loadPrompts
+from ._guardrails import SYSTEM_GUARDRAILS, MEMORY_ACTION_INSTRUCTIONS, VISION_DESCRIBE_PROMPT
+from ..config import getModel, getVisionModel, loadPrompts
 from ..contextBuilder import buildConversationContext
 from config import LLM_REQUEST_MAX_RETRIES, LLM_REQUEST_RETRY_DELAY
 from utils.logger import logSystemEvent, LogLevel, LogChildType
+
+
+_VISION_MAX_TOKENS = 4096
+_VISION_TEMPERATURE = 0.2
 
 
 
@@ -131,6 +135,53 @@ async def requestReply(
 
 
 
+async def _describeImages(
+    images: list[dict],
+) -> str:
+    """
+    双调用架构 — 第一步：轻量视觉调用。
+
+    使用无人设的 VISION_DESCRIBE_PROMPT，让 LLM 客观描述图片内容。
+    不附带用户文本，避免模型根据文本编造图片内容。
+    返回的描述文本将作为纯文本注入主调用的上下文中。
+    """
+    model = getVisionModel()
+    provider = getProvider(model)
+
+    await logSystemEvent(
+        "LLM 图片描述调用",
+        f"model={model}, provider={type(provider).__name__}, images={len(images)}",
+        LogLevel.INFO,
+        LogChildType.WITH_ONE_CHILD,
+    )
+
+    userContent: list = [
+        *[{"type": "image_base64", "data": img["data"], "mimeType": img["mimeType"]} for img in images],
+        {"type": "text", "text": "请详细描述以上图片中的所有内容。"},
+    ]
+
+    description = await _requestWithRetry(
+        provider,
+        systemMessages=VISION_DESCRIBE_PROMPT,
+        userContent=userContent,
+        model=model,
+        maxTokens=_VISION_MAX_TOKENS,
+        temperature=_VISION_TEMPERATURE,
+    )
+
+    preview = description[:200] if description else "(空)"
+    await logSystemEvent(
+        "LLM 图片描述完成",
+        f"描述长度: {len(description)} 字符 | {preview}",
+        LogLevel.INFO,
+        LogChildType.WITH_ONE_CHILD,
+    )
+
+    return description
+
+
+
+
 async def generateReply(
     userMessage: str,
     chatID: str,
@@ -146,16 +197,20 @@ async def generateReply(
     参数:
         images: 图片列表 [{"data": b64_str, "mimeType": "image/jpeg"}, ...]
                 为 None 或空列表时表示纯文本。
+
+    有图片时采用双调用架构：
+        1. 轻量视觉调用：无人设 prompt，获取客观图片描述
+        2. 主调用：完整人设 + 图片描述文本，生成角色化回复
     """
     prompts = loadPrompts()
     systemMessages = _buildSystemMessages(prompts)
     maxTokens = prompts.get("max_tokens", 1024)
     temperature = prompts.get("temperature", 0.8)
 
-    # 有图片时在 system messages 末尾追加覆盖指令
+    # 双调用：先获取图片描述，再将描述作为纯文本注入主调用
+    imageDescription: str | None = None
     if images:
-        from ._guardrails import IMAGE_SYSTEM_OVERRIDE
-        systemMessages.append(IMAGE_SYSTEM_OVERRIDE)
+        imageDescription = await _describeImages(images)
 
     textContent = await buildConversationContext(
         userMessage=userMessage,
@@ -163,26 +218,24 @@ async def generateReply(
         userID=userID,
         sessionID=sessionID,
         includeContext=includeContext,
-        hasImages=bool(images),
     )
 
-    # 有图片时构造多模态 content list，否则保持纯文本
-    if images:
-        from ._guardrails import IMAGE_ANCHOR
-        userContent: str | list = [
-            {"type": "text", "text": IMAGE_ANCHOR},
-            *[{"type": "image_base64", "data": img["data"], "mimeType": img["mimeType"]} for img in images],
-            {"type": "text", "text": textContent},
-        ]
-    else:
-        userContent = textContent
+    # 有图片描述时，嵌入上下文；主调用始终是纯文本
+    if imageDescription:
+        imageBlock = (
+            "<IMAGE_DESCRIPTION>\n"
+            "[用户发送了图片。以下是图片内容的文字描述，请基于此描述回答用户关于图片的提问。]\n"
+            f"{imageDescription}\n"
+            "</IMAGE_DESCRIPTION>"
+        )
+        textContent = f"{imageBlock}\n\n{textContent}"
 
     model = getModel()
     provider = getProvider(model)
     return await _requestWithRetry(
         provider,
         systemMessages=systemMessages,
-        userContent=userContent,
+        userContent=textContent,
         model=model,
         maxTokens=maxTokens,
         temperature=temperature,
