@@ -22,19 +22,21 @@ Telegram 端 /llm 控制命令（ops 专用）。
 
 
 import re
+
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 
 from config import Permission
-from utils.operators import hasPermission
+
+from utils.core.errorDecorators import handleTelegramErrors
 from utils.llm import (
     getAutoMode,
-    getModel, setModel,
     getLLMEnabled, setLLMEnabled,
     getMemoryEnabled, setMemoryEnabled,
+    getModel, setModel,
 )
 from utils.logger import logAction, LogLevel, LogChildType
-from utils.core.errorDecorators import handleTelegramErrors
+from utils.operators import hasPermission
 
 
 # 模型名白名单正则：只允许安全字符集，防止 Markdown 注入并限制长度

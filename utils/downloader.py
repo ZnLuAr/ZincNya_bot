@@ -141,20 +141,22 @@ import os
 import re
 import sys
 import uuid
-import magic
 import shutil
 import asyncio
 import tempfile
-from telegram.error import TelegramError , NetworkError
 
-from utils.logger import logAction, LogLevel, LogChildType
+import magic
+from telegram.error import TelegramError, NetworkError
+
 from config import (
+    DOWNLOAD_DIR,                   # 下载目录
     MAX_CONCURRENT_DOWNLOADS,       # 最大并发下载数量
     MAX_DOWNLOADS_ATTEMPTS,         # 最大下载尝试次数
     MAX_GIF_FPS,                    # 最大 GIF 帧数
     PROJECT_ROOT,                   # 项目根目录
-    DOWNLOAD_DIR                    # 下载目录
 )
+
+from utils.logger import logAction, LogLevel, LogChildType
 
 
 

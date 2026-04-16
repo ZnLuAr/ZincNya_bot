@@ -14,6 +14,7 @@ import logging
 from dataclasses import dataclass
 
 from config import LLM_IMAGE_MAX_BYTES, LLM_IMAGE_SUPPORTED_MIMES
+
 from utils.logger import logSystemEvent, LogLevel, LogChildType
 
 _logger = logging.getLogger(__name__)
@@ -28,6 +29,8 @@ class ImageRef:
     mimeType: str
     fileSize: int | None = None
     tooLarge: bool = False
+
+
 
 
 def extractImageRefs(message) -> list[ImageRef]:
@@ -69,6 +72,8 @@ def extractImageRefs(message) -> list[ImageRef]:
     return refs
 
 
+
+
 def extractReplyImageRefs(message) -> list[ImageRef]:
     """从 message.reply_to_message 中提取图片引用。"""
     if not message.reply_to_message:
@@ -96,7 +101,7 @@ async def downloadImages(bot, refs: list[ImageRef]) -> tuple[list[dict], list[st
             raw = await file.download_as_bytearray()
             await logSystemEvent(
                 "LLM 图片下载完成",
-                f"file_id={ref.fileID}, mime={ref.mimeType}, size={len(raw)} bytes",
+                f"file_id={ref.fileID[:20]}..., mime={ref.mimeType}, size={len(raw)} bytes",
                 LogLevel.INFO,
                 LogChildType.WITH_ONE_CHILD,
             )
@@ -108,7 +113,7 @@ async def downloadImages(bot, refs: list[ImageRef]) -> tuple[list[dict], list[st
             notes.append("[有一张图片下载失败]")
             await logSystemEvent(
                 "LLM 图片下载失败",
-                f"file_id={ref.fileID}, error={e}",
+                f"file_id={ref.fileID[:20]}..., error={e}",
                 LogLevel.WARNING,
                 LogChildType.WITH_ONE_CHILD
             )

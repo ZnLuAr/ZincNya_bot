@@ -29,6 +29,7 @@ VISION_DESCRIBE_PROMPT: list[str] = [
 MEMORY_ACTION_INSTRUCTIONS: list[str] = [
     (
         "当且仅当当前对话带有 memory/context 时，你可以在回复末尾追加 <MEMORY_ACTION> JSON 块来申请修改长期记忆。"
+        "所有操作都需要审核后才生效。"
     ),
     (
         "每个 <MEMORY_ACTION> 块包含一个 JSON 对象（不是数组），格式如下：\n"

@@ -5,6 +5,7 @@ handlers/start.py
 """
 
 from telegram.ext import CommandHandler
+
 from utils.whitelistManager import handleStart
 
 

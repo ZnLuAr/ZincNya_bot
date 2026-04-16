@@ -17,12 +17,13 @@ import sys
 import shutil
 import asyncio
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from prompt_toolkit import PromptSession
-from utils.terminalUI import countDisplayLines
-from concurrent.futures import ThreadPoolExecutor
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
+
+from utils.terminalUI import countDisplayLines
 
 
 session: PromptSession = None

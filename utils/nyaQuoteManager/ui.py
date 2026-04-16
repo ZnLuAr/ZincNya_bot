@@ -13,10 +13,11 @@ from typing import List , Tuple , Optional
 from rich.table import Table
 from rich.console import Console
 
+from utils.core.tuiBase import BaseTUIController
 from utils.fileEditor import editFile
 from utils.terminalUI import cls, smcup, rmcup
-from utils.core.tuiBase import BaseTUIController
-from .data import loadQuoteFile , userOperation
+
+from .data import loadQuoteFile, userOperation
 
 
 

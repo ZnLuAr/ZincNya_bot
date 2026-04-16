@@ -18,50 +18,51 @@ LLM 消息处理器。
 
 import re
 import asyncio
+
 from telegram import Update, ReactionTypeEmoji
 from telegram.constants import MessageEntityType
+from telegram.error import NetworkError
 from telegram.ext import (
     filters,
     ContextTypes,
     MessageHandler,
 )
 
-from telegram.error import NetworkError
+from config import Permission, LLM_DEBOUNCE_SECONDS
+
+from handlers.llmReview import handleEditReply, sendReviewMessage, sendMemoryReviewMessage, _truncate
 
 from utils.core.errorDecorators import handleTelegramErrors
 from utils.llm import (
-    getAutoMode,
     addRateLimit,
     addReviewItem,
-    generateReply,
-    getLLMEnabled,
-    isRateLimited,
-    getPendingTask,
-    setPendingTask,
-    makeDebounceKey,
-    clearPendingTask,
-    getMemoryEnabled,
-    consumeContextOnce,
-    popPendingMessages,
     appendPendingMessage,
+    clearPendingTask,
+    consumeContextOnce,
+    generateReply,
+    getAutoMode,
+    getLLMEnabled,
     getMemoryAutoApprove,
+    getMemoryEnabled,
+    getPendingTask,
+    isRateLimited,
+    makeDebounceKey,
+    popPendingMessages,
+    setPendingTask,
 )
 from utils.llm.memory.action import (
-    validateAction,
-    parseMemoryActions,
     LLM_MEMORY_MAX_ACTIONS,
     executeAction as executeMemoryAction,
     formatActionDetail,
+    parseMemoryActions,
+    validateAction,
 )
-from utils.llm.vision import extractImageRefs, extractReplyImageRefs, downloadImages
-
-from utils.operators import loadOperators
 from utils.llm.state import addMemoryReviewItem
-from config import Permission, LLM_DEBOUNCE_SECONDS
+from utils.llm.vision import extractImageRefs, extractReplyImageRefs, downloadImages
+from utils.logger import logAction, logSystemEvent, LogLevel, LogChildType
+from utils.operators import loadOperators
 from utils.telegramHelpers import isMentioned, removeMention
 from utils.whitelistManager.data import whetherAuthorizedUser
-from utils.logger import logAction, logSystemEvent, LogLevel, LogChildType
-from handlers.llmReview import handleEditReply, sendReviewMessage, sendMemoryReviewMessage, _truncate
 
 
 _TG_MAX_LEN = 4096
@@ -146,7 +147,7 @@ async def _dispatchLLMReply(
 
         # 构造审核展示用的原始消息文本（含发送者和图片标注）
         if allImages:
-            displayOriginalMsg = f"@{username}：[附带 {len(allImages)} 张图片]\n {combinedText}"
+            displayOriginalMsg = f"@{username}：[附带 {len(allImages)} 张图片]\n{combinedText}"
         else:
             displayOriginalMsg = f"@{username}：{combinedText}"
 
@@ -382,10 +383,26 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not pureText:
         return
 
+    # 6.5 注入被回复消息的文本（让 LLM 知道用户在回复哪条消息）
+    replyMsg = message.reply_to_message
+    if replyMsg:
+        replyText = replyMsg.text or replyMsg.caption or ""
+        if replyText:
+            replyUser = ""
+            if replyMsg.from_user:
+                replyUser = replyMsg.from_user.username or replyMsg.from_user.first_name or ""
+            # 截断过长的引用，避免占用过多 token
+            if len(replyText) > 300:
+                replyText = replyText[:300] + "……"
+            prefix = f"@{replyUser}" if replyUser else "某人"
+            pureText = f"[回复 {prefix} 的消息: {replyText}]\n\n{pureText}"
+
     # 7. 下载图片（在 handler 阶段完成，此时有 bot 引用）
     downloadedImages: list[dict] = []
     if imageRefs:
-        downloadedImages, _notes = await downloadImages(context.bot, imageRefs)
+        downloadedImages, notes = await downloadImages(context.bot, imageRefs)
+        if notes:
+            pureText = "\n".join(notes) + "\n" + pureText
 
     # 8. 防抖：同一 chat + user 独立聚合，one-shot 延后到真正 dispatch 时再消费
     chatID = str(update.effective_chat.id)

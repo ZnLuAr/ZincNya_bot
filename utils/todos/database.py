@@ -68,8 +68,9 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 from config import TODOS_DB_PATH
-from utils.logger import logSystemEvent, LogLevel
+
 from utils.core.database import Database
+from utils.logger import logSystemEvent, LogLevel
 
 
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"  # 数据库时间戳格式

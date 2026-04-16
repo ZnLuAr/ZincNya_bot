@@ -26,22 +26,24 @@ utils/newsAPI.py
 import html
 import json
 import asyncio
-import aiohttp
+from dataclasses import dataclass
 from io import BytesIO
 from datetime import datetime
-from telegram import Bot
-from dataclasses import dataclass
 from typing import Optional
+
+import aiohttp
 from bs4 import BeautifulSoup
+from telegram import Bot
 
 from config import (
-    NEWS_SOURCE_URL,
+    NEWS_DATA_FILE,
     NEWS_HTTP_PROXY,
     NEWS_REQUEST_TIMEOUT,
-    NEWS_DATA_FILE,
+    NEWS_SOURCE_URL,
 )
-from utils.logger import logSystemEvent, LogLevel
+
 from utils.core.resourceManager import getResourceManager
+from utils.logger import logSystemEvent, LogLevel
 from utils.core.errorDecorators import handleErrors
 
 

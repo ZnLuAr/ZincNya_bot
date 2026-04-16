@@ -9,16 +9,16 @@ import asyncio
 import shutil
 from typing import List, Tuple, Optional
 
-from rich.table import Table
 from rich.console import Console
+from rich.table import Table
 from telegram import Bot
-from telegram.error import Forbidden , BadRequest
+from telegram.error import BadRequest, Forbidden
 
-from utils.inputHelper import asyncInput
 from utils.core.tuiBase import BaseTUIController
-from utils.terminalUI import cls , smcup , rmcup
+from utils.inputHelper import asyncInput
+from utils.terminalUI import cls, smcup, rmcup
 
-from .data import loadWhitelistFile , userOperation
+from .data import loadWhitelistFile, userOperation
 
 
 

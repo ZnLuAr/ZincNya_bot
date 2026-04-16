@@ -18,13 +18,14 @@ import asyncio
 import tempfile
 from typing import Optional
 
-from rich.table import Table
 from rich.console import Console
+from rich.table import Table
 
+from utils.core.tuiBase import BaseTUIController
 from utils.fileEditor import editFile
 from utils.inputHelper import asyncInput
 from utils.terminalUI import cls, smcup, rmcup
-from utils.core.tuiBase import BaseTUIController
+
 from .database import (
     addMemory, getMemories, updateMemory, deleteMemory,
     MEMORY_SCOPE_GLOBAL, VALID_SCOPE_TYPES,

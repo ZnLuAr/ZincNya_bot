@@ -40,9 +40,9 @@ width, height = getTerminalSize()
 
 """
 
-import sys
 import os
 import shutil
+import sys
 from typing import Tuple
 
 

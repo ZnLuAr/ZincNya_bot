@@ -10,14 +10,15 @@ utils/llm/contextBuilder.py
 
 
 
-from utils.logger import logSystemEvent
-from utils.chatHistory import loadHistory
 from config import LLM_MAX_CONTEXT_MESSAGES
+
+from utils.chatHistory import loadHistory
 from utils.llm.memory import (
-    retrieveMemories,
     buildMemoryContextBlock,
+    retrieveMemories,
     summarizeRetrievedMemories,
 )
+from utils.logger import logSystemEvent
 
 
 _LOW_TRUST_MEMORY_NOTICE = (

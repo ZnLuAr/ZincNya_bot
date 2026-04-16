@@ -2,9 +2,12 @@
 utils/llm/client/anthropic.py
 
 Anthropic Claude 提供商实现。
+
+……你说 httpx.AsyncClient 用完不关会漏？我们的 AsyncAnthropic 会帮我们管理好生命周期的😋
 """
 
 import re
+
 from anthropic import AsyncAnthropic
 
 from ._base import LLMProvider

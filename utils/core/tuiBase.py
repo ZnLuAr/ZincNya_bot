@@ -16,16 +16,15 @@ import shutil
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Optional, Any
 
-from rich.table import Table
-from rich.console import Console
-
 from prompt_toolkit import Application
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
 from prompt_toolkit.widgets import TextArea
+from rich.console import Console
+from rich.table import Table
 
-from utils.terminalUI import cls, smcup, rmcup
 from utils.core.stateManager import getStateManager
+from utils.terminalUI import cls, smcup, rmcup
 
 
 

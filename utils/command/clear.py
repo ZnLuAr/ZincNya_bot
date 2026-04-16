@@ -10,6 +10,7 @@ utils/command/clear.py
 """
 
 import sys
+
 from handlers.cli import parseArgsTokens
 
 

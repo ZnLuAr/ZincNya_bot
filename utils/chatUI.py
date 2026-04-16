@@ -17,14 +17,15 @@ utils/chatUI.py
 """
 
 import sys
-from prompt_toolkit.widgets import TextArea
-from prompt_toolkit.document import Document
+
 from prompt_toolkit.application import Application
+from prompt_toolkit.document import Document
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.output.vt100 import Vt100_Output
-from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout import Layout, HSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.output.vt100 import Vt100_Output
+from prompt_toolkit.widgets import TextArea
 
 
 
