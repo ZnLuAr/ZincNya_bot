@@ -42,13 +42,14 @@ utils/command/todos.py
 
 
 from handlers.cli import parseArgsTokens
+
+from utils.todos.cliRender import printOverview, printTodoList, PRIORITY_EMOJI
 from utils.todos.database import (
     addTodo, getTodos, getTodoByID,
     updateTodo, deleteTodo, markDone, reopenTodo, getTodosCount,
     getUsersTodosSummary,
 )
 from utils.todos.utils import parseTime, parsePriority, formatRemindTime
-from utils.todos.cliRender import printOverview, printTodoList, PRIORITY_EMOJI
 
 
 

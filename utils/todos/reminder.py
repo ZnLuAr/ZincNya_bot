@@ -10,11 +10,13 @@ utils/todos/reminder.py
 
 
 import asyncio
-from utils.todos.database import getPendingReminders, updateTodo
-from utils.logger import logSystemEvent, LogLevel, LogChildType
-from utils.todos.utils import PRIORITY_EMOJI
-from utils.core.stateManager import getStateManager
+
 from config import TODOS_REMINDER_CHECK_INTERVAL
+
+from utils.core.stateManager import getStateManager
+from utils.logger import logSystemEvent, LogLevel, LogChildType
+from utils.todos.database import getPendingReminders, updateTodo
+from utils.todos.utils import PRIORITY_EMOJI
 
 
 async def todoReminderLoop(app):

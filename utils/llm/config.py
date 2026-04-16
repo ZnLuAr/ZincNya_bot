@@ -2,7 +2,7 @@
 utils/llm/config.py
 
 LLM 配置管理：
-    - 加载/保存 llmConfig.json（enabled、autoMode、model、memoryEnabled、memoryAutoApprove）
+    - 加载/保存 llmConfig.json（enabled、autoMode、model、visionModel、memoryEnabled、memoryAutoApprove）
     - 加载 prompts.json（不存在时 fallback 到 prompts.example.json）
 """
 

@@ -15,16 +15,18 @@ Telegram 端 LLM 审核回调处理器。
 """
 
 import time
-from telegram.ext import ContextTypes, CallbackQueryHandler
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes, CallbackQueryHandler
+
+from config import Permission, LLM_REVIEW_TTL_SECONDS
+
+from utils.core.errorDecorators import handleTelegramErrors
 from utils.llm import generateReply
 from utils.llm.memory.action import MemoryAction, executeAction
 from utils.llm.review import extractMemoryActionFields
-from utils.operators import hasPermission
-from config import Permission, LLM_REVIEW_TTL_SECONDS
 from utils.logger import logAction, LogLevel, LogChildType
-from utils.core.errorDecorators import handleTelegramErrors
+from utils.operators import hasPermission
 
 
 _TG_MAX_LEN = 4096
@@ -57,7 +59,7 @@ def _formatReviewText(originalMsg: str, reply: str) -> str:
     reply = _truncate(reply, _REPLY_PREVIEW_LEN)
     text = (
         f"[待审核]\n\n"
-        f"原始消息：{originalMsg}\n\n"
+        f"原始消息：\n{originalMsg}\n\n"
         f"---\n"
         f"{reply}\n"
         f"---\n\n"
@@ -75,6 +77,8 @@ def _buildReviewKeyboard(chatID, msgID) -> InlineKeyboardMarkup:
             InlineKeyboardButton("❌ 取消", callback_data=f"llm:review:cancel:{chatID}:{msgID}"),
         ],
     ])
+
+
 
 
 # ---------------------------------------------------------------------------

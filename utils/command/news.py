@@ -16,17 +16,20 @@ utils/command/news.py
 
 
 from telegram import Bot
+
+from config import NEWS_TARGET_CHAT_ID, NEWS_MAX_ARTICLES
+
 from handlers.cli import parseArgsTokens
+
+from utils.logger import logSystemEvent, LogLevel
 from utils.newsAPI import (
     fetchLatestNews,
-    pushToTelegram,
-    loadPushedRecord,
-    savePushedRecord,
     isAlreadyPushed,
+    loadPushedRecord,
     markAsPushed,
+    pushToTelegram,
+    savePushedRecord,
 )
-from config import NEWS_TARGET_CHAT_ID, NEWS_MAX_ARTICLES
-from utils.logger import logSystemEvent, LogLevel
 
 
 

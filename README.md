@@ -115,7 +115,7 @@ ZincNya_bot/
 │   ├── book.py                 # /book 书籍搜索
 │   ├── todos.py                # /todos 待办事项管理
 │   ├── reaction.py             # 消息 reaction 记录到聊天历史
-│   ├── llm.py                  # LLM 自动回复、记忆操作解析与审核分发
+│   ├── llm.py                  # LLM 自动回复（支持图片）、记忆操作解析与审核分发
 │   ├── llmReview.py            # Telegram 端 LLM 审核回调（回复与记忆操作）
 │   ├── llmCommand.py           # Telegram 端 /llm 命令（ops 控制）
 │   └── shutdown.py             # 远程关机/重启/状态（仅 ops）
@@ -144,14 +144,17 @@ ZincNya_bot/
 │   │   └── tuiBase.py          # TUI 控制器基类
 │   │
 │   ├── llm/                    # LLM 集成模块
-│   │   ├── config.py           # 配置管理（开关、模式、提示词，读写 JSON）
+│   │   ├── config.py           # 配置管理（开关、模式、模型、视觉模型、提示词）
 │   │   ├── state.py            # 运行时状态（多类型审核队列、速率限制、防抖、one-shot）
 │   │   ├── review.py           # 审核共享操作（console / chatScreen 的 send/retry/cancel）
 │   │   ├── contextBuilder.py   # 上下文组装（memory + history + 当前消息）
-│   │   ├── client/             # 多模型 API 客户端
-│   │   │   ├── _base.py        # LLMProvider 抽象基类
+│   │   ├── vision.py           # 图片提取（photo/document/reply）与下载编码
+│   │   ├── client/             # 多模型 API 客户端（双调用视觉架构）
+│   │   │   ├── _base.py        # LLMProvider 抽象基类（支持纯文本与多模态）
 │   │   │   ├── _router.py      # 模型前缀路由 + 模糊匹配纠错
-│   │   │   ├── _guardrails.py  # 安全防护提示词与记忆操作指令
+│   │   │   ├── _guardrails.py  # 安全防护提示词、视觉描述 prompt 与记忆操作指令
+│   │   │   ├── _request.py     # 请求发送与自动重试
+│   │   │   ├── _generate.py    # 回复生成编排（system prompt 构建 + 双调用视觉）
 │   │   │   ├── anthropic.py    # Anthropic Claude API
 │   │   │   ├── gemini.py       # Google Gemini API
 │   │   │   └── openaiCompat.py # OpenAI 兼容接口（OpenAI / DeepSeek / 豆包）
@@ -338,6 +341,19 @@ Operator 权限位（在 `operators.json` 中配置）：
 | `doubao-` | 豆包（火山引擎） | `DOUBAO_API_KEY` |
 
 模型切换命令：`/llm model switch <模型名>`（如 `claude-sonnet-4-6`、`gemini-2.5-flash`、`deepseek-chat`）
+
+**图片支持（双调用视觉架构）**
+
+LLM 支持读取用户发送的图片，采用双调用架构：先用轻量视觉模型生成客观图片描述，再将描述文本注入主调用的上下文中由角色模型回复。
+
+触发方式：
+- 私聊发图片 + caption → caption 触发 LLM，图片参与视觉描述
+- 群聊发图片 + caption 中 @bot → 同上
+- 私聊 reply 含图消息 + 文字 → 文字触发 LLM，reply 目标的图片参与视觉描述
+- 群聊 reply 含图消息 + 文字 @bot → 同上
+- 纯图片（无文字）→ 不触发，静默忽略
+
+视觉模型可在 `data/llmConfig.json` 中通过 `visionModel` 字段配置（默认 `claude-sonnet-4-6`），与主对话模型 `model` 独立。
 
 **LLM 无响应 / API 报错**
 - 检查 `.env` 中对应 provider 的 API Key 是否填写正确（不能有多余空格或 BOM）

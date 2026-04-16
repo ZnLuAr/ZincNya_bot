@@ -85,6 +85,7 @@ import sys
 import sqlite3
 from datetime import datetime
 from typing import List, Optional
+
 from cryptography.fernet import Fernet
 
 from config import (
@@ -93,8 +94,9 @@ from config import (
     CHAT_BACKUP_DIR,
     CHAT_HISTORY_LIMIT,
 )
-from utils.logger import logSystemEvent, LogLevel
+
 from utils.core.database import Database
+from utils.logger import logSystemEvent, LogLevel
 
 
 TIMESTAMP_FORMAT_DATE = "%Y%m%d"                # 归档文件名日期格式

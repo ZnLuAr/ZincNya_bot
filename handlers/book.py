@@ -144,19 +144,21 @@ safeEditMessage(message , text , **kwargs) -> bool
 
 
 import hashlib
-from telegram import Update , InlineKeyboardButton , InlineKeyboardMarkup
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     filters,
     ContextTypes,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
-    )
+)
+
+from config import BOOK_ITEMS_PER_PAGE, BOOK_QUERY_HASH_LENGTH
 
 from utils.bookSearchAPI import searchBooks
-from utils.telegramHelpers import safeEditMessage
 from utils.core.errorDecorators import handleTelegramErrors
-from config import BOOK_ITEMS_PER_PAGE , BOOK_QUERY_HASH_LENGTH
+from utils.telegramHelpers import safeEditMessage
 
 
 

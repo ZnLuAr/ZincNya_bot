@@ -13,21 +13,22 @@ utils/core/appLifecycle.py
 import sys
 import logging
 import asyncio
+
 from telegram.ext import ApplicationBuilder, MessageHandler, filters
 
 from config import BOT_TOKEN, TELEGRAM_PROXY
 from loader import loadHandlers
 
-from utils.logger import initLogger
-from utils.todos.reminder import todoReminderLoop
-from utils.core.stateManager import getStateManager
-from utils.core.resourceManager import cleanupAllResources
-from utils.llm.memory import initDatabase as initLLMMemoryDB
-from utils.todos.database import initDatabase as initTodosDB
-from utils.chatHistory import initDatabase as initChatHistoryDB
-from utils.newsAPI import registerResources as registerNewsResources
-from utils.errorHandler import initErrorHandler, setupAsyncioErrorHandler
 from utils.bookSearchAPI import registerResources as registerBookResources
+from utils.chatHistory import initDatabase as initChatHistoryDB
+from utils.core.resourceManager import cleanupAllResources
+from utils.core.stateManager import getStateManager
+from utils.errorHandler import initErrorHandler, setupAsyncioErrorHandler
+from utils.llm.memory import initDatabase as initLLMMemoryDB
+from utils.logger import initLogger
+from utils.newsAPI import registerResources as registerNewsResources
+from utils.todos.database import initDatabase as initTodosDB
+from utils.todos.reminder import todoReminderLoop
 
 
 

@@ -25,11 +25,13 @@ import logging
 import pkgutil
 import functools
 import importlib
+
 from telegram.ext import Application
 
 from config import PROJECT_ROOT, AUTH_ENABLED
-from utils.whitelistManager.data import whetherAuthorizedUser
+
 from utils.logger import sanitizeForLog
+from utils.whitelistManager.data import whetherAuthorizedUser
 
 
 # 明确跳过的模块（不是 Telegram handler 的模块）

@@ -14,8 +14,8 @@ import asyncio
 
 from handlers.cli import handleConsoleCommand
 
-from utils.inputHelper import asyncInput
 from utils.core.stateManager import getStateManager
+from utils.inputHelper import asyncInput
 
 
 

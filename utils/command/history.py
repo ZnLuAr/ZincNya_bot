@@ -52,13 +52,13 @@ from config import CHAT_EXPORT_DIR, CHAT_PREVIEW_LIMIT
 
 from handlers.cli import parseArgsTokens
 
-from utils.logger import logAction, LogLevel, LogChildType, logSystemEvent
 from utils.chatHistory import (
     loadHistory,
     getChatList,
     getMessageCount,
     iterMessagesWithDateMarkers,
 )
+from utils.logger import logAction, LogLevel, LogChildType, logSystemEvent
 from utils.whitelistManager.data import loadWhitelistFile
 
 

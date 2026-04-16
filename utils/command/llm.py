@@ -21,40 +21,42 @@ LLM 功能控制台命令：
 
 import sys
 
-from handlers.cli import parseArgsTokens
-from utils.logger import logAction, LogLevel, LogChildType
-from utils.llm import (
-    getModel,
-    setModel,
-    addMemory,
-    getAutoMode,
-    setAutoMode,
-    getMemories,
-    deleteMemory,
-    updateMemory,
-    getLLMEnabled,
-    getMemoryByID,
-    setLLMEnabled,
-    setContextOnce,
-    getMemoryEnabled,
-    isContextOnceSet,
-    setMemoryEnabled,
-    MEMORY_SCOPE_GLOBAL,
-    getMemoryAutoApprove,
-    setMemoryAutoApprove,
-)
 from config import LLM_RATE_LIMIT_SECONDS
+
+from handlers.cli import parseArgsTokens
+
+from utils.llm import (
+    addMemory,
+    deleteMemory,
+    getAutoMode,
+    getLLMEnabled,
+    getMemories,
+    getMemoryAutoApprove,
+    getMemoryByID,
+    getMemoryEnabled,
+    getModel,
+    isContextOnceSet,
+    MEMORY_SCOPE_GLOBAL,
+    setAutoMode,
+    setContextOnce,
+    setLLMEnabled,
+    setMemoryAutoApprove,
+    setMemoryEnabled,
+    setModel,
+    updateMemory,
+)
 from utils.llm.review import (
-    reviewSend,
-    reviewRetry,
-    reviewCancel,
-    reviewEditSubmit,
     canEditReviewItem,
     canRetryReviewItem,
     formatReviewItemText,
     getReviewItemActions,
+    reviewCancel,
+    reviewEditSubmit,
+    reviewRetry,
+    reviewSend,
 )
 from utils.llm.state import getReviewQueue
+from utils.logger import logAction, LogLevel, LogChildType
 
 
 

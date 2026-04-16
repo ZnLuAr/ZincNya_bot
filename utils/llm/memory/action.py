@@ -14,13 +14,14 @@ from typing import Optional
 from dataclasses import dataclass
 
 from utils.logger import logSystemEvent, logAction, LogLevel, LogChildType
+
 from .database import (
     addMemory,
     deleteMemory,
     getMemoryByID,
     updateMemory,
-    MEMORY_SCOPE_GLOBAL,
     MEMORY_SCOPE_CHAT,
+    MEMORY_SCOPE_GLOBAL,
     MEMORY_SCOPE_USER,
 )
 

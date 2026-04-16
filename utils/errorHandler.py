@@ -116,32 +116,32 @@ import sys
 import logging
 import threading
 import traceback
+from collections import defaultdict
 from datetime import datetime
 from typing import Optional
-from collections import defaultdict
 
-from config import LOG_DIR
-from utils.core.stateManager import safePrint
-
-# 导入异常类型用于 isinstance 判断
-from telegram.error import (
-    TelegramError,
-    NetworkError,
-    TimedOut,
-    Forbidden,
-    BadRequest,
-    RetryAfter,
-    Conflict,
-    InvalidToken,
-)
 from httpx import (
     ConnectError,
     ConnectTimeout,
-    ReadTimeout,
-    WriteTimeout,
     PoolTimeout,
     ProxyError,
+    ReadTimeout,
+    WriteTimeout,
 )
+from telegram.error import (
+    BadRequest,
+    Conflict,
+    Forbidden,
+    InvalidToken,
+    NetworkError,
+    RetryAfter,
+    TelegramError,
+    TimedOut,
+)
+
+from config import LOG_DIR
+
+from utils.core.stateManager import safePrint
 
 
 

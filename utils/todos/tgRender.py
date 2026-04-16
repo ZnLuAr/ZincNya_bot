@@ -18,8 +18,9 @@ from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from utils.todos.utils import PRIORITY_EMOJI, formatRemindTime
 from config import TODOS_ITEMS_PER_PAGE, TODOS_CONTENT_PREVIEW_LENGTH
+
+from utils.todos.utils import PRIORITY_EMOJI, formatRemindTime
 
 
 
