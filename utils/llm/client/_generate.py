@@ -3,7 +3,7 @@ utils/llm/client/_generate.py
 
 LLM 回复生成编排逻辑：
     - 构建 system messages（人设 + guardrails）
-    - 双调用架构：图片描述 + 主调用
+    - 可选双调用架构：visionModel != model 时分离描述与回复，否则单次调用
 """
 
 from utils.logger import logSystemEvent, LogLevel, LogChildType
@@ -17,6 +17,7 @@ from ._router import getProvider
 
 _VISION_MAX_TOKENS = 4096
 _VISION_TEMPERATURE = 0.2
+_VISION_MIN_DESCRIPTION_LEN = 150  # 低于此长度视为描述异常（正常描述 200-800+ 字符）
 
 
 
@@ -47,6 +48,8 @@ async def _describeImages(
     使用无人设的 VISION_DESCRIBE_PROMPT，让 LLM 客观描述图片内容。
     不附带用户文本，避免模型根据文本编造图片内容。
     返回的描述文本将作为纯文本注入主调用的上下文中。
+
+    描述长度低于阈值时自动重试一次（有些中转服务偶尔会丢图片数据）。
     失败时返回空字符串，不阻断主调用。
     """
     model = getVisionModel()
@@ -73,6 +76,32 @@ async def _describeImages(
             maxTokens=_VISION_MAX_TOKENS,
             temperature=_VISION_TEMPERATURE,
         )
+
+        # 正常图片描述通常 200-800+ 字符，过短大概率是服务异常（如中转丢图片数据）
+        if len(description) < _VISION_MIN_DESCRIPTION_LEN:
+            await logSystemEvent(
+                "LLM 图片描述异常短",
+                f"仅 {len(description)} 字符，重试 | {description[:80]}",
+                LogLevel.WARNING,
+                LogChildType.WITH_ONE_CHILD,
+            )
+            description = await requestWithRetry(
+                provider,
+                systemMessages=VISION_DESCRIBE_PROMPT,
+                userContent=userContent,
+                model=model,
+                maxTokens=_VISION_MAX_TOKENS,
+                temperature=_VISION_TEMPERATURE,
+            )
+            if len(description) < _VISION_MIN_DESCRIPTION_LEN:
+                await logSystemEvent(
+                    "LLM 图片描述重试仍异常",
+                    f"仅 {len(description)} 字符，放弃",
+                    LogLevel.WARNING,
+                    LogChildType.WITH_ONE_CHILD,
+                )
+                return ""
+
     except Exception as e:
         await logSystemEvent(
             "LLM 图片描述失败",
@@ -95,6 +124,13 @@ async def _describeImages(
 
 
 
+_IMAGE_FAILED_BLOCK = (
+    "<IMAGE_DESCRIPTION>\n"
+    "[用户发了图片，但图片读取失败了。请告诉用户图片没能看到，建议再发一次试试。语气自然，不必提技术原因。]\n"
+    "</IMAGE_DESCRIPTION>"
+)
+
+
 async def generateReply(
     userMessage: str,
     chatID: str,
@@ -111,19 +147,17 @@ async def generateReply(
         images: 图片列表 [{"data": b64_str, "mimeType": "image/jpeg"}, ...]
                 为 None 或空列表时表示纯文本。
 
-    有图片时采用双调用架构：
-        1. 轻量视觉调用：无人设 prompt，获取客观图片描述
-        2. 主调用：完整人设 + 图片描述文本，生成角色化回复
+    图片处理策略（由 visionModel 配置决定）：
+        - visionModel == model → 单调用：图片直接传给主模型
+        - visionModel != model → 双调用：轻量模型描述 + 主模型回复
     """
     prompts = loadPrompts()
     systemMessages = _buildSystemMessages(prompts)
     maxTokens = prompts.get("max_tokens", 1024)
     temperature = prompts.get("temperature", 0.8)
 
-    # 双调用：先获取图片描述，再将描述作为纯文本注入主调用
-    imageDescription: str | None = None
-    if images:
-        imageDescription = await _describeImages(images)
+    model = getModel()
+    visionModel = getVisionModel()
 
     textContent = await buildConversationContext(
         userMessage=userMessage,
@@ -133,8 +167,10 @@ async def generateReply(
         includeContext=includeContext,
     )
 
-    # 有图片时，嵌入描述上下文；主调用始终是纯文本
-    if images:
+    # ── 构建 userContent ──
+    if images and visionModel != model:
+        # 双调用：分离描述与回复（省主模型 token）
+        imageDescription = await _describeImages(images)
         if imageDescription:
             imageBlock = (
                 "<IMAGE_DESCRIPTION>\n"
@@ -143,19 +179,24 @@ async def generateReply(
                 "</IMAGE_DESCRIPTION>"
             )
         else:
-            imageBlock = (
-                "<IMAGE_DESCRIPTION>\n"
-                "[用户发了图片，但你尝试读取时画面没有浮现。请用锌酱的语气表达轻微困惑——像是你伸手去接却没接到，不必提技术原因。]\n"
-                "</IMAGE_DESCRIPTION>"
-            )
-        textContent = f"{imageBlock}\n\n{textContent}"
+            imageBlock = _IMAGE_FAILED_BLOCK
+        userContent = f"{imageBlock}\n\n{textContent}"
 
-    model = getModel()
+    elif images:
+        # 单调用：图片直接传给主模型
+        userContent = [
+            *[{"type": "image_base64", "data": img["data"], "mimeType": img["mimeType"]} for img in images],
+            {"type": "text", "text": textContent},
+        ]
+
+    else:
+        userContent = textContent
+
     provider = getProvider(model)
     return await requestWithRetry(
         provider,
         systemMessages=systemMessages,
-        userContent=textContent,
+        userContent=userContent,
         model=model,
         maxTokens=maxTokens,
         temperature=temperature,

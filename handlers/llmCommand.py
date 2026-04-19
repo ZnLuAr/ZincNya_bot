@@ -34,6 +34,7 @@ from utils.llm import (
     getLLMEnabled, setLLMEnabled,
     getMemoryEnabled, setMemoryEnabled,
     getModel, setModel,
+    getVisionModel, setVisionModel
 )
 from utils.logger import logAction, LogLevel, LogChildType
 from utils.operators import hasPermission
@@ -49,7 +50,7 @@ _MODE_NAMES = {"on": "直接发送", "off": "Telegram 审核", "console": "控�
 
 
 
-@handleTelegramErrors(errorReply="诶……指令摔跤了喵……？")
+@handleTelegramErrors(errorReply="呜哇……是奇奇怪怪的指令结果，朝咱冲过来喵……！")
 async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/llm [子命令] — LLM 控制（仅 ops）"""
     userID = update.effective_user.id
@@ -79,10 +80,14 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         case "status":
             autoMode = getAutoMode()
+            vm = getVisionModel()
+            m = getModel()
+            vmLabel = f"{vm}（双调用）" if vm != m else "与主模型一致（单调用）"
             text = (
                 f"LLM 功能：{'开启' if getLLMEnabled() else '关闭'}\n"
                 f"审核模式：{_MODE_NAMES.get(autoMode, autoMode)}\n"
-                f"当前模型：{getModel()}\n"
+                f"当前模型：{m}\n"
+                f"视觉模型：{vmLabel}\n"
                 f"记忆模式：{'开启' if getMemoryEnabled() else '关闭'}"
             )
             await update.message.reply_text(text)
@@ -93,13 +98,31 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif len(args) >= 3 and args[1].lower() == "switch":
                 newModel = args[2]
                 if not _MODEL_RE.match(newModel):
-                    await update.message.reply_text("❌ 模型名称格式无效喵、\n只允许字母、数字、. - _，最长最长就只能到 64 字符了……")
+                    await update.message.reply_text("❌ 模型名称格式无效喵、\n只允许字母、数字、. - _，且最长最长就只能到 64 字符了……")
                     return
                 setModel(newModel)
                 await update.message.reply_text(f"模型已切换为：{newModel}")
                 await logAction("System", "Telegram 端切换 LLM 模型", f"操作者：{operatorName}，模型：{newModel}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             else:
                 await update.message.reply_text("用法：/llm model 或 /llm model switch <模型名称>")
+
+        case "visionmodel":
+            if len(args) == 1:
+                await update.message.reply_text(f"当前的视觉模型是：{getVisionModel()}")
+            elif len(args) >= 3 and args[1].lower() == "switch":
+                newVisionModel = args[2]
+                if not _MODEL_RE.match(newVisionModel):
+                    await update.message.reply_text("❌ 模型名称格式无效喵、\n只允许字母、数字、. - _，最长最长就只能到 64 字符了……")
+                    return
+                setVisionModel(newVisionModel)
+                await update.message.reply_text(f"视觉模型已切换为：{newVisionModel}")
+                await logAction("System", "Telegram 端切换 LLM 视觉模型", f"操作者：{operatorName}，模型：{newVisionModel}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            elif len(args) == 2 and args[1].lower() == "reset":
+                setVisionModel(getModel())
+                await update.message.reply_text(f"视觉模型已和主模型 {getModel()} 同步喵")
+                await logAction("System", "Telegram 端同步 LLM 视觉模型", f"操作者：{operatorName}，模型：{getModel()}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            else:
+                await update.message.reply_text("用法：/llm visionmodel (reset) 或 /llm visionmodel switch <模型名称>")
 
         case "memory":
             if len(args) == 1:

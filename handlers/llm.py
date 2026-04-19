@@ -124,7 +124,7 @@ async def _dispatchLLMReply(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     """
-    防抖窗口结束后触发：聚合消息、调用 LLM、分发回复。
+    防抖窗口结束后触发 聚合消息、调用 LLM 与 分发回复。
 
     由 handleLLMMessage 通过 asyncio.create_task 调用，
     不直接持有 update 对象（可能已过期），改用 chatID 和 triggerMsgID。
@@ -138,7 +138,9 @@ async def _dispatchLLMReply(
         if not parts:
             return
         combinedText = "\n".join(text for text, _, _ in parts if text)
-        includeContext = any(flag for _, flag, _ in parts) or consumeContextOnce()
+        # 先消费 one-shot 标记再做 or，避免短路求值导致标记永不清除
+        hadOnce = consumeContextOnce()
+        includeContext = any(flag for _, flag, _ in parts) or hadOnce
 
         # 收集所有图片
         allImages: list[dict] = []
@@ -161,9 +163,14 @@ async def _dispatchLLMReply(
         try:
             reply = await generateReply(combinedText, chatID, includeContext=includeContext, userID=userID, images=(allImages or None))
         except Exception as e:
+            from utils.llm.client._request import _isRetryable
             await logAction("System", f"LLM 生成回复失败：{chatID}", str(e), LogLevel.ERROR, LogChildType.WITH_ONE_CHILD)
+            if _isRetryable(e):
+                errMsg = "呜……网络好像有些波动，锌酱没能接收到这条消息喵……可以再试一次吗？"
+            else:
+                errMsg = "呜哇——有、有意料之外的错误正向咱袭来喵！"
             try:
-                await context.bot.send_message(chat_id=chatID, text="呜……抱歉……刚刚、出了点问题喵……")
+                await context.bot.send_message(chat_id=chatID, text=errMsg)
             except NetworkError:
                 pass
             return
@@ -201,6 +208,25 @@ async def _dispatchLLMReply(
         try:
             autoMode = getAutoMode()
             opsList = _getOpsWithLLMPermission()
+
+            # 边界情况：LLM 只输出了 memory action 且全部校验失败 → 用户无任何反馈
+            # 至少给一个 reaction，让用户知道消息被处理过了
+            if not reply.strip() and not memoryActions:
+                try:
+                    await context.bot.set_message_reaction(
+                        chat_id=chatID,
+                        message_id=triggerMsgID,
+                        reaction=[ReactionTypeEmoji(emoji="🤔")],
+                    )
+                except Exception:
+                    pass
+                await logSystemEvent(
+                    "LLM 回复为空",
+                    f"chatID={chatID}, user=@{username} | 回复为空且无有效记忆操作",
+                    LogLevel.WARNING,
+                    LogChildType.WITH_ONE_CHILD,
+                )
+                return
 
             # 发送回复
             if reply.strip():
@@ -313,12 +339,22 @@ async def _dispatchLLMReply(
                             )
 
         except NetworkError as e:
-            await logAction("System", f"LLM 分发回复失败：{chatID}", str(e), LogLevel.ERROR, LogChildType.WITH_ONE_CHILD)
+            await logAction("System", f"LLM 分发回复网络错误：{chatID}", str(e), LogLevel.WARNING, LogChildType.WITH_ONE_CHILD)
+            await asyncio.sleep(2)
+            try:
+                # 重试一次：仅重试直接发送（autoMode=="on"），审核消息丢失影响较小
+                if reply.strip() and autoMode == "on":
+                    await context.bot.send_message(
+                        chat_id=chatID,
+                        text=_truncate(reply, _TG_MAX_LEN),
+                        reply_to_message_id=triggerMsgID,
+                    )
+                    await logAction("System", f"LLM 分发重试成功：{chatID}", "", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            except NetworkError as e2:
+                await logAction("System", f"LLM 分发重试仍失败：{chatID}", str(e2), LogLevel.ERROR, LogChildType.WITH_ONE_CHILD)
 
     except asyncio.CancelledError:
         raise
-    finally:
-        clearPendingTask(debounceKey)
 
 
 
@@ -329,8 +365,10 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     LLM 消息处理器（私聊 / 群聊被 @）。
 
     支持纯文字、图片 + 触发、reply 含图消息三种路径。
-    流程：LLM 开关检查 → :edit 审核捕获 → 白名单 + 速率限制 →
-          图片提取与下载 → 防抖缓冲 → 取消旧任务 → 创建新防抖任务
+    流程：
+        LLM 开关检查 → :edit 审核捕获 → 白名单 + 速率限制 →
+        图片提取与下载 → 防抖缓冲 → 取消旧任务 → 创建新防抖任务
+
     实际调用 LLM 和分发回复在 _dispatchLLMReply 中异步执行。
     """
     # 1. 检查 LLM 功能是否启用

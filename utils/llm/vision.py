@@ -33,6 +33,19 @@ class ImageRef:
 
 
 
+_VISION_PREFERRED_MIN_WIDTH = 800
+
+
+def _pickBestPhoto(photos: tuple) -> object:
+    """选择适合视觉模型的分辨率—— 宽度 >= 800px 的最小尺寸，不够则取最大。"""
+    for p in photos:
+        if p.width >= _VISION_PREFERRED_MIN_WIDTH:
+            return p
+    return photos[-1]
+
+
+
+
 def extractImageRefs(message) -> list[ImageRef]:
     """
     从单条 Telegram 消息中提取图片引用。
@@ -44,7 +57,9 @@ def extractImageRefs(message) -> list[ImageRef]:
 
     if message.photo:
         # message.photo 是 tuple[PhotoSize]，按分辨率从小到大排列
-        photo = message.photo[-1]
+        # 选择合适的分辨率：优先取宽度 >= 800px 的最小尺寸，减小请求体积
+        # 视觉模型不需要最高分辨率，800px 应该足以让大模型识别文字和视觉元素
+        photo = _pickBestPhoto(message.photo)
         tooLarge = bool(photo.file_size and photo.file_size > LLM_IMAGE_MAX_BYTES)
         refs.append(ImageRef(
             fileID=photo.file_id,

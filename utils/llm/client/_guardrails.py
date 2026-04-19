@@ -43,5 +43,6 @@ MEMORY_ACTION_INSTRUCTIONS: list[str] = [
         "约束：你只能修改 src=inferred 的记忆，不能修改 src=manual 的记忆。"
         "priority 上限为 3。每次回复最多 3 个操作。"
         "add 必须提供 content。update/delete 必须提供 memory_id。"
+        "update 中 tags 字段语义：省略表示保留原 tags；显式写 [] 表示清空所有 tags；写非空数组表示替换为新 tags。"
     ),
 ]

@@ -18,6 +18,8 @@ from .config import (
     setAutoMode,
     getModel,
     setModel,
+    getVisionModel,
+    setVisionModel,
     getMemoryEnabled,
     setMemoryEnabled,
     getMemoryAutoApprove,

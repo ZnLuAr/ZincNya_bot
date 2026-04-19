@@ -15,6 +15,20 @@ from dataclasses import dataclass
 
 from utils.logger import logSystemEvent, logAction, LogLevel, LogChildType
 
+# fire-and-forget task 引用持有，避免被 GC 回收
+_backgroundTasks: set[asyncio.Task] = set()
+
+
+def _fireAndForget(coro):
+    """创建后台 task 并持有强引用，会在完成后自动移除。"""
+    try:
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(coro)
+        _backgroundTasks.add(task)
+        task.add_done_callback(_backgroundTasks.discard)
+    except RuntimeError:
+        pass
+
 from .database import (
     addMemory,
     deleteMemory,
@@ -160,35 +174,54 @@ def parseMemoryActions(text: str) -> tuple[str, list[MemoryAction]]:
         block = match.group(1).strip()
         if not block:
             continue
+
+        # 外层 try：仅捕获 JSON 解析失败（整块无法解析）
         try:
             raw = json.loads(block)
-            # 兼容 LLM 在单个块中输出数组 [{...}, {...}] 的情况
-            items = raw if isinstance(raw, list) else [raw]
-            for item in items:
+        except Exception as e:
+            details = block if len(block) <= 300 else block[:300] + "……"
+            try:
+                _fireAndForget(
+                    logSystemEvent(
+                        "LLM memory action JSON 解析失败",
+                        f"{e} | {details}",
+                        LogLevel.WARNING,
+                        childType=LogChildType.WITH_ONE_CHILD,
+                    )
+                )
+            except Exception:
+                pass
+            continue
+
+        # 兼容 LLM 在单个块中输出数组 [{...}, {...}] 的情况
+        items = raw if isinstance(raw, list) else [raw]
+        for item in items:
+            # 内层 try：单 item 解析失败时跳过该 item，不影响后续
+            try:
                 act = _parseActionDict(item)
-                actions.append(act)
+            except Exception as e:
+                preview = json.dumps(item, ensure_ascii=False)[:200] if isinstance(item, dict) else str(item)[:200]
                 try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(
-                        logAction(
-                            "System",
-                            "LLM 请求操作 Memory",
-                            formatActionDetail(act),
-                            level=LogLevel.INFO,
+                    _fireAndForget(
+                        logSystemEvent(
+                            "LLM memory action item 解析失败",
+                            f"{e} | {preview}",
+                            LogLevel.WARNING,
                             childType=LogChildType.WITH_ONE_CHILD,
                         )
                     )
                 except Exception:
                     pass
-        except Exception as e:
-            details = block if len(block) <= 300 else block[:300] + "……"
+                continue
+
+            actions.append(act)
             try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(
-                    logSystemEvent(
-                        "LLM memory action 解析失败",
-                        f"{e} | {details}",
-                        LogLevel.WARNING,
+                _fireAndForget(
+                    logAction(
+                        "System",
+                        "LLM 请求操作 Memory",
+                        formatActionDetail(act),
+                        level=LogLevel.INFO,
                         childType=LogChildType.WITH_ONE_CHILD,
                     )
                 )
