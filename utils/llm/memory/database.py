@@ -251,7 +251,13 @@ async def updateMemory(
     enabled: Optional[bool] = None,
     source: Optional[str] = None,
 ) -> bool:
-    """更新 memory。"""
+    """
+    更新 memory。
+
+    各字段语义：
+        None 表示不修改；非 None 表示替换为新值。
+    特别地，使用 tags=[] 表示显式清空所有标签（与 None=保留原标签 区分）。
+    """
     try:
         def _query(conn):
             cursor = conn.cursor()

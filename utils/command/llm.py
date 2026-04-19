@@ -5,6 +5,7 @@ LLM 功能控制台命令：
     /llm on | off
     /llm auto -on | -off | -console
     /llm model [switch <model>]
+    /llm visionmodel [switch <model>] | reset
     /llm memory -on | -off | -once | -autoapprove
     /llm memory list | add | edit | del | ui
     /llm status
@@ -35,6 +36,7 @@ from utils.llm import (
     getMemoryByID,
     getMemoryEnabled,
     getModel,
+    getVisionModel,
     isContextOnceSet,
     MEMORY_SCOPE_GLOBAL,
     setAutoMode,
@@ -43,6 +45,7 @@ from utils.llm import (
     setMemoryAutoApprove,
     setMemoryEnabled,
     setModel,
+    setVisionModel,
     updateMemory,
 )
 from utils.llm.review import (
@@ -68,6 +71,11 @@ def _printStatus():
     modeMap = {"on": "直接发送", "off": "Telegram 审核", "console": "控制台审核"}
     print(f"  审核模式：{modeMap.get(auto, auto)}")
     print(f"  当前模型：{getModel()}")
+    visionModel = getVisionModel()
+    if visionModel != getModel():
+        print(f"  视觉模型：{visionModel}（双调用）")
+    else:
+        print(f"  视觉模型：与主模型一致（单调用）")
     print(f"  记忆模式：{'开启' if getMemoryEnabled() else '关闭'}")
     print(f"  记忆自动批准：{'开启' if getMemoryAutoApprove() else '关闭'}")
     print(f"  One-shot：{'已设置（下次调用生效）' if isContextOnceSet() else '未设置'}")
@@ -118,6 +126,24 @@ async def execute(app, args):
             else:
                 print(f"当前模型：{getModel()}\n\n")
 
+        case "visionmodel":
+            if not rest:
+                vm = getVisionModel()
+                m = getModel()
+                mode = "双调用" if vm != m else "单调用"
+                print(f"视觉模型：{vm}（{mode}）")
+                return
+            if rest[0].lower() == "switch" and len(rest) > 1:
+                newModel = rest[1]
+                setVisionModel(newModel)
+                mode = "双调用" if newModel != getModel() else "单调用"
+                await logAction("System", f"LLM 视觉模型切换", f"已切换为：{newModel}（{mode}）", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            elif rest[0].lower() == "reset":
+                setVisionModel(getModel())
+                await logAction("System", f"LLM 视觉模型重置", f"已重置为主模型（单调用）", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            else:
+                print(f"视觉模型：{getVisionModel()}\n\n")
+
         case "memory":
             await _handleMemoryCommand(rest, app)
 
@@ -129,7 +155,7 @@ async def execute(app, args):
 
         case _:
             print(f"❌ 是未知的子命令 {cmd} 喵")
-            print("用法：/llm [on|off|auto|model|memory|status|review]\n")
+            print("用法：/llm [on|off|auto|model|visionmodel|memory|status|review]\n")
 
 
 
@@ -473,6 +499,8 @@ def getHelp():
             "/llm status                          显示当前配置\n"
             "/llm auto -on|-off|-console          切换审核模式\n"
             "/llm model [switch <model>]          显示或切换模型\n"
+            "/llm visionmodel [switch <model>]    显示或切换视觉模型\n"
+            "/llm visionmodel reset               重置为主模型（单调用）\n"
             "/llm memory -on|-off|-once           开启/关闭记忆模式，或仅下一次带入历史\n"
             "/llm memory -autoapprove             切换记忆自动批准（跳过审核）\n"
             "/llm memory del <id>                 删除一条 memory\n"
@@ -485,11 +513,13 @@ def getHelp():
             "/llm status                          查看当前配置\n"
             "/llm on                              开启 LLM\n"
             "/llm auto -console                   切换到控制台审核模式\n"
+            "/llm visionmodel reset               重置为主模型（单调用）\n"
             "/llm memory -on                      开启全局记忆模式\n"
             "/llm memory -autoapprove             切换记忆自动批准\n"
             "/llm memory list                     列出所有启用的 memory\n"
             "/llm memory del 3                    删除 memory #3\n"
-            "/llm memory add -scope global -text '偏好简体中文'\n"
             "/llm memory edit -mid 1 -priority 10\n"
+            "/llm visionmodel switch claude-sonnet-4-6\n"
+            "/llm memory add -scope global -text '偏好简体中文'\n"
         ),
     }

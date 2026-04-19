@@ -11,6 +11,7 @@ LLM 配置管理：
 
 import os
 import json
+import threading
 
 from config import (
     LLM_CONFIG_PATH,
@@ -20,12 +21,16 @@ from config import (
 )
 
 
+# 配置 read-modify-write 串行化：避免 Telegram / console 并发改配置时丢更新
+_configLock = threading.Lock()
+
+
 # 默认配置（首次运行或文件损坏时使用）
 _DEFAULT_CONFIG = {
     "enabled": False,
     "autoMode": "console",  # "on" | "off" | "console"
     "model": LLM_DEFAULT_MODEL,
-    "visionModel": "claude-sonnet-4-6",
+    "visionModel": LLM_DEFAULT_MODEL,
     "memoryEnabled": False,
     "memoryAutoApprove": False,
 }
@@ -45,22 +50,33 @@ def loadLLMConfig() -> dict:
 
 
 def saveLLMConfig(config: dict) -> bool:
-    """保存 LLM 配置到文件，失败时返回 False"""
+    """
+    保存 LLM 配置到文件，失败时返回 False
+
+    使用 tmpfile + os.replace 原子写：避免崩溃 / 并发时出现半截文件。
+    """
+    tmpPath = LLM_CONFIG_PATH + ".tmp"
     try:
-        with open(LLM_CONFIG_PATH, "w", encoding="utf-8") as f:
+        with open(tmpPath, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=4)
+        os.replace(tmpPath, LLM_CONFIG_PATH)
         return True
     except OSError as e:
         from utils.core.stateManager import safePrint
         safePrint(f"[LLM] 配置保存失败：{e}")
+        try:
+            os.remove(tmpPath)
+        except OSError:
+            pass
         return False
 
 
 def _setConfig(**kwargs):
-    """内部：更新配置项并保存"""
-    cfg = loadLLMConfig()
-    cfg.update(kwargs)
-    saveLLMConfig(cfg)
+    """更新配置项并保存（加锁，避免并发 read-modify-write 丢更新）"""
+    with _configLock:
+        cfg = loadLLMConfig()
+        cfg.update(kwargs)
+        saveLLMConfig(cfg)
 
 
 
