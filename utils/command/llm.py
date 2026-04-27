@@ -31,6 +31,8 @@ from utils.llm import (
     deleteMemory,
     getAutoMode,
     getLLMEnabled,
+    getGroupTriggerKeywords,
+    getGroupTriggerMode,
     getMemories,
     getMemoryAutoApprove,
     getMemoryByID,
@@ -41,11 +43,14 @@ from utils.llm import (
     MEMORY_SCOPE_GLOBAL,
     setAutoMode,
     setContextOnce,
+    setGroupTriggerMode,
     setLLMEnabled,
     setMemoryAutoApprove,
     setMemoryEnabled,
     setModel,
     setVisionModel,
+    addGroupTriggerKeyword,
+    removeGroupTriggerKeyword,
     updateMemory,
 )
 from utils.llm.review import (
@@ -76,6 +81,11 @@ def _printStatus():
         print(f"  视觉模型：{visionModel}（双调用）")
     else:
         print(f"  视觉模型：与主模型一致（单调用）")
+    triggerMode = getGroupTriggerMode()
+    triggerModeMap = {"mention": "群聊需 @", "keyword": "群聊 @ 或关键词"}
+    keywords = getGroupTriggerKeywords()
+    print(f"  群聊触发：{triggerModeMap.get(triggerMode, triggerMode)}")
+    print(f"  触发关键词：{', '.join(keywords) if keywords else '-'}")
     print(f"  记忆模式：{'开启' if getMemoryEnabled() else '关闭'}")
     print(f"  记忆自动批准：{'开启' if getMemoryAutoApprove() else '关闭'}")
     print(f"  One-shot：{'已设置（下次调用生效）' if isContextOnceSet() else '未设置'}")
@@ -130,19 +140,52 @@ async def execute(app, args):
             if not rest:
                 vm = getVisionModel()
                 m = getModel()
-                mode = "双调用" if vm != m else "单调用"
+                mode = "双调用喵" if vm != m else "单调用喵"
                 print(f"视觉模型：{vm}（{mode}）")
                 return
             if rest[0].lower() == "switch" and len(rest) > 1:
                 newModel = rest[1]
                 setVisionModel(newModel)
-                mode = "双调用" if newModel != getModel() else "单调用"
+                mode = "双调用喵" if newModel != getModel() else "单调用喵"
                 await logAction("System", f"LLM 视觉模型切换", f"已切换为：{newModel}（{mode}）", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             elif rest[0].lower() == "reset":
                 setVisionModel(getModel())
                 await logAction("System", f"LLM 视觉模型重置", f"已重置为主模型（单调用）", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             else:
                 print(f"视觉模型：{getVisionModel()}\n\n")
+
+        case "trigger":
+            modeNames = {"mention": "群聊触发需要 @", "keyword": "群聊触发需要 @ 或关键词"}
+            if not rest:
+                mode = getGroupTriggerMode()
+                print(f"群聊触发模式：{mode}（{modeNames.get(mode, mode)}）\n")
+                return
+            mode = rest[0].lower()
+            try:
+                setGroupTriggerMode(mode)
+                await logAction("System", "LLM 群聊触发模式切换", f"已切换为：{modeNames.get(mode, mode)}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            except ValueError:
+                print("❌ 无效的触发模式喵……目前只支持 mention / keyword\n")
+
+        case "keyword":
+            keywords = getGroupTriggerKeywords()
+            if not rest:
+                print(f"群聊触发关键词：{', '.join(keywords) if keywords else '(……ないですニャー w)'}\n")
+                return
+            action = rest[0].lower()
+            if action in ("add", "del") and len(rest) > 1:
+                keyword = rest[1]
+                try:
+                    if action == "add":
+                        addGroupTriggerKeyword(keyword)
+                        await logAction("System", "LLM 群聊触发关键词添加", keyword, LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+                    else:
+                        removeGroupTriggerKeyword(keyword)
+                        await logAction("System", "LLM 群聊触发关键词删除", keyword, LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+                except ValueError as e:
+                    print(f"❌ {e}\n")
+            else:
+                print("用法：/llm keyword | /llm keyword add <关键词> | /llm keyword del <关键词>\n")
 
         case "memory":
             await _handleMemoryCommand(rest, app)
@@ -155,7 +198,7 @@ async def execute(app, args):
 
         case _:
             print(f"❌ 是未知的子命令 {cmd} 喵")
-            print("用法：/llm [on|off|auto|model|visionmodel|memory|status|review]\n")
+            print("用法：/llm [on|off|auto|model|visionmodel|trigger|keyword|memory|status|review]\n")
 
 
 
@@ -501,6 +544,8 @@ def getHelp():
             "/llm model [switch <model>]          显示或切换模型\n"
             "/llm visionmodel [switch <model>]    显示或切换视觉模型\n"
             "/llm visionmodel reset               重置为主模型（单调用）\n"
+            "/llm trigger [mention|keyword]       显示或切换群聊触发模式\n"
+            "/llm keyword [add|del <关键词>]       管理群聊触发关键词\n"
             "/llm memory -on|-off|-once           开启/关闭记忆模式，或仅下一次带入历史\n"
             "/llm memory -autoapprove             切换记忆自动批准（跳过审核）\n"
             "/llm memory del <id>                 删除一条 memory\n"
@@ -514,7 +559,8 @@ def getHelp():
             "/llm on                              开启 LLM\n"
             "/llm auto -console                   切换到控制台审核模式\n"
             "/llm visionmodel reset               重置为主模型（单调用）\n"
-            "/llm memory -on                      开启全局记忆模式\n"
+            "/llm trigger keyword                 使用 @ 或关键词触发群聊 LLM\n"
+            "/llm keyword add 锌酱                添加群聊触发关键词\n"
             "/llm memory -autoapprove             切换记忆自动批准\n"
             "/llm memory list                     列出所有启用的 memory\n"
             "/llm memory del 3                    删除 memory #3\n"

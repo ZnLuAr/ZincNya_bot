@@ -32,6 +32,8 @@ from utils.core.errorDecorators import handleTelegramErrors
 from utils.llm import (
     getAutoMode,
     getLLMEnabled, setLLMEnabled,
+    getGroupTriggerKeywords, getGroupTriggerMode, setGroupTriggerMode,
+    addGroupTriggerKeyword, removeGroupTriggerKeyword,
     getMemoryEnabled, setMemoryEnabled,
     getModel, setModel,
     getVisionModel, setVisionModel
@@ -82,13 +84,18 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
             autoMode = getAutoMode()
             vm = getVisionModel()
             m = getModel()
-            vmLabel = f"{vm}（双调用）" if vm != m else "与主模型一致（单调用）"
+            vmLabel = f"{vm}（双调用喵）" if vm != m else "与主模型一致（单调用喵）"
+            triggerMode = getGroupTriggerMode()
+            triggerModeNames = {"mention": "群聊触发需 @", "keyword": "群聊触发需要 @ 或关键词"}
+            keywords = getGroupTriggerKeywords()
             text = (
-                f"LLM 功能：{'开启' if getLLMEnabled() else '关闭'}\n"
+                f"LLM 功能：{'开启喵' if getLLMEnabled() else '关闭喵'}\n"
                 f"审核模式：{_MODE_NAMES.get(autoMode, autoMode)}\n"
                 f"当前模型：{m}\n"
                 f"视觉模型：{vmLabel}\n"
-                f"记忆模式：{'开启' if getMemoryEnabled() else '关闭'}"
+                f"群聊触发：{triggerModeNames.get(triggerMode, triggerMode)}\n"
+                f"触发关键词：{', '.join(keywords) if keywords else '……ないですニャー（目移'}\n"
+                f"记忆模式：{'开启喵' if getMemoryEnabled() else '关闭喵'}"
             )
             await update.message.reply_text(text)
 
@@ -122,7 +129,45 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"视觉模型已和主模型 {getModel()} 同步喵")
                 await logAction("System", "Telegram 端同步 LLM 视觉模型", f"操作者：{operatorName}，模型：{getModel()}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             else:
-                await update.message.reply_text("用法：/llm visionmodel (reset) 或 /llm visionmodel switch <模型名称>")
+                await update.message.reply_text("应该是 /llm visionmodel (reset) 或 /llm visionmodel switch <模型名称> 哦……")
+
+        case "trigger":
+            modeNames = {"mention": "群聊触发需要 @", "keyword": "群聊触发需要 @ 或关键词"}
+            if len(args) == 1:
+                mode = getGroupTriggerMode()
+                await update.message.reply_text(f"当前群聊触发模式是 {mode}（{modeNames.get(mode, mode)}） 喵")
+            elif len(args) == 2:
+                mode = args[1].lower()
+                try:
+                    setGroupTriggerMode(mode)
+                except ValueError:
+                    await update.message.reply_text("应该是 /llm trigger mention 或 /llm trigger keyword 的……")
+                    return
+                await update.message.reply_text(f"群聊触发模式已切换为：{modeNames.get(mode, mode)}")
+                await logAction("System", "Telegram 端切换 LLM 群聊触发模式", f"操作者：{operatorName}，模式：{mode}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            else:
+                await update.message.reply_text("应该是 /llm trigger 或 /llm trigger mention|keyword 的……")
+
+        case "keyword":
+            keywords = getGroupTriggerKeywords()
+            if len(args) == 1:
+                await update.message.reply_text(f"当前群聊触发关键词：{', '.join(keywords) if keywords else '-'}")
+            elif len(args) >= 3 and args[1].lower() in ("add", "del"):
+                action = args[1].lower()
+                keyword = args[2]
+                try:
+                    if action == "add":
+                        addGroupTriggerKeyword(keyword)
+                        await update.message.reply_text(f"已添加触发关键词：{keyword.strip().lower()}")
+                        await logAction("System", "Telegram 端添加 LLM 群聊触发关键词", f"操作者：{operatorName}，关键词：{keyword}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+                    else:
+                        removeGroupTriggerKeyword(keyword)
+                        await update.message.reply_text(f"已删除触发关键词：{keyword.strip().lower()}")
+                        await logAction("System", "Telegram 端删除 LLM 群聊触发关键词", f"操作者：{operatorName}，关键词：{keyword}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+                except ValueError as e:
+                    await update.message.reply_text(f"❌ {e}")
+            else:
+                await update.message.reply_text("应该是 /llm keyword 或 /llm keyword add <关键词> 或 /llm keyword del <关键词> 的喵")
 
         case "memory":
             if len(args) == 1:
@@ -150,6 +195,10 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "/llm status                  显示完整配置\n"
                 "/llm model                   查看当前模型\n"
                 "/llm model switch &lt;名称&gt;      切换模型\n"
+                "/llm trigger                 查看群聊触发模式\n"
+                "/llm trigger mention|keyword 切换群聊触发模式\n"
+                "/llm keyword                 查看群聊触发关键词\n"
+                "/llm keyword add|del &lt;词&gt;    管理群聊触发关键词\n"
                 "/llm memory                  查看记忆模式\n"
                 "/llm memory -on | -off       开启/关闭记忆\n"
                 "</pre>"
