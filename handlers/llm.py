@@ -20,7 +20,7 @@ import re
 import asyncio
 
 from telegram import Update, ReactionTypeEmoji
-from telegram.constants import MessageEntityType
+from telegram.constants import MessageEntityType, ChatType
 from telegram.error import NetworkError
 from telegram.ext import (
     filters,
@@ -42,6 +42,8 @@ from utils.llm import (
     generateReply,
     getAutoMode,
     getLLMEnabled,
+    getGroupTriggerKeywords,
+    getGroupTriggerMode,
     getMemoryAutoApprove,
     getMemoryEnabled,
     getPendingTask,
@@ -61,7 +63,7 @@ from utils.llm.state import addMemoryReviewItem
 from utils.llm.vision import extractImageRefs, extractReplyImageRefs, downloadImages
 from utils.logger import logAction, logSystemEvent, LogLevel, LogChildType
 from utils.operators import loadOperators
-from utils.telegramHelpers import isMentioned, removeMention
+from utils.telegramHelpers import removeMention
 from utils.whitelistManager.data import whetherAuthorizedUser
 
 
@@ -107,6 +109,41 @@ def _getOpsWithLLMPermission() -> list[str]:
         if str(Permission.LLM) in perms:
             result.append(uid)
     return result
+
+
+def _isBotMentioned(message, botUsername: str) -> bool:
+    """LLM 专用的 @bot 判断，直接按 Telegram mention entity 匹配"""
+    expected = f"@{botUsername}".lower()
+    for text, entities in (
+        (message.text or "", message.entities or []),
+        (message.caption or "", message.caption_entities or []),
+    ):
+        for entity in entities:
+            if entity.type != MessageEntityType.MENTION:
+                continue
+            mention = text[entity.offset:entity.offset + entity.length].lower()
+            if mention == expected:
+                return True
+    return False
+
+
+def _matchesGroupTriggerKeyword(message) -> bool:
+    """检查群聊消息是否命中 LLM 触发关键词"""
+    text = (message.text or message.caption or "").strip().lower()
+    if not text:
+        return False
+    return any(keyword and keyword in text for keyword in getGroupTriggerKeywords())
+
+
+def _shouldTriggerLLM(message, botUsername: str, isPrivate: bool) -> bool:
+    """判断当前消息是否应触发 LLM。私聊始终触发；群聊按配置触发"""
+    if isPrivate:
+        return True
+    if _isBotMentioned(message, botUsername):
+        return True
+    if getGroupTriggerMode() == "keyword":
+        return _matchesGroupTriggerKeyword(message)
+    return False
 
 
 
@@ -390,18 +427,18 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await handleEditReply(message, context):
         return
 
-    # 2. 提取图片引用：优先同消息图片，其次 reply 目标图片
-    imageRefs = extractImageRefs(message)
-    if not imageRefs:
-        imageRefs = extractReplyImageRefs(message)
-
     # 纯图片无文字 → 不触发，静默忽略
     if not rawText:
         return
 
-    # 3. 检查用户是否在 whitelist
+    # 2. 检查用户是否在 whitelist
     userID = message.from_user.id
     if not whetherAuthorizedUser(userID):
+        return
+
+    # 3. 群聊触发检测（尽早返回，避免普通群消息进入图片处理 / rate limit / debounce）
+    isPrivate = update.effective_chat.type == ChatType.PRIVATE
+    if not _shouldTriggerLLM(message, context.bot.username, isPrivate):
         return
 
     # 4. 检查速率限制（基于上一次完整轮次，而非单条消息）
@@ -409,12 +446,10 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("……发得太快啦，锌酱的笨脑要跟不上了喵💦")
         return
 
-    # 5. 群聊检测（私聊直接触发，群聊需要被 @）
-    isPrivate = update.effective_chat.type == "private"
-    if not isPrivate:
-        botUsername = context.bot.username
-        if not isMentioned(message, botUsername):
-            return
+    # 5. 提取图片引用：优先同消息图片，其次 reply 目标图片
+    imageRefs = extractImageRefs(message)
+    if not imageRefs:
+        imageRefs = extractReplyImageRefs(message)
 
     # 6. 提取纯文本和上下文标记（#context 标记 或 全局 memory）
     pureText, includeContext = _extractPureMessage(rawText, context.bot.username)
@@ -475,12 +510,6 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============================================================================
 
 def register():
-    # 群聊中 @mention 可能出现在 text 或 caption 中
-    _mentionOrCaptionMention = (
-        filters.Entity(MessageEntityType.MENTION)
-        | filters.CaptionEntity(MessageEntityType.MENTION)
-    )
-
     return {
         "handlers": [
             # 主消息处理器注册在 group 1，而非默认的 group 0。
@@ -490,8 +519,7 @@ def register():
             # 抛出 ApplicationHandlerStop 阻止本 handler 运行。
             {"handler": MessageHandler(
                 (filters.TEXT | filters.PHOTO | filters.Document.IMAGE)
-                & ~filters.COMMAND
-                & (filters.ChatType.PRIVATE | _mentionOrCaptionMention),
+                & ~filters.COMMAND,
                 handleLLMMessage,
             ), "group": 1},
         ],

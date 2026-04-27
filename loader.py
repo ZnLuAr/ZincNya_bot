@@ -45,9 +45,9 @@ _logger = logging.getLogger(__name__)
 
 
 
-def _wrapWithAuth(handler_func):
+def _wrapWithAuth(handlerFunc):
     """包装 handler，在执行前检查白名单"""
-    @functools.wraps(handler_func)
+    @functools.wraps(handlerFunc)
     async def wrapper(update, context, *args, **kwargs):
         user = update.effective_user
         if user and not whetherAuthorizedUser(user.id):
@@ -58,7 +58,7 @@ def _wrapWithAuth(handler_func):
                 user.id
             )
             return
-        return await handler_func(update, context, *args, **kwargs)
+        return await handlerFunc(update, context, *args, **kwargs)
     return wrapper
 
 
@@ -68,8 +68,8 @@ def loadHandlers(app: Application):
     """动态加载 handlers 文件夹中的所有 Telegram 处理器喵"""
 
     package = "handlers"
-    loaded_modules = []
-    skipped_modules = []
+    loadedModules = []
+    skippedModules = []
     total_handlers = 0
 
     print("正在加载 Telegram 处理器喵……\n")
@@ -78,7 +78,7 @@ def loadHandlers(app: Application):
 
         # 跳过明确排除的模块
         if module_name in SKIP_MODULES:
-            skipped_modules.append(f"{module_name} (非 Telegram handler)")
+            skippedModules.append(f"{module_name} (非 Telegram handler)")
             continue
 
 
@@ -86,7 +86,7 @@ def loadHandlers(app: Application):
             module = importlib.import_module(f"{package}.{module_name}")
 
             if not hasattr(module, "register"):
-                skipped_modules.append(f"{module_name} (无 register 函数)")
+                skippedModules.append(f"{module_name} (无 register 函数)")
                 continue
 
             # 调用 register() 获取 handlers
@@ -132,7 +132,7 @@ def loadHandlers(app: Application):
                 total_handlers += 1
 
             # 记录加载信息
-            loaded_modules.append({
+            loadedModules.append({
                 "name": name,
                 "module": module_name,
                 "description": description,
@@ -150,11 +150,11 @@ def loadHandlers(app: Application):
 
     # 输出统计信息
     print()
-    print(f"已加载 {len(loaded_modules)} 个模块，共 {total_handlers} 个处理器——")
+    print(f"已加载 {len(loadedModules)} 个模块，共 {total_handlers} 个处理器——")
 
-    if skipped_modules:
-        print(f"跳过了 {len(skipped_modules)} 个模块：{', '.join(skipped_modules)}")
+    if skippedModules:
+        print(f"跳过了 {len(skippedModules)} 个模块：{', '.join(skippedModules)}")
 
     print()
 
-    return loaded_modules
+    return loadedModules

@@ -31,6 +31,8 @@ _DEFAULT_CONFIG = {
     "autoMode": "console",  # "on" | "off" | "console"
     "model": LLM_DEFAULT_MODEL,
     "visionModel": LLM_DEFAULT_MODEL,
+    "groupTriggerMode": "mention",  # "mention" | "keyword"
+    "groupTriggerKeywords": [],
     "memoryEnabled": False,
     "memoryAutoApprove": False,
 }
@@ -125,6 +127,79 @@ def getVisionModel() -> str:
 
 def setVisionModel(model: str):
     _setConfig(visionModel=model)
+
+
+
+
+# ── 群聊触发 ────────────────────────────────────────
+
+_GROUP_TRIGGER_MODES = {"mention", "keyword"}
+_GROUP_TRIGGER_KEYWORD_MAX_LEN = 32
+
+
+def _normalizeGroupTriggerKeyword(keyword: str) -> str:
+    keyword = str(keyword).strip().lower()
+    if not keyword:
+        raise ValueError("关键词不能为空")
+    if any(ch.isspace() for ch in keyword):
+        raise ValueError("关键词不能包含空白字符")
+    if len(keyword) > _GROUP_TRIGGER_KEYWORD_MAX_LEN:
+        raise ValueError(f"关键词最长 {_GROUP_TRIGGER_KEYWORD_MAX_LEN} 字符")
+    return keyword
+
+
+def getGroupTriggerMode() -> str:
+    mode = loadLLMConfig().get("groupTriggerMode", "mention")
+    return mode if mode in _GROUP_TRIGGER_MODES else "mention"
+
+
+def setGroupTriggerMode(mode: str):
+    mode = str(mode).strip().lower()
+    if mode not in _GROUP_TRIGGER_MODES:
+        raise ValueError(f"无效的 groupTriggerMode：{mode}")
+    _setConfig(groupTriggerMode=mode)
+
+
+def getGroupTriggerKeywords() -> list[str]:
+    raw = loadLLMConfig().get("groupTriggerKeywords", [])
+    if not isinstance(raw, list):
+        return []
+    result: list[str] = []
+    seen = set()
+    for item in raw:
+        try:
+            keyword = _normalizeGroupTriggerKeyword(item)
+        except ValueError:
+            continue
+        if keyword not in seen:
+            seen.add(keyword)
+            result.append(keyword)
+    return result
+
+
+def setGroupTriggerKeywords(keywords: list[str]):
+    result: list[str] = []
+    seen = set()
+    for item in keywords:
+        keyword = _normalizeGroupTriggerKeyword(item)
+        if keyword not in seen:
+            seen.add(keyword)
+            result.append(keyword)
+    _setConfig(groupTriggerKeywords=result)
+
+
+def addGroupTriggerKeyword(keyword: str):
+    keywords = getGroupTriggerKeywords()
+    keyword = _normalizeGroupTriggerKeyword(keyword)
+    if keyword not in keywords:
+        keywords.append(keyword)
+        _setConfig(groupTriggerKeywords=keywords)
+
+
+def removeGroupTriggerKeyword(keyword: str):
+    keyword = _normalizeGroupTriggerKeyword(keyword)
+    keywords = [kw for kw in getGroupTriggerKeywords() if kw != keyword]
+    _setConfig(groupTriggerKeywords=keywords)
 
 
 
