@@ -2,15 +2,14 @@
 utils/llm/state.py
 
 LLM 运行时状态管理：
-    - 多类型审核队列（reply + memory，console / chatScreen 共用）
+    - 多类型审核队列（reply + memory，console / chatScreen 共用；
+      reply item 会携带 urlContexts 供 retry 复用）
     - 队首预览（peekReviewHint，供 chatScreen 状态栏显示）
     - 每用户速率限制
-    - 消息防抖缓冲（聚合短时间内分多次发送的消息）
+    - 消息防抖缓冲（聚合短时间内分多次发送的消息，按 dict 记录
+      text / includeContext / images / urlIntentText / urlCandidateText）
     - 全局 one-shot context 标记（memory -once）
 """
-
-
-
 
 import time
 import asyncio
@@ -27,7 +26,7 @@ _llmReviewQueue: asyncio.Queue = asyncio.Queue()
 _lastCallTime: dict[str, float] = {}
 
 # 消息防抖状态（聚合短时间内分多次发送的消息）
-_pendingMessages: dict[str, list[tuple[str, bool, list[dict]]]] = {}   # debounceKey -> [(text, includeContext, images)]
+_pendingMessages: dict[str, list[dict]] = {}   # debounceKey -> [{"text": str, "includeContext": bool, "images": list, "urlIntentText": str, "urlCandidateText": str}]
 _pendingTasks: dict[str, asyncio.Task] = {}   # debounceKey -> 当前防抖 Task
 
 # 全局 one-shot context 标记：下一次 LLM 调用强制带记忆，触发后自动清除
@@ -41,15 +40,7 @@ def getReviewQueue() -> asyncio.Queue:
     return _llmReviewQueue
 
 
-def peekReviewHint() -> str | None:
-    """
-    窥视队首审核项，返回类型+内容预览字符串。
-    队列为空时返回 None。不消费队列项。
-    """
-    # asyncio.Queue 内部使用 collections.deque
-    if not _llmReviewQueue._queue:
-        return None
-    item = _llmReviewQueue._queue[0]
+def _formatReviewHint(item: dict) -> str:
     kind = item.get("kind", "reply")
     if kind == "memory":
         action = item.get("action", {})
@@ -63,12 +54,47 @@ def peekReviewHint() -> str | None:
         else:
             preview = ""
         return f"当前操作的是：[记忆:{actionType}] {preview}" if preview else f"当前操作的是：[记忆:{actionType}]"
-    else:
-        reply = item.get("reply") or ""
-        preview = reply[:16] + "…" if len(reply) > 16 else reply
-        return f"当前操作的是：[回复] {preview}" if preview else "当前操作的是：[回复]"
+
+    reply = item.get("reply") or ""
+    preview = reply[:16] + "…" if len(reply) > 16 else reply
+    return f"当前操作的是：[回复] {preview}" if preview else "当前操作的是：[回复]"
 
 
+def peekReviewHint() -> str | None:
+    """
+    窥视队首审核项，返回类型+内容预览字符串。
+    队列为空时返回 None。不消费队列项。
+    """
+    # asyncio.Queue 内部使用 collections.deque
+    if not _llmReviewQueue._queue:
+        return None
+    return _formatReviewHint(_llmReviewQueue._queue[0])
+
+
+
+
+def makeReplyReviewItem(
+    *,
+    chatID: str,
+    messageID: int,
+    originalMsg: str,
+    reply: str,
+    opsID: str,
+    userID: str | int | None = None,
+    includeContext: bool = False,
+    urlContexts: list[dict] | None = None,
+) -> dict:
+    return {
+        "kind": "reply",
+        "chatID": chatID,
+        "messageID": messageID,
+        "originalMsg": originalMsg,
+        "reply": reply,
+        "opsID": opsID,
+        "userID": str(userID) if userID is not None else None,
+        "includeContext": includeContext,
+        "urlContexts": urlContexts or [],
+    }
 
 
 def addReviewItem(
@@ -79,6 +105,7 @@ def addReviewItem(
     opsID: str,
     userID: str | int | None = None,
     includeContext: bool = False,
+    urlContexts: list[dict] | None = None,
 ):
     """
     将待审核消息加入队列
@@ -89,17 +116,36 @@ def addReviewItem(
         originalMsg: 用户发送的原始消息
         reply: LLM 生成的回复
         opsID: 审核通知发送给哪个 ops
+        urlContexts: URL 抓取结果列表
     """
-    _llmReviewQueue.put_nowait({
-        "kind": "reply",
+    _llmReviewQueue.put_nowait(makeReplyReviewItem(
+        chatID=chatID,
+        messageID=messageID,
+        originalMsg=originalMsg,
+        reply=reply,
+        opsID=opsID,
+        userID=userID,
+        includeContext=includeContext,
+        urlContexts=urlContexts,
+    ))
+
+
+def makeMemoryReviewItem(
+    *,
+    action: dict,
+    chatID: str,
+    originalMsg: str,
+    opsID: str,
+    userID: str | int | None = None,
+) -> dict:
+    return {
+        "kind": "memory",
+        "action": action,
         "chatID": chatID,
-        "messageID": messageID,
         "originalMsg": originalMsg,
-        "reply": reply,
         "opsID": opsID,
         "userID": str(userID) if userID is not None else None,
-        "includeContext": includeContext,
-    })
+    }
 
 
 def addMemoryReviewItem(
@@ -120,14 +166,13 @@ def addMemoryReviewItem(
         opsID: 审核通知发送给哪个 ops
         userID: 触发用户 ID
     """
-    _llmReviewQueue.put_nowait({
-        "kind": "memory",
-        "action": action,
-        "chatID": chatID,
-        "originalMsg": originalMsg,
-        "opsID": opsID,
-        "userID": str(userID) if userID is not None else None,
-    })
+    _llmReviewQueue.put_nowait(makeMemoryReviewItem(
+        action=action,
+        chatID=chatID,
+        originalMsg=originalMsg,
+        opsID=opsID,
+        userID=userID,
+    ))
 
 
 
@@ -168,23 +213,33 @@ def appendPendingMessage(
     text: str,
     includeContext: bool = False,
     images: list[dict] | None = None,
+    urlIntentText: str | None = None,
+    urlCandidateText: str | None = None,
 ) -> bool:
     """
     将消息追加到防抖缓冲区。
 
     参数:
         images: 图片列表 [{"data": b64_str, "mimeType": "..."}, ...]
+        urlIntentText: 当前用户消息文本，用于判断 URL 读取意图
+        urlCandidateText: 当前用户消息 + 被回复消息文本，用于提取 URL
 
     返回 False 表示已达上限，消息被丢弃。
     """
     buf = _pendingMessages.setdefault(debounceKey, [])
     if len(buf) >= LLM_PENDING_MSG_LIMIT:
         return False
-    buf.append((text, includeContext, images or []))
+    buf.append({
+        "text": text,
+        "includeContext": includeContext,
+        "images": images or [],
+        "urlIntentText": urlIntentText or "",
+        "urlCandidateText": urlCandidateText or "",
+    })
     return True
 
 
-def popPendingMessages(debounceKey: str) -> list[tuple[str, bool, list[dict]]]:
+def popPendingMessages(debounceKey: str) -> list[dict]:
     """取出并清空该防抖键对应的待聚合消息列表"""
     return _pendingMessages.pop(debounceKey, [])
 

@@ -83,6 +83,7 @@ data/pushedNews.json
 data/prompts.json
 data/llmConfig.json
 data/llmMemory.db
+data/zincnya_backup/
 # 但保留 .gitkeep 占位文件
 !data/.gitkeep
 

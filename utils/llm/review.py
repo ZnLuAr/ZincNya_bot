@@ -16,6 +16,8 @@ from utils.llm.memory.action import MemoryAction, executeAction
 from utils.logger import logAction, LogLevel, LogChildType
 
 
+
+
 # ---------------------------------------------------------------------------
 # 共享字段提取
 # ---------------------------------------------------------------------------
@@ -37,6 +39,8 @@ def extractMemoryActionFields(action: dict) -> dict:
     }
 
 
+
+
 # ---------------------------------------------------------------------------
 # 能力判断辅助函数
 # ---------------------------------------------------------------------------
@@ -55,6 +59,8 @@ def canEditReviewItem(item: dict) -> bool:
 def canRetryReviewItem(item: dict) -> bool:
     """判断审核项是否可重试。"""
     return item.get("kind", "reply") == "reply"
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -110,9 +116,55 @@ def getReviewItemActions(item: dict) -> str:
     return "[A]ccept / [E]dit / [R]etry / [C]ancel"
 
 
+
+
 # ---------------------------------------------------------------------------
 # 审核动作
 # ---------------------------------------------------------------------------
+
+async def _retryReplyReview(item: dict) -> dict:
+    newReply = await generateReply(
+        item["originalMsg"],
+        item["chatID"],
+        includeContext=bool(item.get("includeContext")),
+        userID=item.get("userID"),
+        urlContexts=item.get("urlContexts"),
+    )
+    await logAction(
+        "System", "LLM 控制台审核：重新生成",
+        f"原文：{item['originalMsg']}", LogLevel.INFO, LogChildType.WITH_CHILD,
+    )
+    await logAction(
+        "System", "",
+        f"生成的消息：{newReply}", LogLevel.INFO, LogChildType.LAST_CHILD,
+    )
+    return {**item, "reply": newReply}
+
+
+async def _approveMemoryReview(item: dict) -> bool:
+    actionData = item["action"]
+    action = MemoryAction.fromDict(actionData)
+    success = await executeAction(action)
+    status = "成功" if success else "失败"
+    detail = f"scope={action.scopeType}:{action.scopeID}"
+    if action.memoryID is not None:
+        detail += f", id=#{action.memoryID}"
+    if action.content:
+        detail += f", content={action.content[:80]}"
+    await logAction(
+        "System", f"LLM 控制台审核：记忆操作 {action.action} {status}",
+        detail,
+        LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
+    )
+    return success
+
+
+def _updateReviewItemText(item: dict, editedText: str) -> dict:
+    kind = item.get("kind", "reply")
+    if kind == "memory":
+        return {**item, "action": {**item["action"], "content": editedText}}
+    return {**item, "reply": editedText}
+
 
 async def reviewSend(bot, item: dict) -> None:
     """
@@ -125,20 +177,7 @@ async def reviewSend(bot, item: dict) -> None:
     kind = item.get("kind", "reply")
 
     if kind == "memory":
-        actionData = item["action"]
-        action = MemoryAction.fromDict(actionData)
-        success = await executeAction(action)
-        status = "成功" if success else "失败"
-        detail = f"scope={action.scopeType}:{action.scopeID}"
-        if action.memoryID is not None:
-            detail += f", id=#{action.memoryID}"
-        if action.content:
-            detail += f", content={action.content[:80]}"
-        await logAction(
-            "System", f"LLM 控制台审核：记忆操作 {action.action} {status}",
-            detail,
-            LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
-        )
+        await _approveMemoryReview(item)
         return
 
     # kind == "reply"
@@ -167,21 +206,7 @@ async def reviewRetry(item: dict) -> dict:
     if item.get("kind", "reply") == "memory":
         raise ValueError("memory 审核项暂不支持重试")
 
-    newReply = await generateReply(
-        item["originalMsg"],
-        item["chatID"],
-        includeContext=bool(item.get("includeContext")),
-        userID=item.get("userID"),
-    )
-    await logAction(
-        "System", "LLM 控制台审核：重新生成",
-        f"原文：{item['originalMsg']}", LogLevel.INFO, LogChildType.WITH_CHILD,
-    )
-    await logAction(
-        "System", "",
-        f"生成的消息：{newReply}", LogLevel.INFO, LogChildType.LAST_CHILD,
-    )
-    return {**item, "reply": newReply}
+    return await _retryReplyReview(item)
 
 
 async def reviewCancel(item: dict) -> None:
@@ -224,10 +249,9 @@ async def reviewEditSubmit(item: dict, editedText: str) -> dict:
         return item
 
     kind = item.get("kind", "reply")
+    editedItem = _updateReviewItemText(item, editedText)
 
     if kind == "memory":
-        editedItem = {**item}
-        editedItem["action"] = {**item["action"], "content": editedText}
         await logAction(
             "System", "LLM 控制台审核：记忆操作编辑完成",
             f"编辑后：{editedText[:200]}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
@@ -235,7 +259,6 @@ async def reviewEditSubmit(item: dict, editedText: str) -> dict:
         return editedItem
 
     # kind == "reply"
-    editedItem = {**item, "reply": editedText}
     await logAction(
         "System", "LLM 控制台审核：编辑完成",
         f"原文：{item['originalMsg']}", LogLevel.INFO, LogChildType.WITH_CHILD,

@@ -41,7 +41,7 @@ if (-not $REMOTE_PATH.EndsWith('/')) {
 Write-Host ""
 Write-Host "正在连接 ${REMOTE_HOST}:${REMOTE_PORT} ..." -ForegroundColor Yellow
 
-$sshTest = ssh -p $REMOTE_PORT -o ConnectTimeout=5 -o BatchMode=yes $REMOTE_HOST "echo ok" 2>&1
+$sshTest = ssh -p $REMOTE_PORT -o ConnectTimeout=5 $REMOTE_HOST "echo ok" 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "SSH 连接失败喵" -ForegroundColor Red
     Write-Host "  主机: $REMOTE_HOST" -ForegroundColor DarkGray
@@ -245,7 +245,7 @@ function Invoke-FileUpload {
         $dst = "${REMOTE_HOST}:${REMOTE_PATH}${name}"
 
         Write-Host "  上传 $name ..." -ForegroundColor Yellow -NoNewline
-        scp -P $REMOTE_PORT "$src" "$dst" 2>&1 | Out-Null
+        scp -P $REMOTE_PORT "$src" "$dst" *>$null
 
         if ($LASTEXITCODE -eq 0) {
             Write-Host " ok" -ForegroundColor Green
@@ -274,7 +274,7 @@ function Invoke-FileDownload {
         $dst = Join-Path $LocalPath $name
 
         Write-Host "  下载 $name ..." -ForegroundColor Yellow -NoNewline
-        scp -P $REMOTE_PORT "$src" "$dst" 2>&1 | Out-Null
+        scp -P $REMOTE_PORT "$src" "$dst" *>$null
 
         if ($LASTEXITCODE -eq 0) {
             Write-Host " ok" -ForegroundColor Green
