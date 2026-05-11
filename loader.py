@@ -70,23 +70,23 @@ def loadHandlers(app: Application):
     package = "handlers"
     loadedModules = []
     skippedModules = []
-    total_handlers = 0
+    totalHandlers = 0
 
     print("正在加载 Telegram 处理器喵……\n")
 
-    for _ , module_name , _ in pkgutil.iter_modules([_HANDLERS_DIR]):
+    for _ , moduleName , _ in pkgutil.iter_modules([_HANDLERS_DIR]):
 
         # 跳过明确排除的模块
-        if module_name in SKIP_MODULES:
-            skippedModules.append(f"{module_name} (非 Telegram handler)")
+        if moduleName in SKIP_MODULES:
+            skippedModules.append(f"{moduleName} (非 Telegram handler)")
             continue
 
 
         try:
-            module = importlib.import_module(f"{package}.{module_name}")
+            module = importlib.import_module(f"{package}.{moduleName}")
 
             if not hasattr(module, "register"):
-                skippedModules.append(f"{module_name} (无 register 函数)")
+                skippedModules.append(f"{moduleName} (无 register 函数)")
                 continue
 
             # 调用 register() 获取 handlers
@@ -96,13 +96,13 @@ def loadHandlers(app: Application):
             if isinstance(result , dict):
                 # 元数据格式
                 handlers = result.get("handlers" , [])
-                name = result.get("name" , module_name)
+                name = result.get("name" , moduleName)
                 description = result.get("description" , "")
                 requireAuth = result.get("auth" , True)  # 默认需要白名单鉴权
             else:
                 # 简单格式（向后兼容）
                 handlers = result
-                name = module_name
+                name = moduleName
                 description = ""
                 requireAuth = True
 
@@ -117,7 +117,7 @@ def loadHandlers(app: Application):
             #   不同 group 各自独立处理同一条消息，按 group 编号从小到大依次执行。
             #   在某 group 的 handler 中抛出 ApplicationHandlerStop 可阻止所有后续 group 处理该消息。
             # 
-            handler_count = 0
+            handlerCount = 0
             for item in handlers:
                 if isinstance(item, dict) and "handler" in item:
                     handler = item["handler"]
@@ -128,29 +128,29 @@ def loadHandlers(app: Application):
                 if requireAuth and AUTH_ENABLED and hasattr(handler, "callback"):
                     handler.callback = _wrapWithAuth(handler.callback)
                 app.add_handler(handler, group)
-                handler_count += 1
-                total_handlers += 1
+                handlerCount += 1
+                totalHandlers += 1
 
             # 记录加载信息
             loadedModules.append({
                 "name": name,
-                "module": module_name,
+                "module": moduleName,
                 "description": description,
-                "handler_count": handler_count,
+                "handlerCount": handlerCount,
             })
 
             # 输出加载信息
             if description:
-                print(f"  {name} ({handler_count} 个) - {description}")
+                print(f"  {name} ({handlerCount} 个) - {description}")
             else:
-                print(f"  {name} ({handler_count} 个)")
+                print(f"  {name} ({handlerCount} 个)")
 
         except Exception as e:
-            print(f"  加载 {module_name} 失败喵：{e}")
+            print(f"  加载 {moduleName} 失败喵：{e}")
 
     # 输出统计信息
     print()
-    print(f"已加载 {len(loadedModules)} 个模块，共 {total_handlers} 个处理器——")
+    print(f"已加载 {len(loadedModules)} 个模块，共 {totalHandlers} 个处理器——")
 
     if skippedModules:
         print(f"跳过了 {len(skippedModules)} 个模块：{', '.join(skippedModules)}")

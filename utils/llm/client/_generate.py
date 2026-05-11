@@ -2,8 +2,9 @@
 utils/llm/client/_generate.py
 
 LLM 回复生成编排逻辑：
-    - 构建 system messages（人设 + guardrails）
+    - 构建 system messages（人设 + guardrails，按 includeContext 决定是否追加记忆操作指令）
     - 可选双调用架构：visionModel != model 时分离描述与回复，否则单次调用
+    - 通过 urlContexts 透传低信任 URL 内容到 contextBuilder
 """
 
 from utils.logger import logSystemEvent, LogLevel, LogChildType
@@ -140,6 +141,7 @@ async def generateReply(
     userID: str | int | None = None,
     sessionID: str | int | None = None,
     images: list[dict] | None = None,
+    urlContexts: list[dict] | None = None,
 ) -> str:
     """
     调用 LLM 生成回复。
@@ -147,6 +149,7 @@ async def generateReply(
     参数:
         images: 图片列表 [{"data": b64_str, "mimeType": "image/jpeg"}, ...]
                 为 None 或空列表时表示纯文本。
+        urlContexts: URL 抓取结果列表
 
     图片处理策略（由 visionModel 配置决定）：
         - visionModel == model → 单调用：图片直接传给主模型
@@ -166,6 +169,7 @@ async def generateReply(
         userID=userID,
         sessionID=sessionID,
         includeContext=includeContext,
+        urlContexts=urlContexts,
     )
 
     # ── 构建 userContent ──

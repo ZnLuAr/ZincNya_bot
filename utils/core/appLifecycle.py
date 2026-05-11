@@ -25,6 +25,7 @@ from utils.core.resourceManager import cleanupAllResources
 from utils.core.stateManager import getStateManager
 from utils.errorHandler import initErrorHandler, setupAsyncioErrorHandler
 from utils.llm.memory import initDatabase as initLLMMemoryDB
+from utils.llm.urlReader import registerResources as registerURLReaderResources
 from utils.logger import initLogger
 from utils.newsAPI import registerResources as registerNewsResources
 from utils.todos.database import initDatabase as initTodosDB
@@ -65,6 +66,7 @@ def initializeApp(app):
     # 显式注册各模块的资源清理回调
     registerBookResources()
     registerNewsResources()
+    registerURLReaderResources()
 
     # 全局消息收集器
     async def messageCollector(update, context):

@@ -7,7 +7,6 @@ IO 操作与业务逻辑：ensure/load/save、权限检查、CRUD 操作、/star
 import os
 import json
 import time
-from typing import Optional
 
 from config import WHITELIST_PATH, Permission
 

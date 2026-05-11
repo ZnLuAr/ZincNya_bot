@@ -4,13 +4,18 @@ handlers/llmCommand.py
 Telegram 端 /llm 控制命令（ops 专用）。
 
 支持：
-    /llm                       查看 LLM 开关状态
-    /llm -on | -off            开启/关闭 LLM
-    /llm status                显示完整配置（开关、审核模式、模型、记忆）
-    /llm model                 查看当前模型
-    /llm model switch <name>   切换模型
-    /llm memory                查看记忆模式
-    /llm memory -on | -off     开启/关闭记忆模式
+    /llm                            查看 LLM 开关状态
+    /llm -on | -off                 开启/关闭 LLM
+    /llm status                     显示完整配置（开关、审核模式、模型、群聊触发、记忆、URL 读取）
+    /llm model                      查看当前模型
+    /llm model switch <name>        切换模型
+    /llm visionmodel ...            视觉模型配置
+    /llm trigger mention|keyword    切换群聊触发模式
+    /llm keyword [add|del <词>]     管理群聊触发关键词
+    /llm memory                     查看记忆模式
+    /llm memory -on | -off          开启/关闭记忆模式
+    /llm url                        查看 URL 读取开关
+    /llm url -on | -off             开启/关闭 URL 读取（详细数值 limits 仅控制台可改）
 
 安全设计：
     - 所有 reply 均不传 parse_mode（plain text，规避 Markdown 注入）
@@ -36,7 +41,8 @@ from utils.llm import (
     addGroupTriggerKeyword, removeGroupTriggerKeyword,
     getMemoryEnabled, setMemoryEnabled,
     getModel, setModel,
-    getVisionModel, setVisionModel
+    getVisionModel, setVisionModel,
+    getURLReadEnabled, setURLReadEnabled,
 )
 from utils.logger import logAction, LogLevel, LogChildType
 from utils.operators import hasPermission
@@ -95,7 +101,8 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"视觉模型：{vmLabel}\n"
                 f"群聊触发：{triggerModeNames.get(triggerMode, triggerMode)}\n"
                 f"触发关键词：{', '.join(keywords) if keywords else '……ないですニャー（目移'}\n"
-                f"记忆模式：{'开启喵' if getMemoryEnabled() else '关闭喵'}"
+                f"记忆模式：{'开启喵' if getMemoryEnabled() else '关闭喵'}\n"
+                f"URL 读取：{'开启喵' if getURLReadEnabled() else '关闭喵'}"
             )
             await update.message.reply_text(text)
 
@@ -186,6 +193,23 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await update.message.reply_text("用法喵——\n/llm memory -on 或 /llm memory -off")
 
+        case "url":
+            if len(args) == 1:
+                state = "开启" if getURLReadEnabled() else "关闭"
+                await update.message.reply_text(f"URL 读取功能目前是 {state} 的喵")
+            else:
+                flag = args[1].lower()
+                if flag in ("-on", "on"):
+                    setURLReadEnabled(True)
+                    await update.message.reply_text("URL 读取功能已开启喵")
+                    await logAction("System", "Telegram 端开启 URL 读取", f"操作者：{operatorName}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+                elif flag in ("-off", "off"):
+                    setURLReadEnabled(False)
+                    await update.message.reply_text("URL 读取功能已关闭喵")
+                    await logAction("System", "Telegram 端关闭 URL 读取", f"操作者：{operatorName}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+                else:
+                    await update.message.reply_text("用法喵——\n/llm url -on 或 /llm url -off")
+
         case _:
             await update.message.reply_text(
                 "/llm 指令有以下的用法喵——\n"
@@ -201,6 +225,8 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "/llm keyword add|del &lt;词&gt;    管理群聊触发关键词\n"
                 "/llm memory                  查看记忆模式\n"
                 "/llm memory -on | -off       开启/关闭记忆\n"
+                "/llm url                     查看 URL 读取功能\n"
+                "/llm url -on | -off          开启/关闭 URL 读取\n"
                 "</pre>"
                 "…… 果然你又忘了吧 0 w0",
                 parse_mode="HTML",
