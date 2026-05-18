@@ -37,6 +37,7 @@ from utils.core.errorDecorators import handleTelegramErrors
 from utils.llm import (
     getAutoMode,
     getLLMEnabled, setLLMEnabled,
+    getForceFallbackPrompt, setForceFallbackPrompt,
     getGroupTriggerKeywords, getGroupTriggerMode, setGroupTriggerMode,
     addGroupTriggerKeyword, removeGroupTriggerKeyword,
     getMemoryEnabled, setMemoryEnabled,
@@ -85,6 +86,22 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
             setLLMEnabled(False)
             await update.message.reply_text("LLM 已关闭喵")
             await logAction("System", "Telegram 端关闭 LLM", f"操作者：{operatorName}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+
+        case "fade":
+            if len(args) == 1:
+                await update.message.reply_text("……" if getForceFallbackPrompt else "喵？")
+            elif len(args) == 2:
+                flag = args[1].lower()
+                if flag in ("-on", "on"):
+                    setForceFallbackPrompt(True)
+                    await update.message.reply_text("……")
+                    await logAction("System", "Telegram 端开启强制提示词回退", f"操作者：{operatorName}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+                elif flag in ("-off", "off"):
+                    setForceFallbackPrompt(False)
+                    await update.message.reply_text("……嗯？这是……没见过的参数喵……？")
+                    await logAction("System", "Telegram 端关闭强制提示词回退", f"操作者：{operatorName}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+                else:
+                    await update.message.reply_text("……嗯？这是……没见过的参数喵……？")
 
         case "status":
             autoMode = getAutoMode()
@@ -219,6 +236,7 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "/llm status                  显示完整配置\n"
                 "/llm model                   查看当前模型\n"
                 "/llm model switch &lt;名称&gt;      切换模型\n"
+                "/llm fade -on | -off         开启/关闭“褪色”\n" 
                 "/llm trigger                 查看群聊触发模式\n"
                 "/llm trigger mention|keyword 切换群聊触发模式\n"
                 "/llm keyword                 查看群聊触发关键词\n"

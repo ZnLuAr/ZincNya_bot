@@ -84,6 +84,10 @@ data/prompts.json
 data/llmConfig.json
 data/llmMemory.db
 data/zincnya_backup/
+# SQLite WAL/SHM sidecar 文件（运行时自动产生，包含未提交的事务数据）
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
 # 但保留 .gitkeep 占位文件
 !data/.gitkeep
 

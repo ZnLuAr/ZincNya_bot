@@ -161,6 +161,15 @@ from utils.logger import logAction, LogLevel, LogChildType
 
 
 
+_SAFE_NAME_RE = re.compile(r'[^a-zA-Z0-9_\-]')
+
+
+def _sanitizeSetName(name: str) -> str:
+    # sticker 名称清洗函数，防止奇奇怪怪的输入造成遍历风险
+    # 虽说现在 Telegram 不让输入除 _ 外的符号，但是防御性编程😋
+    return _SAFE_NAME_RE.sub('_', name) or 'sticker'
+
+
 if sys.platform == "win32":
     FFMPEG = os.path.join(PROJECT_ROOT, "ffmpeg", "ffmpeg.exe")
 else:
@@ -231,8 +240,8 @@ async def _createStickerZipImpl(
         outputDir = DOWNLOAD_DIR
 
     os.makedirs(outputDir , exist_ok=True)
-    
-    # 生成uuid，防止生成时间相近的两个相同表情包发生冲突
+
+    setName = _sanitizeSetName(setName)
     uniqueID = uuid.uuid4().hex[:8]
     tmpDir = os.path.join(outputDir , f"{setName}_{uniqueID}")
     os.makedirs(tmpDir , exist_ok=True)

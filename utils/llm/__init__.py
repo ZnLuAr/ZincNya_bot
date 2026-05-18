@@ -20,6 +20,8 @@ from .config import (
     setModel,
     getVisionModel,
     setVisionModel,
+    getForceFallbackPrompt,
+    setForceFallbackPrompt,
     getGroupTriggerMode,
     setGroupTriggerMode,
     getGroupTriggerKeywords,

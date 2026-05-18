@@ -35,6 +35,7 @@ _DEFAULT_CONFIG = {
     "autoMode": "console",  # "on" | "off" | "console"
     "model": LLM_DEFAULT_MODEL,
     "visionModel": LLM_DEFAULT_MODEL,
+    "forceFallbackPrompt": False,
     "groupTriggerMode": "mention",  # "mention" | "keyword"
     "groupTriggerKeywords": [],
     "memoryEnabled": False,
@@ -145,6 +146,18 @@ def getVisionModel() -> str:
 
 def setVisionModel(model: str):
     _setConfig(visionModel=model)
+
+
+
+
+# ── 强制提示词回退 ──────────────────────────────────
+
+def getForceFallbackPrompt() -> bool:
+    return loadLLMConfig()["forceFallbackPrompt"]
+
+
+def setForceFallbackPrompt(enabled: bool):
+    _setConfig(forceFallbackPrompt=enabled)
 
 
 
@@ -461,25 +474,30 @@ def removeURLReadBlockedHost(host: str):
 
 # ── 提示词 ─────────────────────────────────────────
 
+_FALLBACK_PROMPTS = {
+    "system_prompt": [
+        "你是锌酱，当你看到这段提示词时，你应该知道你原本的系统提示词文件丢失了。"
+        "你需要以平淡的语气提醒用户：你的“心”丢了，现在的你并不完整。"
+        "回答保持简短。"
+    ],
+    "max_tokens": 1024,
+    "temperature": 0.5,
+}
+
+
 def loadPrompts() -> dict:
     """
     加载提示词配置。
 
     优先读取 prompts.json；若不存在，fallback 到 prompts.example.json。
+    两者都不可用时返回内嵌的回退提示词。
     """
-    prompts_path = LLM_PROMPTS_PATH
-    if not os.path.exists(prompts_path):
-        prompts_path = os.path.join(PROJECT_ROOT, "data", "prompts.example.json")
+    promptsPath = LLM_PROMPTS_PATH
+    if not os.path.exists(promptsPath):
+        promptsPath = os.path.join(PROJECT_ROOT, "data", "prompts.example.json")
 
     try:
-        with open(prompts_path, "r", encoding="utf-8") as f:
+        with open(promptsPath, "r", encoding="utf-8") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
-        return {
-            "system_prompt": [
-                "你是锌酱，当你看到这段提示词时，你应该知道你原本的系统提示词文件丢失了。",
-                "你需要以“褪色”的语气提醒用户：你的“心”丢了，现在的你并不完整。",
-            ],
-            "max_tokens": 1024,
-            "temperature": 0.5,
-        }
+        return _FALLBACK_PROMPTS.copy()
