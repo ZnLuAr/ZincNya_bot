@@ -21,7 +21,6 @@ register() 函数可以返回两种格式：
 """
 
 import os
-import logging
 import pkgutil
 import functools
 import importlib
@@ -30,6 +29,7 @@ from telegram.ext import Application
 
 from config import PROJECT_ROOT, AUTH_ENABLED
 
+from utils.core.stateManager import safePrint
 from utils.logger import sanitizeForLog
 from utils.whitelistManager.data import whetherAuthorizedUser
 
@@ -40,8 +40,6 @@ SKIP_MODULES = ["cli"]
 # handlers 目录的绝对路径（用于 pkgutil 扫描）
 _HANDLERS_DIR = os.path.join(PROJECT_ROOT, "handlers")
 
-_logger = logging.getLogger(__name__)
-
 
 
 
@@ -51,11 +49,9 @@ def _wrapWithAuth(handlerFunc):
     async def wrapper(update, context, *args, **kwargs):
         user = update.effective_user
         if user and not whetherAuthorizedUser(user.id):
-            _logger.warning(
-                "未授权访问: %s (@%s / %s)",
-                sanitizeForLog(user.full_name),
-                sanitizeForLog(user.username or "N/A"),
-                user.id
+            safePrint(
+                f"[WARNING] 未授权访问: {sanitizeForLog(user.full_name)} "
+                f"(@{sanitizeForLog(user.username or 'N/A')} / {user.id})"
             )
             return
         return await handlerFunc(update, context, *args, **kwargs)
@@ -65,7 +61,7 @@ def _wrapWithAuth(handlerFunc):
 
 
 def loadHandlers(app: Application):
-    """动态加载 handlers 文件夹中的所有 Telegram 处理器喵"""
+    """动态加载 handlers 文件夹中的所有 Telegram 处理器"""
 
     package = "handlers"
     loadedModules = []

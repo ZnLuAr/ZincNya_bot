@@ -139,9 +139,34 @@ from telegram.error import (
     TimedOut,
 )
 
+import re
+
 from config import LOG_DIR
 
 from utils.core.stateManager import safePrint
+
+
+def _buildSecretPattern():
+    """用于过滤 traceback 中可能携带的 token 或 key"""
+    import os
+    secrets = []
+    for key in ("BOT_TOKEN", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
+                "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "DOUBAO_API_KEY"):
+        val = os.getenv(key)
+        if val and len(val) >= 8:
+            secrets.append(re.escape(val))
+    if not secrets:
+        return None
+    return re.compile("|".join(secrets))
+
+
+_SECRET_RE = _buildSecretPattern()
+
+
+def _redactSecrets(text: str) -> str:
+    if _SECRET_RE is None:
+        return text
+    return _SECRET_RE.sub("[REDACTED]", text)
 
 
 
@@ -264,9 +289,8 @@ class ErrorHandler:
 
         if exception:
             lines.append("─" * 70)
-            # 获取完整的 traceback
             tbLines = traceback.format_exception(type(exception) , exception , exception.__traceback__)
-            lines.extend([line.rstrip() for line in tbLines])
+            lines.extend([_redactSecrets(line.rstrip()) for line in tbLines])
 
         lines.append("═" * 70)
 

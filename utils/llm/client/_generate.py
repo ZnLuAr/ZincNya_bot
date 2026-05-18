@@ -9,7 +9,7 @@ LLM 回复生成编排逻辑：
 
 from utils.logger import logSystemEvent, LogLevel, LogChildType
 
-from ..config import getModel, getVisionModel, loadPrompts
+from ..config import getModel, getForceFallbackPrompt, getVisionModel, loadPrompts, _FALLBACK_PROMPTS
 from ..contextBuilder import buildConversationContext
 from ._guardrails import SYSTEM_GUARDRAILS, MEMORY_ACTION_INSTRUCTIONS, VISION_DESCRIBE_PROMPT
 from ._request import requestWithRetry
@@ -25,7 +25,8 @@ _VISION_MIN_DESCRIPTION_LEN = 150  # 低于此长度视为描述异常（正常�
 
 def _buildSystemMessages(prompts: dict, *, includeContext: bool = False) -> list[str]:
     """将 prompts.json 的 system_prompt + guardrails 合并为 list[str]。"""
-    raw = prompts.get("system_prompt", "")
+    source = _FALLBACK_PROMPTS if getForceFallbackPrompt() else prompts
+    raw = source.get("system_prompt", "")
     if isinstance(raw, list):
         parts = [s for s in raw if isinstance(s, str) and s.strip()]
     elif isinstance(raw, str) and raw.strip():

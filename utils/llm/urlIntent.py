@@ -29,30 +29,93 @@ _INTENT_KEYWORDS_ZH = [
     "打开", "点开", "点进去",
     "访问", "浏览", "查看", "查看一下", "看一下", "看下", "看看", "瞅瞅", "瞧瞧", "康康",
     "加载", "拉取", "获取", "抓取", "爬取", "解析", "处理", "识别",
+    "看看这个", "帮我看", "帮看看", "帮忙看", "帮看一下",
+    "给我看看", "让我看看", "打开看看",
     # 总结 / TLDR
     "总结一下", "总结", "概括", "归纳", "摘要", "提纲", "提炼", "简述",
     "一句话总结", "一句话概括", "长话短说", "太长不看", "懒得看", "没空看", "不想看",
+    "帮我总结", "帮忙总结", "简单说说", "简单讲讲", "大概说说", "大概讲讲",
+    "说个大概", "讲个大概", "给我概括", "精简一下",
     # 分析 / 解读
     "分析一下", "分析", "解释一下", "解释", "解读一下", "解读",
     "拆解", "展开讲讲", "点评", "评价", "评估", "研判",
+    "怎么看", "你怎么看", "你觉得呢", "你觉得怎么样",
+    "什么看法", "有什么看法", "怎么评价",
     # 可靠性 / 真伪
     "靠不靠谱", "靠谱吗", "可信吗", "是否可靠", "真假", "真伪", "核实", "验证", "辟谣",
     "有什么问题", "有没有问题", "有什么坑", "有没有坑", "优缺点", "利弊", "风险",
+    "是真的吗", "是假的吗", "可靠吗", "准确吗", "靠谱不",
+    "是不是智商税", "是不是骗人", "有没有猫腻", "是不是忽悠",
     # 翻译
     "翻译一下", "翻译", "译一下", "译成", "翻成",
     "翻成中文", "译成中文", "中文翻译", "翻成英文", "译成英文", "英文翻译",
     "中译英", "英译中",
+    "给我翻译", "帮我翻译", "翻一下",
     # 提取 / 整理
     "提取一下", "提取", "抽取", "摘取", "找出", "列出", "整理一下", "整理", "汇总",
     "提取要点", "提取关键词", "关键词", "关键字",
     "提取标题", "提取作者", "提取日期", "提取引用", "提取链接", "提取代码", "提取表格",
+    "帮我整理", "帮忙整理", "列个清单",
     # QA
-    "讲了什么", "讲了啥", "说了什么", "说了啥", "写了什么",
+    "讲了什么", "讲了啥", "说了什么", "说了啥", "写了什么", 
     "内容是什么", "主要内容", "核心观点", "关键信息", "重点内容",
     "要点", "结论", "主旨", "大意", "梗概",
-    "什么意思", "什么含义",
+    "什么意思", "什么含义", "怎么个事",
+    "聊了什么", "聊了啥", "讨论了什么", "讨论了啥",
+    "在说啥", "说的啥", "写的啥", "讲的啥",
     # 文档 / 教程
     "怎么用", "如何使用", "用法", "怎么安装", "如何安装", "怎么配置", "如何配置",
+    "怎么部署", "如何部署", "怎么搭建", "如何搭建",
+    # 玩梗 / 口语化 / 抽象话
+    "这是什么鬼", "什么鬼", "啥玩意", "什么玩意", "什么东西",
+    "搞笑吗", "有多离谱", "离了大谱", "绷不住了", "绷不住", "蚌埠住了",
+    "啥情况", "什么情况", "怎么回事", "咋回事", "搞什么",
+    "来解释解释", "解释一下是什么情况",
+    "能看看这个不", "帮我瞅瞅", "给我瞅瞅",
+    "吃瓜", "带我吃瓜", "前因后果", "来龙去脉",
+    "给我整个活", "整个活",
+    "你品", "你细品", "你品品", "品一品",
+    "帮我看看这啥", "这啥", "这什么",
+    "有意思吗", "有趣吗", "好玩吗", "好笑吗",
+    "太长了", "好长", "好多字", "字太多",
+    "一句话说明白", "给我划重点", "划重点", "划个重点", "敲黑板",
+    # 抽象网络用语
+    "什么成分", "成分如何", "什么含金量", "含金量多少",
+    "什么水平", "什么级别", "什么段位",
+    "有无懂哥", "懂哥来", "有懂的吗", "懂的说说", "有无吊大的",
+    "什么勾巴", "什么几把",
+    "什么抽象", "抽象玩意",
+    "什么批事", "什么批东西",
+    "什么烂活", "什么烂东西", "什么烂玩意",
+    "什么几把", "什么几把玩意",
+    "什么批登", "什么批站",
+    "什么鬼东西", "什么鬼玩意",
+    "什么寄吧", "什么寄巴",
+    "什么勾八", "什么勾巴玩意",
+    "什么批样", "什么批玩意",
+    "什么批内容", "什么批文章",
+    "什么批链接", "什么批网站",
+    # 二次元 / ACG
+    "有无懂哥", "有无大佬", "大佬来", "大佬解释下",
+    "什么番", "什么作品", "什么动画",
+    "什么梗", "这什么梗", "什么活", "整什么活",
+    "什么节目效果", "节目效果", "效果拉满",
+    # 吃瓜 / 八卦
+    "什么瓜", "吃什么瓜", "什么大瓜", "瓜是什么",
+    "什么料", "什么猛料", "什么爆料",
+    "什么黑料", "什么实锤", "实锤了吗",
+    "什么反转", "有无反转", "反转了吗",
+    "什么剧情", "什么走向", "什么发展",
+    # 震惊体 / 标题党
+    "什么震惊", "震惊了", "什么惊天",
+    "什么重磅", "重磅消息", "什么大新闻",
+    "什么爆炸", "什么炸裂", "炸了吗",
+    # 质疑 / 反讽
+    "什么含量", "什么纯度", "纯度多少",
+    "什么浓度", "浓度多少",
+    "什么纯度", "纯度几何",
+    "什么货色", "什么玩意儿",
+    "什么批站", "什么批网站",
 ]
 
 
@@ -102,30 +165,45 @@ _INTENT_KEYWORDS_EN = [
     "fetch", "visit", "browse", "view", "look at", "take a look at", "take a look",
     "check this out", "check out", "check", "click", "load", "grab",
     "scrape", "crawl", "parse", "process", "inspect", "go through",
+    "have a look", "peek at", "glance at",
     # 总结 / TLDR
     "summarize", "summarise", "summary", "recap", "overview", "abstract", "digest",
     "give me a summary", "give me the gist", "gist",
     "key points", "main points", "highlights", "takeaways", "key takeaways",
     "bottom line", "in short", "one sentence summary", "short version",
     "too long didn't read", "too long; didn't read", "tl;dr", "tldr",
+    "cliff notes", "cliffnotes", "spark notes", "sparknotes",
+    "eli5", "explain like i'm 5", "explain like im 5", "explain like i'm five",
+    "give me the rundown", "rundown", "quick rundown",
+    "what's the deal", "what's the scoop", "give me the lowdown",
+    "ain't reading all that", "not reading all that",
     # 分析 / 解释
     "analyze", "analyse", "analysis", "explain", "interpret", "break down", "walk me through",
     "review", "evaluate", "assess", "comment on", "critique",
     "fact check", "fact-check", "verify",
+    "what do you think", "your thoughts", "your take", "thoughts on this",
+    "opinion on this", "how do you feel about",
+    "is this legit", "is this bs", "is this real", "is this cap", "is this fake",
+    "is this a scam", "is this bait",
     # 翻译
     "translate", "translation",
     "into chinese", "to chinese", "in chinese",
     "into english", "to english", "in english",
+    "into japanese", "to japanese", "in japanese",
     # 提取
     "extract", "pull out", "list out", "find out", "pick out", "identify",
     "key ideas", "key message", "metadata",
     "title is", "author is", "published date",
+    "give me the links", "list the references", "find the code",
     # QA
     "what is this about", "what's this about", "what is it about", "what's it about",
     "what does this say", "what does it say",
     "what does this mean", "what does it mean",
     "what is this", "what's this", "main idea", "main point", "main argument",
     "is this reliable", "is this trustworthy", "is this true", "pros and cons", "risks",
+    "what happened", "what's going on", "what's happening",
+    "what's the context", "give me context", "backstory", "lore",
+    "what's the story", "story behind this",
     # Based on
     "based on this", "based on the link", "based on the article", "based on the page",
     "according to this", "according to the article", "according to the page",
@@ -133,6 +211,41 @@ _INTENT_KEYWORDS_EN = [
     # Docs
     "how to use", "how do i use", "usage", "how to install", "installation",
     "how to configure", "configuration", "docs say", "documentation says",
+    "how to set up", "setup guide", "getting started",
+    # 玩梗 / 口语 / 网络用语
+    "wtf is this", "what the hell", "what in the world", "what the actual",
+    "is this for real", "no way", "bruh", "bro", "bruv",
+    "spill the tea", "give me the tea", "the tea", "what's the tea",
+    "lmao what", "lol what", "bro what", "bruh what",
+    "fr fr", "no cap", "on god", "deadass",
+    "this shit", "this stuff", "this thing",
+    "what kinda", "what kind of", "what sorta",
+    # 抽象 / meme
+    "what's the vibe", "vibe check", "vibes",
+    "based or cringe", "is this based", "is this cringe",
+    "ratio", "L take", "W take", "mid or nah",
+    "is this mid", "this mid", "this fire", "this slaps",
+    "bussin or nah", "is this bussin",
+    "what's the lore", "lore drop", "drop the lore",
+    "context pls", "context please", "need context",
+    "sauce", "source", "gimme sauce", "give sauce",
+    # 质疑 / 反讽
+    "copium", "hopium", "is this copium",
+    "cap or no cap", "sounds like cap",
+    "press x to doubt", "doubt",
+    "sus", "kinda sus", "seems sus", "is this sus",
+    "yikes", "oof", "big yikes",
+    "clown shit", "clown take",
+    # 震惊 / 夸张
+    "holy shit", "holy fuck", "jesus christ",
+    "no fucking way", "nfw",
+    "insane", "wild", "crazy", "nuts",
+    "unhinged", "unreal", "absurd",
+    # 八卦 / drama
+    "what's the drama", "drama alert", "spill",
+    "what's the beef", "beef alert",
+    "receipts", "show receipts", "where's the proof",
+    "exposed", "callout", "call out",
 ]
 
 
@@ -191,6 +304,8 @@ _GLOBAL_SUPPRESS_ZH = [
     "不用处理", "无需处理", "不用回复", "无需回复", "别回复", "不要回复",
     "不用管", "别管", "忽略", "跳过",
     "mark一下", "马克一下", "收藏一下", "发出来看看",
+    "随便看看", "随手转", "随手发", "存个档", "备忘",
+    "不用读", "别读了", "不用看", "别看了",
 ]
 
 _GLOBAL_SUPPRESS_EN = [
@@ -200,6 +315,8 @@ _GLOBAL_SUPPRESS_EN = [
     "do not reply", "don't reply", "dont reply",
     "do not respond", "don't respond", "dont respond",
     "never mind", "nevermind", "nvm",
+    "just fyi", "bookmark", "bookmarking", "saving for later",
+    "ignore this", "skip this", "not for you",
 ]
 
 

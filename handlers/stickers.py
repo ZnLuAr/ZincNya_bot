@@ -318,10 +318,12 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         # 清理可能残留的 zip 文件
         if zipPath and os.path.exists(zipPath):
-            try:
-                os.remove(zipPath)
-            except Exception:
-                pass
+            from config import DOWNLOAD_DIR
+            if os.path.commonpath([os.path.abspath(zipPath), os.path.abspath(DOWNLOAD_DIR)]) == os.path.abspath(DOWNLOAD_DIR):
+                try:
+                    os.remove(zipPath)
+                except Exception:
+                    pass
 
 
 
