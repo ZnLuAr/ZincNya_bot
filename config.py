@@ -3,6 +3,7 @@ from enum import Enum
 
 from dotenv import load_dotenv
 
+
 # 项目根目录（所有路径的锚点）
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -154,16 +155,41 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", None)
 DOUBAO_API_KEY = os.getenv("DOUBAO_API_KEY", None)
 LLM_OPENAI_BASE_URL = os.getenv("LLM_OPENAI_BASE_URL", None)
 LLM_PROXY = os.getenv("LLM_PROXY", None)                        # HTTP/SOCKS 代理（可选），格式: "http://host:port"
-LLM_CONFIG_PATH = os.path.join(DATA_DIR, "llmConfig.json")
-LLM_PROMPTS_PATH = os.path.join(DATA_DIR, "prompts.json")
+LLM_CONFIG_PATH = os.path.join(DATA_DIR, "llm", "llmConfig.json")
+LLM_PROMPTS_PATH = os.path.join(DATA_DIR, "llm", "prompts.json")
 LLM_DEFAULT_MODEL = "claude-sonnet-4-6"
 LLM_MAX_CONTEXT_MESSAGES = 20                                  # 单次记忆最大读取条数
 LLM_RATE_LIMIT_SECONDS = 5
 LLM_DEBOUNCE_SECONDS = 1.5                                     # 防抖等待时间（秒）
 LLM_PENDING_MSG_LIMIT = 10                                     # 每用户防抖缓冲最大条数
 LLM_REVIEW_TTL_SECONDS = 86400                                 # 审核条目 TTL（秒，默认 24h）
-LLM_MEMORY_DB_PATH = os.path.join(DATA_DIR, "llmMemory.db")    # structured memory 数据库
+LLM_MEMORY_DB_PATH = os.path.join(DATA_DIR, "llm", "llmMemory.db")    # structured memory 数据库
 LLM_IMAGE_MAX_BYTES = 20 * 1024 * 1024                         # 图片大小上限（20 MB）
 LLM_IMAGE_SUPPORTED_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 LLM_REQUEST_MAX_RETRIES = 2                                    # LLM 请求最大重试次数（不含首次）
 LLM_REQUEST_RETRY_DELAY = 3                                    # 重试间隔（秒）
+LLM_KNOWLEDGE_DB_PATH = os.path.join(DATA_DIR, "llm", "knowledge.db")  # 知识库数据库
+LLM_KNOWLEDGE_DIR = os.path.join(DATA_DIR, "llm", "knowledge")         # 知识库 Markdown 文件目录
+
+
+def migrateLegacyLLMPaths():
+    """
+    将旧版 data/ 下的 LLM 相关文件迁移到 data/llm/ 子目录。
+
+    必须在任何数据库连接打开之前调用（appLifecycle.initializeApp 最早处）。
+    迁移 sqlite 边车文件（-wal / -shm）以避免数据丢失。
+    """
+    legacy_files = {
+        "llmConfig.json": LLM_CONFIG_PATH,
+        "prompts.json": LLM_PROMPTS_PATH,
+        "llmMemory.db": LLM_MEMORY_DB_PATH,
+        "llmMemory.db-wal": LLM_MEMORY_DB_PATH + "-wal",
+        "llmMemory.db-shm": LLM_MEMORY_DB_PATH + "-shm",
+    }
+
+    for legacy_name, new_path in legacy_files.items():
+        legacy_path = os.path.join(DATA_DIR, legacy_name)
+        if os.path.exists(legacy_path) and not os.path.exists(new_path):
+            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+            os.replace(legacy_path, new_path)
+
