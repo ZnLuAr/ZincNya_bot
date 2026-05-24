@@ -54,6 +54,9 @@ _DEFAULT_CONFIG = {
         "metadata.google.internal",
         "169.254.169.254",
     ],
+    "knowledgeEnabled": True,
+    "knowledgeMaxResults": 3,
+    "knowledgeMinScore": 0.5,
 }
 
 
@@ -501,3 +504,42 @@ def loadPrompts() -> dict:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return _FALLBACK_PROMPTS.copy()
+
+
+
+
+# Knowledge 配置项
+
+def getKnowledgeEnabled() -> bool:
+    """获取知识库开关"""
+    return loadLLMConfig()["knowledgeEnabled"]
+
+
+def setKnowledgeEnabled(enabled: bool):
+    """设置知识库开关"""
+    _setConfig(knowledgeEnabled=bool(enabled))
+
+
+def getKnowledgeMaxResults() -> int:
+    """获取知识库最大召回数"""
+    return loadLLMConfig()["knowledgeMaxResults"]
+
+
+def setKnowledgeMaxResults(value: int):
+    """设置知识库最大召回数"""
+    if not isinstance(value, int) or value < 1 or value > 10:
+        raise ValueError("knowledgeMaxResults 必须在 1-10 之间")
+    _setConfig(knowledgeMaxResults=value)
+
+
+def getKnowledgeMinScore() -> float:
+    """获取知识库最低分数阈值"""
+    return loadLLMConfig()["knowledgeMinScore"]
+
+
+def setKnowledgeMinScore(value: float):
+    """设置知识库最低分数阈值"""
+    if not isinstance(value, (int, float)) or value < 0:
+        raise ValueError("knowledgeMinScore 必须是大于等于 0 的数")
+    _setConfig(knowledgeMinScore=float(value))
+

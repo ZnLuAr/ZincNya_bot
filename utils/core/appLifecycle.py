@@ -24,6 +24,7 @@ from utils.chatHistory import initDatabase as initChatHistoryDB
 from utils.core.resourceManager import cleanupAllResources
 from utils.core.stateManager import getStateManager
 from utils.errorHandler import initErrorHandler, setupAsyncioErrorHandler
+from utils.llm.knowledge import initDatabase as initKnowledgeDB, reindexOnStartup
 from utils.llm.memory import initDatabase as initLLMMemoryDB
 from utils.llm.urlReader import registerResources as registerURLReaderResources
 from utils.logger import initLogger
@@ -46,6 +47,10 @@ def buildApplication():
 
 def initializeApp(app):
     """初始化应用组件"""
+    # 迁移旧版 LLM 文件到 data/llm/ 子目录（必须在数据库初始化之前）
+    from config import migrateLegacyLLMPaths
+    migrateLegacyLLMPaths()
+
     state = getStateManager()
     state.setMessageQueue(asyncio.Queue())
 
@@ -59,6 +64,7 @@ def initializeApp(app):
     initChatHistoryDB()
     initTodosDB()
     initLLMMemoryDB()
+    initKnowledgeDB()
 
     loadHandlers(app)
     setupAsyncioErrorHandler(loop)
@@ -67,6 +73,9 @@ def initializeApp(app):
     registerBookResources()
     registerNewsResources()
     registerURLReaderResources()
+
+    # 异步启动知识库索引刷新
+    asyncio.create_task(reindexOnStartup())
 
     # 全局消息收集器
     async def messageCollector(update, context):

@@ -56,7 +56,7 @@ async def consoleListener(app):
             except EOFError:
                 return "SHUTDOWN"
             except Exception as e:
-                print(f"控制台读取出错喵：{e}")
+                print(f"控制台读取出错喵：{e}\n")
                 continue
 
     except asyncio.CancelledError:

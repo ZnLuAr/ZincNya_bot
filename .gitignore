@@ -84,10 +84,21 @@ data/prompts.json
 data/llmConfig.json
 data/llmMemory.db
 data/zincnya_backup/
+# LLM 子目录（迁移后的新路径）
+data/llm/prompts.json
+data/llm/llmConfig.json
+data/llm/llmMemory.db
+data/llm/knowledge.db
+# 知识库 Markdown（含人设细节，与 prompts.json 同密级）
+# 模板见 data/llm/knowledge.example/
+data/llm/knowledge/
 # SQLite WAL/SHM sidecar 文件（运行时自动产生，包含未提交的事务数据）
 data/*.db-wal
 data/*.db-shm
 data/*.db-journal
+data/llm/*.db-wal
+data/llm/*.db-shm
+data/llm/*.db-journal
 # 但保留 .gitkeep 占位文件
 !data/.gitkeep
 
