@@ -93,7 +93,7 @@ from handlers.cli import parseArgsTokens
 from utils.chatHistory import saveMessage, loadHistory, iterMessagesWithDateMarkers
 from utils.core.stateManager import getStateManager
 from utils.llm.state import getReviewQueue, peekReviewHint
-from utils.logger import logAction, LogLevel, LogChildType
+from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.whitelistManager.ui import whitelistMenuController
 
 

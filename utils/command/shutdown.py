@@ -1,4 +1,4 @@
-from utils.logger import logAction, LogLevel, LogChildType
+from utils.core.logger import logAction, LogLevel, LogChildType
 
 async def execute(app, args):
     await logAction(

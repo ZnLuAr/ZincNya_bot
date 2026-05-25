@@ -21,7 +21,7 @@ from config import NEWS_TARGET_CHAT_ID, NEWS_MAX_ARTICLES
 
 from handlers.cli import parseArgsTokens
 
-from utils.logger import logSystemEvent, LogLevel
+from utils.core.logger import logSystemEvent, LogLevel
 from utils.newsAPI import (
     fetchLatestNews,
     isAlreadyPushed,

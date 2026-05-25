@@ -23,7 +23,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
 
-from utils.terminalUI import countDisplayLines
+from utils.core.terminalUI import countDisplayLines
 
 
 session: PromptSession = None

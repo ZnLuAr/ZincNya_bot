@@ -10,7 +10,7 @@ import time
 
 from config import WHITELIST_PATH, Permission
 
-from utils.logger import logAction, LogLevel, LogChildType
+from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.operators import getOperatorsWithPermission
 
 

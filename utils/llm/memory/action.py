@@ -13,7 +13,7 @@ import asyncio
 from typing import Optional
 from dataclasses import dataclass
 
-from utils.logger import logSystemEvent, logAction, LogLevel, LogChildType
+from utils.core.logger import logSystemEvent, logAction, LogLevel, LogChildType
 
 # fire-and-forget task 引用持有，避免被 GC 回收
 _backgroundTasks: set[asyncio.Task] = set()

@@ -58,7 +58,7 @@ from utils.chatHistory import (
     getMessageCount,
     iterMessagesWithDateMarkers,
 )
-from utils.logger import logAction, LogLevel, LogChildType, logSystemEvent
+from utils.core.logger import logAction, LogLevel, LogChildType, logSystemEvent
 from utils.whitelistManager.data import loadWhitelistFile
 
 

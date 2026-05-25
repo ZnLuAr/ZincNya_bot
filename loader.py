@@ -1,10 +1,11 @@
 """
 loader.py
 
-动态加载 handlers 文件夹中的所有 Telegram 处理器喵
+按模块注册表加载 Telegram 处理器喵
 
-本模块会扫描 handlers/ 文件夹，自动导入所有有 register() 函数的模块，
-并将它们注册到 Telegram Application 中。
+本模块从 utils.moduleManager.getAllModules() 读取已启用的模块列表，
+逐个导入其声明的 handler 文件并调用 register() 注册到 Telegram Application。
+已禁用的模块会被整体跳过；模块定义参见 modulesRegistry.py。
 
 register() 函数可以返回两种格式：
     1. 简单格式（向后兼容）：直接返回 handlers 列表
@@ -21,7 +22,6 @@ register() 函数可以返回两种格式：
 """
 
 import os
-import pkgutil
 import functools
 import importlib
 
@@ -30,15 +30,12 @@ from telegram.ext import Application
 from config import PROJECT_ROOT, AUTH_ENABLED
 
 from utils.core.stateManager import safePrint
-from utils.logger import sanitizeForLog
+from utils.core.logger import sanitizeForLog
 from utils.whitelistManager.data import whetherAuthorizedUser
 
 
 # 明确跳过的模块（不是 Telegram handler 的模块）
 SKIP_MODULES = ["cli"]
-
-# handlers 目录的绝对路径（用于 pkgutil 扫描）
-_HANDLERS_DIR = os.path.join(PROJECT_ROOT, "handlers")
 
 
 
@@ -61,85 +58,98 @@ def _wrapWithAuth(handlerFunc):
 
 
 def loadHandlers(app: Application):
-    """动态加载 handlers 文件夹中的所有 Telegram 处理器"""
+    """按模块注册表加载已启用模块的 Telegram 处理器"""
+    from utils.moduleManager import getAllModules
 
-    package = "handlers"
     loadedModules = []
     skippedModules = []
     totalHandlers = 0
 
     print("正在加载 Telegram 处理器喵……\n")
 
-    for _ , moduleName , _ in pkgutil.iter_modules([_HANDLERS_DIR]):
+    allModules = getAllModules()
 
-        # 跳过明确排除的模块
-        if moduleName in SKIP_MODULES:
-            skippedModules.append(f"{moduleName} (非 Telegram handler)")
+    for moduleName, config in allModules.items():
+        # 跳过已禁用的模块
+        if not config.get("enabled", True):
+            skippedModules.append(f"{moduleName} (已禁用)")
             continue
 
+        metadata = config["metadata"]
+        handlerFiles = metadata.get("handlers", [])
+
+        # 没有 handler 的模块（如纯 utils 模块）
+        if not handlerFiles:
+            continue
 
         try:
-            module = importlib.import_module(f"{package}.{moduleName}")
-
-            if not hasattr(module, "register"):
-                skippedModules.append(f"{moduleName} (无 register 函数)")
-                continue
-
-            # 调用 register() 获取 handlers
-            result = module.register()
-
-            # 支持两种返回格式
-            if isinstance(result , dict):
-                # 元数据格式
-                handlers = result.get("handlers" , [])
-                name = result.get("name" , moduleName)
-                description = result.get("description" , "")
-                requireAuth = result.get("auth" , True)  # 默认需要白名单鉴权
-            else:
-                # 简单格式（向后兼容）
-                handlers = result
-                name = moduleName
-                description = ""
-                requireAuth = True
-
-            # 注册 handlers（按需包装白名单鉴权）
-            #
-            # handlers 列表中的每一项可以是：
-            #   - 普通 Handler 对象（注册到默认 group 0）
-            #   - {"handler": Handler, "group": int}（注册到指定 group）
-            #
-            # PTB group 机制：
-            #   同一 group 内只有第一个匹配的 handler 执行；
-            #   不同 group 各自独立处理同一条消息，按 group 编号从小到大依次执行。
-            #   在某 group 的 handler 中抛出 ApplicationHandlerStop 可阻止所有后续 group 处理该消息。
-            # 
             handlerCount = 0
-            for item in handlers:
-                if isinstance(item, dict) and "handler" in item:
-                    handler = item["handler"]
-                    group = item.get("group", 0)
+
+            # 遍历所有 handler 文件
+            for handlerFile in handlerFiles:
+                # 从 "handlers/llm.py" 提取 "llm"
+                handlerModuleName = os.path.splitext(os.path.basename(handlerFile))[0]
+
+                # 跳过明确排除的模块（如 cli）
+                if handlerModuleName in SKIP_MODULES:
+                    continue
+
+                module = importlib.import_module(f"handlers.{handlerModuleName}")
+
+                if not hasattr(module, "register"):
+                    print(f"  [WARNING] {handlerFile} 无 register 函数")
+                    continue
+
+                # 调用 register() 获取 handlers
+                result = module.register()
+
+                # 支持两种返回格式（保持向后兼容）
+                if isinstance(result, dict):
+                    handlers = result.get("handlers", [])
+                    requireAuth = result.get("auth", True)
                 else:
-                    handler = item
-                    group = 0
-                if requireAuth and AUTH_ENABLED and hasattr(handler, "callback"):
-                    handler.callback = _wrapWithAuth(handler.callback)
-                app.add_handler(handler, group)
-                handlerCount += 1
-                totalHandlers += 1
+                    handlers = result
+                    requireAuth = True
+
+                # 注册 handlers（原有逻辑）
+                #
+                # handlers 列表中的每一项可以是：
+                #   - 普通 Handler 对象（注册到默认 group 0）
+                #   - {"handler": Handler, "group": int}（注册到指定 group）
+                #
+                # PTB group 机制：
+                #   同一 group 内只有第一个匹配的 handler 执行；
+                #   不同 group 各自独立处理同一条消息，按 group 编号从小到大依次执行。
+                #   在某 group 的 handler 中抛出 ApplicationHandlerStop 可阻止所有后续 group 处理该消息。
+                #
+                for item in handlers:
+                    if isinstance(item, dict) and "handler" in item:
+                        handler = item["handler"]
+                        group = item.get("group", 0)
+                    else:
+                        handler = item
+                        group = 0
+
+                    if requireAuth and AUTH_ENABLED and hasattr(handler, "callback"):
+                        handler.callback = _wrapWithAuth(handler.callback)
+
+                    app.add_handler(handler, group)
+                    handlerCount += 1
+                    totalHandlers += 1
 
             # 记录加载信息
             loadedModules.append({
-                "name": name,
+                "name": metadata["name"],
                 "module": moduleName,
-                "description": description,
+                "description": metadata.get("description", ""),
                 "handlerCount": handlerCount,
             })
 
             # 输出加载信息
-            if description:
-                print(f"  {name} ({handlerCount} 个) - {description}")
+            if metadata.get("description"):
+                print(f"  {metadata['name']} ({handlerCount} 个) - {metadata['description']}")
             else:
-                print(f"  {name} ({handlerCount} 个)")
+                print(f"  {metadata['name']} ({handlerCount} 个)")
 
         except Exception as e:
             print(f"  加载 {moduleName} 失败喵：{e}")

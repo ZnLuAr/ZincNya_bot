@@ -24,7 +24,7 @@ from rich.console import Console
 from rich.table import Table
 
 from utils.core.stateManager import getStateManager
-from utils.terminalUI import cls, smcup, rmcup
+from utils.core.terminalUI import cls, smcup, rmcup
 
 
 

@@ -63,7 +63,7 @@ from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
 from config import TODOS_ITEMS_PER_PAGE, TODOS_CONTENT_MAX_LENGTH
 
 from utils.core.errorDecorators import handleTelegramErrors
-from utils.logger import logAction, LogLevel, LogChildType
+from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.telegramHelpers import safeEditMessage
 from utils.todos.database import (
     addTodo, getTodos, getTodoByID,

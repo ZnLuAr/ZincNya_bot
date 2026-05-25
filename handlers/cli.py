@@ -67,7 +67,7 @@ import os
 
 from config import COMMAND_DIR, COMMAND_MODULE
 
-from utils.logger import logAction, LogLevel, LogChildType
+from utils.core.logger import logAction, LogLevel, LogChildType
 
 
 

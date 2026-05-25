@@ -16,7 +16,7 @@ from typing import Optional
 import yaml
 
 from config import LLM_KNOWLEDGE_DIR
-from utils.logger import logSystemEvent, LogLevel
+from utils.core.logger import logSystemEvent, LogLevel
 
 from .database import upsertKnowledgeEntry, deleteEntriesBySource, rebuildTokenCacheFromDB
 

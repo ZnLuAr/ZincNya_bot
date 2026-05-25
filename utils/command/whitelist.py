@@ -2,7 +2,7 @@ from telegram import Bot
 
 from handlers.cli import parseArgsTokens
 
-from utils.logger import logAction, LogLevel, LogChildType
+from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.whitelistManager.data import userOperation
 from utils.whitelistManager.ui import (
     whitelistUIRenderer,

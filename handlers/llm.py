@@ -59,7 +59,7 @@ from utils.llm.memory.action import (
 )
 from utils.llm.state import addMemoryReviewItem
 from utils.llm.vision import extractImageRefs, extractReplyImageRefs, downloadImages
-from utils.logger import logAction, logSystemEvent, LogLevel, LogChildType
+from utils.core.logger import logAction, logSystemEvent, LogLevel, LogChildType
 from utils.operators import loadOperators
 from utils.telegramHelpers import removeMention
 from utils.whitelistManager.data import whetherAuthorizedUser
