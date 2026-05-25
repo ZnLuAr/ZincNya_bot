@@ -36,7 +36,7 @@ width, height = getTerminalSize()
 本模块在导入时会自动检测平台并启用必要的功能：
     - Linux/macOS: 原生支持所有 ANSI 转义序列
     - Windows 10+: 自动启用 ANSI 支持
-    - Windows 7-9: 尽力支持，部分功能可能不可用
+    - Windows 7-8.1: 尽力支持，部分功能可能不可用
 
 """
 
