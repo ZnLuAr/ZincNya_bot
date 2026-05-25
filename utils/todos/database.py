@@ -71,7 +71,7 @@ from config import TODOS_DB_PATH
 
 from utils.core.database import Database
 from utils.core.schema import loadSchema
-from utils.logger import logSystemEvent, LogLevel
+from utils.core.logger import logSystemEvent, LogLevel
 
 
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"  # 数据库时间戳格式

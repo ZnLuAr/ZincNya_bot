@@ -21,7 +21,7 @@ from config import Permission
 
 from utils.core.errorDecorators import handleTelegramErrors
 from utils.core.stateManager import getStateManager
-from utils.logger import logSystemEvent, LogChildType
+from utils.core.logger import logSystemEvent, LogChildType
 from utils.operators import hasPermission
 
 

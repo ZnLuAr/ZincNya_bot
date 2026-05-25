@@ -99,7 +99,7 @@ from config import (
 
 from utils.core.database import Database
 from utils.core.schema import loadSchema
-from utils.logger import logSystemEvent, LogLevel
+from utils.core.logger import logSystemEvent, LogLevel
 
 
 TIMESTAMP_FORMAT_DATE = "%Y%m%d"                # 归档文件名日期格式

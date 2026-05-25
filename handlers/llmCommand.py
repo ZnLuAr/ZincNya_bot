@@ -45,7 +45,7 @@ from utils.llm import (
     getVisionModel, setVisionModel,
     getURLReadEnabled, setURLReadEnabled,
 )
-from utils.logger import logAction, LogLevel, LogChildType
+from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.operators import hasPermission
 
 

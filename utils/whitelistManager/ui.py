@@ -16,7 +16,7 @@ from telegram.error import BadRequest, Forbidden
 
 from utils.core.tuiBase import BaseTUIController
 from utils.inputHelper import asyncInput
-from utils.terminalUI import cls, smcup, rmcup
+from utils.core.terminalUI import cls, smcup, rmcup
 
 from .data import loadWhitelistFile, userOperation
 

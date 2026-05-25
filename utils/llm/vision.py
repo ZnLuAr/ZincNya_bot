@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from config import LLM_IMAGE_MAX_BYTES, LLM_IMAGE_SUPPORTED_MIMES
 
-from utils.logger import logSystemEvent, LogLevel, LogChildType
+from utils.core.logger import logSystemEvent, LogLevel, LogChildType
 
 _logger = logging.getLogger(__name__)
 

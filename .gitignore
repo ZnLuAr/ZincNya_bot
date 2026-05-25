@@ -99,6 +99,10 @@ data/*.db-journal
 data/llm/*.db-wal
 data/llm/*.db-shm
 data/llm/*.db-journal
+# 模块管理系统的本地状态（启用偏好、自定义模块、强制卸载名单），每个部署实例独有
+data/modules.json
+data/modulesCustom.json
+data/modulesUninstalled.json
 # 但保留 .gitkeep 占位文件
 !data/.gitkeep
 

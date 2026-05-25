@@ -236,7 +236,7 @@ class TreeLogger:
 
                 # 如果是 ERROR 级别且有异常对象，双写到错误日志
                 if level == LogLevel.ERROR and exception is not None:
-                    from utils.errorHandler import logError
+                    from utils.core.errorHandler import logError
                     logError(
                         errorType=type(exception).__name__,
                         message=str(exception),

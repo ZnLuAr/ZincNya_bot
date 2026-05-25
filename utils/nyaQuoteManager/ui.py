@@ -15,7 +15,7 @@ from rich.console import Console
 
 from utils.core.tuiBase import BaseTUIController
 from utils.fileEditor import editFile
-from utils.terminalUI import cls, smcup, rmcup
+from utils.core.terminalUI import cls, smcup, rmcup
 
 from .data import loadQuoteFile, userOperation
 

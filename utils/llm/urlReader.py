@@ -34,7 +34,7 @@ from utils.llm.config import (
     getURLReadBlockedHosts,
 )
 from utils.llm.urlIntent import hasURLReadIntent  # re-export
-from utils.logger import logSystemEvent, LogLevel, LogChildType
+from utils.core.logger import logSystemEvent, LogLevel, LogChildType
 
 
 _USER_AGENT = "Mozilla/5.0 (compatible; ZincNyaBot/1.0; Telegram link preview)"

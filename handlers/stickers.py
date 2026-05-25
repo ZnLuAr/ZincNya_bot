@@ -23,7 +23,7 @@ from config import (
 
 from utils.core.errorDecorators import handleTelegramErrors
 from utils.downloader import createStickerZip, deleteMessageLater, registerFileCleanup, getActiveGifJobs
-from utils.logger import logAction, LogLevel, LogChildType
+from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.operators import getOperatorsWithPermission
 
 

@@ -14,7 +14,7 @@ import asyncio
 from config import TODOS_REMINDER_CHECK_INTERVAL
 
 from utils.core.stateManager import getStateManager
-from utils.logger import logSystemEvent, LogLevel, LogChildType
+from utils.core.logger import logSystemEvent, LogLevel, LogChildType
 from utils.todos.database import getPendingReminders, updateTodo
 from utils.todos.utils import PRIORITY_EMOJI
 

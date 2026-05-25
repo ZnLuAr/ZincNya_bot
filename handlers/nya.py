@@ -5,7 +5,7 @@ from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 
 from utils.core.errorDecorators import handleTelegramErrors
-from utils.logger import logAction, LogLevel, LogChildType
+from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.nyaQuoteManager.data import getRandomQuote
 
 

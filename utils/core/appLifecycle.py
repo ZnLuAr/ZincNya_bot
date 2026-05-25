@@ -13,24 +13,18 @@ utils/core/appLifecycle.py
 import sys
 import logging
 import asyncio
+import importlib
+import inspect
 
 from telegram.ext import ApplicationBuilder, MessageHandler, filters
 
 from config import BOT_TOKEN, TELEGRAM_PROXY
 from loader import loadHandlers
 
-from utils.bookSearchAPI import registerResources as registerBookResources
-from utils.chatHistory import initDatabase as initChatHistoryDB
 from utils.core.resourceManager import cleanupAllResources
 from utils.core.stateManager import getStateManager
-from utils.errorHandler import initErrorHandler, setupAsyncioErrorHandler
-from utils.llm.knowledge import initDatabase as initKnowledgeDB, reindexOnStartup
-from utils.llm.memory import initDatabase as initLLMMemoryDB
-from utils.llm.urlReader import registerResources as registerURLReaderResources
-from utils.logger import initLogger
-from utils.newsAPI import registerResources as registerNewsResources
-from utils.todos.database import initDatabase as initTodosDB
-from utils.todos.reminder import todoReminderLoop
+from utils.core.errorHandler import initErrorHandler, setupAsyncioErrorHandler
+from utils.core.logger import initLogger
 
 
 
@@ -47,6 +41,8 @@ def buildApplication():
 
 def initializeApp(app):
     """初始化应用组件"""
+    from utils.moduleManager import getAllModules
+
     # 迁移旧版 LLM 文件到 data/llm/ 子目录（必须在数据库初始化之前）
     from config import migrateLegacyLLMPaths
     migrateLegacyLLMPaths()
@@ -60,22 +56,29 @@ def initializeApp(app):
     initLogger()
     initErrorHandler(app)
 
-    # 数据库初始化
-    initChatHistoryDB()
-    initTodosDB()
-    initLLMMemoryDB()
-    initKnowledgeDB()
+    # 动态调用模块的 initFunctions（自动去重）
+    allModules = getAllModules()
+    calledFunctions = set()  # 去重集合
+
+    for moduleName, config in allModules.items():
+        if not config.get("enabled", True):
+            continue
+
+        for funcPath in config["metadata"].get("initFunctions", []):
+            if funcPath in calledFunctions:
+                continue  # 跳过已调用的函数
+
+            try:
+                modulePath, funcName = funcPath.split(":")
+                module = importlib.import_module(modulePath)
+                initFunc = getattr(module, funcName)
+                initFunc()
+                calledFunctions.add(funcPath)
+            except Exception as e:
+                print(f"  初始化 {funcPath} 失败：{e}")
 
     loadHandlers(app)
     setupAsyncioErrorHandler(loop)
-
-    # 显式注册各模块的资源清理回调
-    registerBookResources()
-    registerNewsResources()
-    registerURLReaderResources()
-
-    # 异步启动知识库索引刷新
-    asyncio.create_task(reindexOnStartup())
 
     # 全局消息收集器
     async def messageCollector(update, context):
@@ -127,9 +130,41 @@ async def runBackgroundTasks(app, consoleTask):
     返回:
         None - 正常关机
     """
+    from utils.moduleManager import getAllModules
+
     state = getStateManager()
-    reminderTask = asyncio.create_task(todoReminderLoop(app))
     shutdownEvent = state.getShutdownEvent()
+
+    # 动态启动模块的 backgroundTasks（自动去重）
+    backgroundTasks = []
+    startedTasks = set()  # 去重集合
+    allModules = getAllModules()
+
+    for moduleName, config in allModules.items():
+        if not config.get("enabled", True):
+            continue
+
+        for taskPath in config["metadata"].get("backgroundTasks", []):
+            if taskPath in startedTasks:
+                continue  # 跳过已启动的任务
+
+            try:
+                modulePath, funcName = taskPath.split(":")
+                module = importlib.import_module(modulePath)
+                taskFunc = getattr(module, funcName)
+
+                # 根据函数签名判断是否需要传入 app
+                sig = inspect.signature(taskFunc)
+                if len(sig.parameters) > 0:
+                    coro = taskFunc(app)
+                else:
+                    coro = taskFunc()
+
+                task = asyncio.create_task(coro)
+                backgroundTasks.append(task)
+                startedTasks.add(taskPath)
+            except Exception as e:
+                print(f"  启动后台任务 {taskPath} 失败：{e}")
 
     # 等待控制台任务结束或远程关机信号
     _, pending = await asyncio.wait(
@@ -137,10 +172,11 @@ async def runBackgroundTasks(app, consoleTask):
         return_when=asyncio.FIRST_COMPLETED
     )
 
-    # 取消未完成的任务
+    # 取消所有任务
     for task in pending:
         task.cancel()
-    reminderTask.cancel()
+    for task in backgroundTasks:
+        task.cancel()
 
     # 向控制台注入回车，解除线程池中 readline() 的阻塞
     # （控制台关机时 consoleTask 已完成，此操作无影响）
@@ -148,7 +184,7 @@ async def runBackgroundTasks(app, consoleTask):
     interruptInput()
 
     # 等待任务取消完成
-    await asyncio.gather(*pending, reminderTask, return_exceptions=True)
+    await asyncio.gather(*pending, *backgroundTasks, return_exceptions=True)
 
 
 

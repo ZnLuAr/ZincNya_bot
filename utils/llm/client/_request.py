@@ -8,7 +8,7 @@ import asyncio
 
 from config import LLM_REQUEST_MAX_RETRIES, LLM_REQUEST_RETRY_DELAY
 
-from utils.logger import logSystemEvent, LogLevel, LogChildType
+from utils.core.logger import logSystemEvent, LogLevel, LogChildType
 
 from ..config import getModel
 from ._router import getProvider

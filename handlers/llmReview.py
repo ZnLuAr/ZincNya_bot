@@ -25,7 +25,7 @@ from utils.core.errorDecorators import handleTelegramErrors
 from utils.llm import generateReply
 from utils.llm.memory.action import MemoryAction, executeAction
 from utils.llm.review import extractMemoryActionFields
-from utils.logger import logAction, LogLevel, LogChildType
+from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.operators import hasPermission
 
 

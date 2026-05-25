@@ -43,7 +43,7 @@ from config import (
 )
 
 from utils.core.resourceManager import getResourceManager
-from utils.logger import logSystemEvent, LogLevel
+from utils.core.logger import logSystemEvent, LogLevel
 from utils.core.errorDecorators import handleErrors
 
 

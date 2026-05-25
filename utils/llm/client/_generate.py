@@ -7,7 +7,7 @@ LLM 回复生成编排逻辑：
     - 通过 urlContexts 透传低信任 URL 内容到 contextBuilder
 """
 
-from utils.logger import logSystemEvent, LogLevel, LogChildType
+from utils.core.logger import logSystemEvent, LogLevel, LogChildType
 
 from ..config import getModel, getForceFallbackPrompt, getVisionModel, loadPrompts, _FALLBACK_PROMPTS
 from ..contextBuilder import buildConversationContext
