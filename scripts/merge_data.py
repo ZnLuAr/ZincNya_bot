@@ -85,37 +85,11 @@ VALID_MEMORY_SOURCES = {"manual", "inferred"}
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 TIMESTAMP_SHORT_FORMAT = "%Y%m%d%H%M%S"
 
-MEMORY_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS memory_entries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scope_type TEXT NOT NULL,
-    scope_id TEXT NOT NULL,
-    content TEXT NOT NULL,
-    tags_json TEXT NOT NULL DEFAULT '[]',
-    enabled INTEGER NOT NULL DEFAULT 1,
-    priority INTEGER NOT NULL DEFAULT 0,
-    source TEXT NOT NULL DEFAULT 'manual',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_memory_scope ON memory_entries(scope_type, scope_id);
-CREATE INDEX IF NOT EXISTS idx_memory_enabled ON memory_entries(enabled);
-CREATE INDEX IF NOT EXISTS idx_memory_priority ON memory_entries(priority DESC);
-CREATE INDEX IF NOT EXISTS idx_memory_updated_at ON memory_entries(updated_at DESC);
-"""
+SCHEMA_DIR = PROJECT_ROOT / "utils" / "core" / "schema"
 
-CHAT_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id TEXT NOT NULL,
-    direction TEXT NOT NULL,
-    sender TEXT,
-    content BLOB NOT NULL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_chat_id ON messages(chat_id);
-CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp);
-"""
+
+def _loadSchema(name: str) -> str:
+    return (SCHEMA_DIR / f"{name}.sql").read_text(encoding="utf-8")
 
 
 
@@ -353,13 +327,13 @@ def wal_preflight(ctx: ScriptContext) -> tuple[list[str], list[str]]:
 
 
 def ensure_memory_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(MEMORY_SCHEMA_SQL)
+    conn.executescript(_loadSchema("llmMemory"))
 
 
 
 
 def ensure_chat_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(CHAT_SCHEMA_SQL)
+    conn.executescript(_loadSchema("chatHistory"))
 
 
 

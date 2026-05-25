@@ -43,6 +43,8 @@ data/chatBackup/，然后删除。
     - 特性：同一天的多次溢出会追加到同一个归档文件中
     - 内容：保持加密状态，使用相同的 SQLite 表结构
 
+需要注意的是，归档的聊天记录为一次性建表，不纳入 Database 系统管理。
+
 
 ================================================================================
 主要接口
@@ -96,6 +98,7 @@ from config import (
 )
 
 from utils.core.database import Database
+from utils.core.schema import loadSchema
 from utils.logger import logSystemEvent, LogLevel
 
 
@@ -163,21 +166,7 @@ chatHistoryDB = Database(DB_PATH, "ChatHistory")
 
 def _initSchema(conn):
     """初始化表结构（由 initDatabase 调用）"""
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id TEXT NOT NULL,
-            direction TEXT NOT NULL,
-            sender TEXT,
-            content BLOB NOT NULL,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_id ON messages(chat_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp)")
+    conn.executescript(loadSchema("chatHistory"))
 
 
 def initDatabase():

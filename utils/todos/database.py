@@ -70,6 +70,7 @@ from typing import List, Optional, Dict, Any
 from config import TODOS_DB_PATH
 
 from utils.core.database import Database
+from utils.core.schema import loadSchema
 from utils.logger import logSystemEvent, LogLevel
 
 
@@ -87,33 +88,12 @@ todosDB = Database(TODOS_DB_PATH, "Todos")
 
 def _initSchema(conn):
     """初始化表结构（由 initDatabase 调用）"""
-    cursor = conn.cursor()
+    conn.executescript(loadSchema("todos"))
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS todos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            content TEXT NOT NULL,
-            remind_time DATETIME,
-            priority TEXT DEFAULT 'P_',
-            status TEXT DEFAULT 'pending',
-            reminded INTEGER DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            completed_at DATETIME
-        )
-    """)
-
-    # 迁移：为旧数据库添加 reminded 列
     try:
-        cursor.execute("ALTER TABLE todos ADD COLUMN reminded INTEGER DEFAULT 0")
+        conn.execute("ALTER TABLE todos ADD COLUMN reminded INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
         pass  # 列已存在
-
-    # 创建索引以提高查询效率
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_user ON todos(chat_id, user_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_status ON todos(status)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_remind_time ON todos(remind_time, status)")
 
 
 def initDatabase():

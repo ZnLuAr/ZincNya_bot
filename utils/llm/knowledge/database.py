@@ -16,6 +16,7 @@ from typing import Optional
 
 from config import LLM_KNOWLEDGE_DB_PATH
 from utils.core.database import Database
+from utils.core.schema import loadSchema
 
 from .tokenizer import tokenize, _bm25, computeAvgDocLen
 
@@ -35,23 +36,7 @@ _avgDocLen: float = 50.0
 
 def initSchema(conn):
     """初始化知识库表结构。"""
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS knowledge_entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT NOT NULL,
-            title TEXT NOT NULL,
-            content TEXT NOT NULL,
-            tags_json TEXT NOT NULL DEFAULT '[]',
-            source_file TEXT NOT NULL,
-            source_hash TEXT NOT NULL,
-            priority INTEGER DEFAULT 0,
-            enabled INTEGER DEFAULT 1,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_category ON knowledge_entries(category)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_source ON knowledge_entries(source_file)")
+    conn.executescript(loadSchema("llmKnowledge"))
     conn.commit()
 
 
