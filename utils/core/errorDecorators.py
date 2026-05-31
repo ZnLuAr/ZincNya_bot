@@ -33,6 +33,8 @@ import traceback
 from datetime import datetime
 from typing import Optional, Callable, Any
 
+from telegram.ext import ApplicationHandlerStop
+
 from utils.core.errorHandler import getErrorHandler
 
 
@@ -126,6 +128,10 @@ def handleErrors(
             try:
                 return await func(*args, **kwargs)
             except Exception as e:
+                # 重新抛出 telegram.ext 的控制流异常（不应被捕获）
+                if isinstance(e, ApplicationHandlerStop):
+                    raise
+
                 if not silent:
                     handler = getErrorHandler()
                     handler.logError(
@@ -145,6 +151,10 @@ def handleErrors(
             try:
                 return func(*args, **kwargs)
             except Exception as e:
+                # 重新抛出 telegram.ext 的控制流异常（不应被捕获）
+                if isinstance(e, ApplicationHandlerStop):
+                    raise
+
                 if not silent:
                     handler = getErrorHandler()
                     handler.logError(
@@ -195,6 +205,10 @@ def handleTelegramErrors(func: Callable = None, *, errorReply: str = None):
             try:
                 return await fn(update, context, *args, **kwargs)
             except Exception as e:
+                # 重新抛出 telegram.ext 的控制流异常（不应被捕获）
+                if isinstance(e, ApplicationHandlerStop):
+                    raise
+
                 handler = getErrorHandler()
 
                 # 提取用户信息
@@ -252,14 +266,20 @@ def suppressErrors(defaultReturn: Any = None):
         async def asyncWrapper(*args, **kwargs):
             try:
                 return await func(*args, **kwargs)
-            except Exception:
+            except Exception as e:
+                # 重新抛出 telegram.ext 的控制流异常（不应被捕获）
+                if isinstance(e, ApplicationHandlerStop):
+                    raise
                 return defaultReturn
 
         @functools.wraps(func)
         def syncWrapper(*args, **kwargs):
             try:
                 return func(*args, **kwargs)
-            except Exception:
+            except Exception as e:
+                # 重新抛出 telegram.ext 的控制流异常（不应被捕获）
+                if isinstance(e, ApplicationHandlerStop):
+                    raise
                 return defaultReturn
 
         import asyncio
