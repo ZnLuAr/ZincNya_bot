@@ -88,11 +88,15 @@ ZincNya_bot/
 ├── bot.py                      # Bot 主程序
 ├── config.py                   # 配置与常量
 ├── loader.py                   # Handler 动态加载器
+├── modulesRegistry.py          # 模块注册表（声明式模块元数据）
 ├── .env                        # 环境变量（不会被提交到 git）
 ├── .env.example                # 环境变量模板
 ├── requirements.txt            # Python 依赖
+├── requirements-dev.txt        # 开发依赖（pytest、覆盖率工具）
+├── pytest.ini                  # pytest 配置
 │
 ├── data/                       # 数据文件喵
+│   ├── modules.json            # 模块启用/禁用配置（不会被提交）
 │   ├── whitelist.json          # 白名单（不会被提交）
 │   ├── operators.json          # 管理员权限配置（不会被提交）
 │   ├── chatHistory.db          # 加密聊天记录（不会被提交）
@@ -133,8 +137,11 @@ ZincNya_bot/
 │   │   ├── log.py              # /log 日志管理
 │   │   ├── todos.py            # /todos 待办事项管理（控制台）
 │   │   ├── llm.py              # /llm LLM 功能控制与控制台审核
+│   │   ├── news.py             # /news 新闻推送管理
 │   │   ├── clear.py            # /clear 清屏
 │   │   └── shutdown.py         # /shutdown 关闭
+│   │
+│   ├── moduleManager.py        # 模块配置管理（加载/保存/查询启用状态）
 │   │
 │   ├── core/                   # 核心基础设施
 │   │   ├── appLifecycle.py     # 应用生命周期（构建、启动、停止、重启）
@@ -202,16 +209,28 @@ ZincNya_bot/
 │   ├── telegramHelpers.py      # Telegram 消息操作工具
 │   ├── fileEditor.py           # TUI 文本编辑器
 │   ├── terminalUI.py           # 终端 UI 工具（备用屏幕、ANSI）
-│   ├── errorHandler.py         # 错误处理与日志
 │   ├── inputHelper.py          # 统一异步输入工具（含多行输入）
-│   └── logger.py               # 树状日志系统
+│   └── bookSearchAPI.py        # Open Library API 封装
 │
 ├── scripts/                    # 辅助脚本喵
+│   ├── module.py               # 模块管理 CLI（list/show/enable/disable/validate/scan）
+│   ├── test.py                 # 测试运行器（pytest 封装）
 │   ├── update_from_main.sh     # Linux 下自动与 main 分支同步
 │   ├── sync-data.ps1           # 远程服务器同步工具（文件级覆盖）
 │   ├── merge_data.py           # 离线 data/ 合并（dry-run 预览 + 备份后写入）
 │   ├── expand_knowledge_tags.py # 离线 LLM tag 扩展（手动运行）
 │   └── setup_ffmpeg.py         # FFmpeg 自动配置脚本
+│
+├── tests/                      # 单元测试（pytest）
+│   ├── conftest.py             # 全局 fixture 与测试配置
+│   ├── test_module_system.py   # 模块系统测试
+│   ├── handlers/               # Handler 层测试
+│   └── utils/                  # 工具模块测试
+│       ├── core/               # 核心基础设施测试
+│       ├── llm/                # LLM 模块测试
+│       ├── todos/              # 待办事项测试
+│       ├── nyaQuoteManager/    # 语录管理测试
+│       └── whitelistManager/   # 白名单管理测试
 │
 └── log/                        # 日志文件（不会被提交）
     ├── log_YYYY-MM-DD.log      # 操作日志（每天一个）
@@ -282,6 +301,34 @@ Operator 权限位（在 `operators.json` 中配置）：
 想给咱添加新功能的话，请看这里——
 
 
+### 模块系统
+
+ZincNya Bot 使用声明式模块系统管理功能模块。每个模块在 `modulesRegistry.py` 中注册元数据，可通过 `scripts/module.py` 动态启用/禁用。
+
+**查看所有模块**
+```bash
+python scripts/module.py list
+```
+
+**查看模块详情**
+```bash
+python scripts/module.py show llm
+```
+
+**启用/禁用模块**
+```bash
+python scripts/module.py enable todos
+python scripts/module.py disable stickers
+```
+
+**验证模块文件完整性**
+```bash
+python scripts/module.py validate
+```
+
+模块配置保存在 `data/modules.json`，重启 bot 后生效。
+
+
 ### 添加新命令
 
 1. 在 `utils/command/` 创建新的 Python 文件
@@ -289,6 +336,28 @@ Operator 权限位（在 `operators.json` 中配置）：
 3. （可选）实现 `getHelp()` 函数返回帮助信息喵
 
 也可以对 Zinc Phos. 提出 Pull Request 哦……
+
+
+### 运行测试
+
+```bash
+# 安装开发依赖
+pip install -r requirements-dev.txt
+
+# 运行所有测试
+python scripts/test.py
+
+# 运行特定模块测试
+python scripts/test.py -m llm
+
+# 生成覆盖率报告
+python scripts/test.py --cov
+
+# 跳过慢速测试
+python scripts/test.py --fast
+```
+
+测试详情见 [tests/README.md](tests/README.md)。
 
 ### 数据文件
 

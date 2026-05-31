@@ -67,20 +67,40 @@ function Format-FileSize {
 
 
 function Get-LocalFiles {
+    # 递归列出 data/ 下的所有文件，Name 字段使用相对 data/ 的路径
+    # 例：data/.chatKey -> ".chatKey"；data/llm/llmConfig.json -> "llm/llmConfig.json"
+    # 跳过 zincnya_backup/ 下的所有内容（体积大且无须日常同步）
     $files = @()
-    Get-ChildItem -Path $LocalPath -File | Sort-Object Name | ForEach-Object {
-        $files += [PSCustomObject]@{
-            Name     = $_.Name
-            Size     = $_.Length
-            SizeText = Format-FileSize $_.Length
+    $base = (Resolve-Path $LocalPath).Path.TrimEnd('\', '/')
+
+    # 手动递归以避免对 zincnya_backup/ 子树做任何 I/O
+    $stack = [System.Collections.Stack]::new()
+    $stack.Push($base)
+    while ($stack.Count -gt 0) {
+        $dir = $stack.Pop()
+        Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.PSIsContainer) {
+                if ($_.Name -ieq 'zincnya_backup' -and $dir -eq $base) { return }
+                $stack.Push($_.FullName)
+            } else {
+                $rel = $_.FullName.Substring($base.Length + 1) -replace '\\', '/'
+                $files += [PSCustomObject]@{
+                    Name     = $rel
+                    Size     = $_.Length
+                    SizeText = Format-FileSize $_.Length
+                }
+            }
         }
     }
-    return , $files
+    return , ($files | Sort-Object Name)
 }
 
 
 function Get-RemoteFiles {
-    $raw = ssh -p $REMOTE_PORT $REMOTE_HOST "find $REMOTE_PATH -maxdepth 1 -type f -printf '%f\t%s\n' 2>/dev/null"
+    # %P 输出相对 $REMOTE_PATH 的路径（不含起点本身），与本地 Name 字段对齐
+    # 跳过 zincnya_backup/ 子树，避免列出大量历史备份
+    # 先展开 ~ 再执行 find（单引号会阻止 shell 展开波浪号）
+    $raw = ssh -p $REMOTE_PORT $REMOTE_HOST "cd $REMOTE_PATH && find . -type d -name zincnya_backup -prune -false -o -type f -printf '%P\t%s\n' 2>/dev/null"
     $files = @()
 
     if ($LASTEXITCODE -eq 0 -and $raw) {
@@ -101,6 +121,14 @@ function Get-RemoteFiles {
     }
 
     return , ($files | Sort-Object Name)
+}
+
+
+function Format-DisplayName {
+    # 嵌套子目录里的文件加 ./ 前缀，便于一眼区分顶层与嵌套
+    param([string]$Name)
+    if ($Name -match '/') { return "./$Name" }
+    return $Name
 }
 
 
@@ -131,10 +159,10 @@ function Show-FileComparison {
         return @{}
     }
 
-    # 列宽计算
-    $nameWidth = ($allNames | ForEach-Object { $_.Length } | Measure-Object -Maximum).Maximum
+    # 列宽计算（放宽以容纳嵌套路径）
+    $nameWidth = ($allNames | ForEach-Object { (Format-DisplayName $_).Length } | Measure-Object -Maximum).Maximum
     if ($nameWidth -lt 10) { $nameWidth = 10 }
-    if ($nameWidth -gt 28) { $nameWidth = 28 }
+    if ($nameWidth -gt 50) { $nameWidth = 50 }
     $sizeWidth = 9
     $numWidth = if ($ShowNumbers) { 5 } else { 0 }
     $colWidth = $numWidth + $nameWidth + 2 + $sizeWidth
@@ -163,6 +191,11 @@ function Show-FileComparison {
     foreach ($name in $allNames) {
         $srcFile = $sourceMap[$name]
         $tgtFile = $targetMap[$name]
+        $displayName = Format-DisplayName $name
+
+        # 判断是否大小不同（双端都存在且大小不一致）
+        $sizeDiff = $srcFile -and $tgtFile -and ($srcFile.Size -ne $tgtFile.Size)
+        $highlightColor = if ($sizeDiff) { "Green" } else { $null }
 
         # ── 左侧（源） ──
         if ($srcFile) {
@@ -170,11 +203,15 @@ function Show-FileComparison {
                 $indexMap[$idx] = $name
                 $prefix = "[{0}]" -f $idx
                 $idx++
-                $leftStr = "  {0,-$numWidth}{1,-$nameWidth}  {2,$sizeWidth}" -f $prefix, $srcFile.Name, $srcFile.SizeText
+                $leftStr = "  {0,-$numWidth}{1,-$nameWidth}  {2,$sizeWidth}" -f $prefix, $displayName, $srcFile.SizeText
             } else {
-                $leftStr = "  {0,-$nameWidth}  {1,$sizeWidth}" -f $srcFile.Name, $srcFile.SizeText
+                $leftStr = "  {0,-$nameWidth}  {1,$sizeWidth}" -f $displayName, $srcFile.SizeText
             }
-            Write-Host "$leftStr" -NoNewline
+            if ($highlightColor) {
+                Write-Host "$leftStr" -ForegroundColor $highlightColor -NoNewline
+            } else {
+                Write-Host "$leftStr" -NoNewline
+            }
         } else {
             if ($ShowNumbers) {
                 $leftStr = "  {0,-$numWidth}{1,-$nameWidth}  {2,$sizeWidth}" -f "", "(--)", ""
@@ -188,8 +225,12 @@ function Show-FileComparison {
 
         # ── 右侧（目标） ──
         if ($tgtFile) {
-            $rightStr = "  {0,-$nameWidth}  {1,$sizeWidth}" -f $tgtFile.Name, $tgtFile.SizeText
-            Write-Host "$rightStr"
+            $rightStr = "  {0,-$nameWidth}  {1,$sizeWidth}" -f $displayName, $tgtFile.SizeText
+            if ($highlightColor) {
+                Write-Host "$rightStr" -ForegroundColor $highlightColor
+            } else {
+                Write-Host "$rightStr"
+            }
         } else {
             $rightStr = "  {0,-$nameWidth}  {1,$sizeWidth}" -f "(--)", ""
             Write-Host "$rightStr" -ForegroundColor DarkGray
@@ -244,6 +285,15 @@ function Invoke-FileUpload {
         $src = Join-Path $LocalPath $name
         $dst = "${REMOTE_HOST}:${REMOTE_PATH}${name}"
 
+        # 如果是嵌套文件，先在远程创建父目录
+        if ($name -match '/') {
+            $remoteDir = $name -replace '[^/]+$', ''
+            $remoteDirFull = "${REMOTE_PATH}${remoteDir}"
+            # 转义单引号防止 shell 注入：' -> '\''
+            $escapedDir = $remoteDirFull -replace "'", "'\''"
+            ssh -p $REMOTE_PORT $REMOTE_HOST "mkdir -p '$escapedDir'" *>$null
+        }
+
         Write-Host "  上传 $name ..." -ForegroundColor Yellow -NoNewline
         scp -P $REMOTE_PORT "$src" "$dst" *>$null
 
@@ -272,6 +322,12 @@ function Invoke-FileDownload {
     foreach ($name in $FileNames) {
         $src = "${REMOTE_HOST}:${REMOTE_PATH}${name}"
         $dst = Join-Path $LocalPath $name
+
+        # 如果是嵌套文件，先在本地创建父目录
+        $localDir = Split-Path $dst -Parent
+        if (-not (Test-Path $localDir)) {
+            New-Item -ItemType Directory -Path $localDir -Force | Out-Null
+        }
 
         Write-Host "  下载 $name ..." -ForegroundColor Yellow -NoNewline
         scp -P $REMOTE_PORT "$src" "$dst" *>$null
