@@ -4,16 +4,22 @@ utils/llm/review.py
 LLM 审核共享操作。
 
 三个审核入口（Telegram 按钮、chatScreen TUI、独立 CLI）
-的 send/retry/cancel 逻辑统一在此，各自只负责 UI 交互和结果展示。
+的 send/retry/cancel/feedback 逻辑统一在此，各自只负责 UI 交互和结果展示。
 
 支持两类审核项：
-    - kind == "reply"：回复审核
+    - kind == "reply"：回复审核（支持编辑、重试、补充反馈重试）
     - kind == "memory"：LLM 自主记忆操作审核
 """
 
 from utils.llm.client import generateReply
-from utils.llm.memory.action import MemoryAction, executeAction
-from utils.core.logger import logAction, LogLevel, LogChildType
+from utils.llm.memory.action import (
+    MemoryAction,
+    executeAction,
+    parseMemoryActions,
+    LLM_MEMORY_MAX_ACTIONS,
+    validateAction,
+)
+from utils.core.logger import logAction, LogLevel, LogChildType, logSystemEvent
 
 
 
@@ -113,7 +119,70 @@ def getReviewItemActions(item: dict) -> str:
         return "[A]pprove / [C]ancel"
 
     # kind == "reply"
-    return "[A]ccept / [E]dit / [R]etry / [C]ancel"
+    return "[A]ccept / [E]dit / [R]etry / [F]eedback / [C]ancel"
+
+
+
+
+# ---------------------------------------------------------------------------
+# 记忆操作解析 / 校验 / 分发（审核层共享）
+# ---------------------------------------------------------------------------
+
+async def extractValidatedMemoryActions(reply: str, *, logLabel: str) -> tuple[str, list, int]:
+    """
+    清理 reply 中的 <MEMORY_ACTION> 块、截断超限操作、逐个校验。
+
+    这是 action.py 原语（parse/validate）之上的审核层编排：
+    截断阈值与"丢弃失败项并计数"的语义都为审核流程服务，故放在 review 层。
+
+    参数:
+        reply: LLM 原始回复（可能含 <MEMORY_ACTION> 块）
+        logLabel: 日志来源标签，如 'retry' / 'feedback retry' / 'console retry'
+
+    返回:
+        (清理后的 reply, 校验通过的 action 列表, 校验失败数)
+    """
+    cleanedReply, actions = parseMemoryActions(reply)
+
+    # 截断超限操作
+    if len(actions) > LLM_MEMORY_MAX_ACTIONS:
+        await logSystemEvent(
+            f"LLM 记忆操作数量超限（{logLabel}）",
+            f"请求 {len(actions)} 个，上限 {LLM_MEMORY_MAX_ACTIONS}，截断",
+            LogLevel.WARNING,
+        )
+        actions = actions[:LLM_MEMORY_MAX_ACTIONS]
+
+    # 逐个校验，失败项丢弃并计数
+    validated = []
+    failed = 0
+    for act in actions:
+        err = await validateAction(act)
+        if err:
+            failed += 1
+            await logSystemEvent(
+                f"LLM 记忆操作校验失败（{logLabel}）",
+                f"{act.action} | {err}",
+                LogLevel.WARNING,
+            )
+        else:
+            validated.append(act)
+
+    return cleanedReply, validated, failed
+
+
+def queueMemoryActionsToConsole(actions: list, *, chatID, originalMsg, opsID, userID) -> None:
+    """将校验通过的记忆操作加入 console 审核队列。"""
+    from utils.llm.state import addMemoryReviewItem
+
+    for act in actions:
+        addMemoryReviewItem(
+            action=act.toDict(),
+            chatID=chatID,
+            originalMsg=originalMsg,
+            opsID=opsID,
+            userID=userID,
+        )
 
 
 
@@ -130,9 +199,81 @@ async def _retryReplyReview(item: dict) -> dict:
         userID=item.get("userID"),
         urlContexts=item.get("urlContexts"),
     )
+
+    # 清理 <MEMORY_ACTION> 块、校验并加入 Console 审核队列
+    if item.get("includeContext"):
+        newReply, validated, _ = await extractValidatedMemoryActions(newReply, logLabel="console retry")
+        queueMemoryActionsToConsole(
+            validated,
+            chatID=item["chatID"],
+            originalMsg=item["originalMsg"],
+            opsID=item["opsID"],
+            userID=item.get("userID"),
+        )
+
     await logAction(
         "System", "LLM 控制台审核：重新生成",
         f"原文：{item['originalMsg']}", LogLevel.INFO, LogChildType.WITH_CHILD,
+    )
+    await logAction(
+        "System", "",
+        f"生成的消息：{newReply}", LogLevel.INFO, LogChildType.LAST_CHILD,
+    )
+    return {**item, "reply": newReply}
+
+
+async def reviewRetryWithFeedback(item: dict, feedback: str) -> dict:
+    """
+    Ops 补充反馈后重试生成。
+
+    将 ops 的补充要求追加到 originalMsg 后，作为 [背景信息补充：...] 块。
+    LLM 会将其理解为可信的背景信息。
+
+    参数:
+        item: 原始审核项
+        feedback: ops 输入的补充要求（限制 200 字符）
+
+    返回:
+        更新后的审核项（reply 已替换）
+    """
+    # 限制长度
+    MAX_FEEDBACK_LENGTH = 200
+    trimmed = feedback.strip()
+    if len(trimmed) > MAX_FEEDBACK_LENGTH:
+        trimmed = trimmed[:MAX_FEEDBACK_LENGTH]
+        await logSystemEvent(
+            "Ops 反馈过长，已截断",
+            f"原长度 {len(feedback)}，截断至 {MAX_FEEDBACK_LENGTH}",
+            LogLevel.WARNING,
+        )
+
+    # 格式化并追加
+    enhancedMsg = f"{item['originalMsg']}\n\n[背景信息补充：{trimmed}]"
+
+    newReply = await generateReply(
+        enhancedMsg,
+        item["chatID"],
+        includeContext=bool(item.get("includeContext")),
+        userID=item.get("userID"),
+        urlContexts=item.get("urlContexts"),
+    )
+
+    # 清理 <MEMORY_ACTION> 块、校验并加入 Console 审核队列
+    if item.get("includeContext"):
+        newReply, validated, _ = await extractValidatedMemoryActions(
+            newReply, logLabel="feedback retry",
+        )
+        queueMemoryActionsToConsole(
+            validated,
+            chatID=item["chatID"],
+            originalMsg=item["originalMsg"],
+            opsID=item["opsID"],
+            userID=item.get("userID"),
+        )
+
+    await logAction(
+        "System", "LLM 控制台审核：补充反馈重试",
+        f"补充：{trimmed[:100]}", LogLevel.INFO, LogChildType.WITH_CHILD,
     )
     await logAction(
         "System", "",

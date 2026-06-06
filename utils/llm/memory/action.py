@@ -20,7 +20,7 @@ _backgroundTasks: set[asyncio.Task] = set()
 
 
 def _fireAndForget(coro):
-    """创建后台 task 并持有强引用，会在完成后自动移除。"""
+    """创建后台 task 并持有强引用，会在完成后自动移除"""
     try:
         loop = asyncio.get_running_loop()
         task = loop.create_task(coro)
@@ -69,7 +69,7 @@ class MemoryAction:
     reason: str = ""
 
     def toDict(self) -> dict:
-        """序列化为内部 dict（camelCase 键名）。"""
+        """序列化为内部 dict（camelCase 键名）"""
         return {
             "action": self.action,
             "scopeType": self.scopeType,
@@ -83,7 +83,7 @@ class MemoryAction:
 
     @classmethod
     def fromDict(cls, data: dict) -> "MemoryAction":
-        """从内部 dict（camelCase 键名）反序列化。"""
+        """从内部 dict（camelCase 键名）反序列化"""
         return cls(
             action=data["action"],
             scopeType=data["scopeType"],
@@ -155,7 +155,7 @@ def _parseActionDict(data: dict) -> MemoryAction:
 
 
 def formatActionDetail(act: MemoryAction) -> str:
-    """格式化单个记忆操作的日志详情。"""
+    """格式化单个记忆操作的日志详情"""
     detail = f"{act.action} | scope={act.scopeType}:{act.scopeID}"
     if act.memoryID is not None:
         detail += f" | id=#{act.memoryID}"
@@ -165,7 +165,22 @@ def formatActionDetail(act: MemoryAction) -> str:
 
 
 def parseMemoryActions(text: str) -> tuple[str, list[MemoryAction]]:
-    """提取并剥离 LLM 输出中的 <MEMORY_ACTION> 块。"""
+    """
+    提取并剥离 LLM 输出中的 <MEMORY_ACTION> 块
+
+    正常路径：
+        - 正则匹配标准格式 <MEMORY_ACTION>...</MEMORY_ACTION>
+        - 逐块解析 JSON 并构造 MemoryAction
+        - 剥离匹配到的块，返回清理后的文本
+
+    回退清理（仅在检测到 MEMORY_ACTION 关键字时启用）：
+        - 清理残留的格式错误标签（大小写不敏感，容忍拼写错误如 ACTI0N）
+        - 清理孤立的 JSON 块（疑似记忆操作但标签缺失，限单行）
+        - 避免误删用户正常对话中的 JSON
+
+    返回:
+        清理后的文本, 即解析成功的 MemoryAction 列表
+    """
     if not text:
         return "", []
 
@@ -229,6 +244,22 @@ def parseMemoryActions(text: str) -> tuple[str, list[MemoryAction]]:
                 pass
 
     cleaned = MEMORY_ACTION_PATTERN.sub("", text).strip()
+
+    # 回退清理：仅在检测到 MEMORY_ACTION 关键字时启用（避免误删用户正常对话）
+    if "MEMORY_ACTION" in text.upper() or "MEMORY_ACTI" in text.upper():
+        # 清理残留的格式错误标签（大小写不敏感，容忍拼写错误）
+        # 匹配 <MEMORY_ACTION 或 <MEMORY_ACTI 开头的标签（容忍常见拼写错误如 ACTI0N）
+        cleaned = re.sub(r"</?MEMORY_ACTI(?:ON|0N)[^>]*>", "", cleaned, flags=re.IGNORECASE)
+        # 清理孤立的 JSON 块（疑似记忆操作但标签缺失）
+        # 只匹配单行 JSON 且包含 "action": "add|update|delete"
+        # 限制 [^}] 匹配长度防止灾难性回溯
+        cleaned = re.sub(
+            r'^\s*\{[^}]{0,500}"action"\s*:\s*"(?:add|update|delete)"[^}]{0,500}\}\s*$',
+            "",
+            cleaned,
+            flags=re.MULTILINE | re.IGNORECASE
+        )
+
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned, actions
 
@@ -242,7 +273,7 @@ def _normalizeScopeID(scopeType: str, scopeID: str) -> str:
 
 
 async def validateAction(action: MemoryAction) -> str | None:
-    """校验记忆操作是否合法。返回 None 表示通过。"""
+    """校验记忆操作是否合法返回 None 表示通过"""
     if action.action not in _VALID_ACTIONS:
         return f"不支持的 action：{action.action or '?'}"
 
@@ -296,7 +327,7 @@ async def validateAction(action: MemoryAction) -> str | None:
 
 
 async def executeAction(action: MemoryAction) -> bool:
-    """执行已审核通过的记忆操作。"""
+    """执行已审核通过的记忆操作"""
     if action.action == "add":
         memoryID = await addMemory(
             action.scopeType,

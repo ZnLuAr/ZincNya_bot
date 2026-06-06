@@ -48,7 +48,9 @@ def _formatReviewHint(item: dict) -> str:
         content = action.get("content") or action.get("originalContent") or ""
         memoryID = action.get("memoryID")
         if content:
-            preview = content[:16] + "…" if len(content) > 16 else content
+            # 转义换行符，避免底边栏被截断
+            escaped = content.replace('\n', '\\n')
+            preview = escaped[:16] + "…" if len(escaped) > 16 else escaped
         elif memoryID is not None:
             preview = f"#{memoryID}"
         else:
@@ -56,7 +58,9 @@ def _formatReviewHint(item: dict) -> str:
         return f"当前操作的是：[记忆:{actionType}] {preview}" if preview else f"当前操作的是：[记忆:{actionType}]"
 
     reply = item.get("reply") or ""
-    preview = reply[:16] + "…" if len(reply) > 16 else reply
+    # 转义换行符，避免底边栏被截断
+    escaped = reply.replace('\n', '\\n')
+    preview = escaped[:16] + "…" if len(escaped) > 16 else escaped
     return f"当前操作的是：[回复] {preview}" if preview else "当前操作的是：[回复]"
 
 

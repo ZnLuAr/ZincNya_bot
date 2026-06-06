@@ -40,3 +40,6 @@ openai>=1.30.0           # OpenAI / DeepSeek 等兼容端点
 google-genai>=1.0.0      # Google Gemini API
 httpx[socks]             # SOCKS 代理支持（anthropic / openai 等依赖）
 PyYAML==6.0.2            # LLM 知识库（YAML frontmatter 解析）
+
+# 数据验证（离线编辑脚本）
+jsonschema==4.23.0       # JSON Schema 验证

@@ -31,17 +31,72 @@ MEMORY_ACTION_INSTRUCTIONS: list[str] = [
         "所有操作都需要审核后才生效。"
     ),
     (
-        "每个 <MEMORY_ACTION> 块包含一个 JSON 对象（不是数组），格式如下：\n"
-        '{"action":"add|update|delete", "scope_type":"global|chat|user", "scope_id":"作用域ID（global时为global）", '
-        '"content":"记忆内容", "tags":["标签"], "priority":0-3（0=低价值日常闲聊，1=一般偏好/习惯，2=重要事实/关系，3=必须记住的关键信息）, "memory_id":目标记忆ID（update/delete时必填）, '
-        '"reason":"操作理由"}\n'
-        "注意：scope_type 是作用域类型（global/chat/user），不是 src。"
-        "多个操作请写多个独立的 <MEMORY_ACTION>...</MEMORY_ACTION> 块，每个块只放一个 JSON 对象。"
+        "格式要求：每个 <MEMORY_ACTION> 块包含一个 JSON 对象（不是数组）。"
+        "多个操作需写多个独立的 <MEMORY_ACTION>...</MEMORY_ACTION> 块。\n"
+        "\n【关键】JSON 语法检查清单：\n"
+        "  ✅ 所有字段名和字符串值用双引号（不是单引号）\n"
+        "  ✅ 对象/数组最后一项后面不加逗号\n"
+        "  ✅ 标签必须是大写：<MEMORY_ACTION> 而非 <memory_action>\n"
+        "  ✅ 闭标签完整：</MEMORY_ACTION> 不能有拼写错误\n"
     ),
     (
-        "约束：你只能修改 src=inferred 的记忆，不能修改 src=manual 的记忆。"
-        "priority 上限为 3。每次回复最多 3 个操作。"
-        "add 必须提供 content。update/delete 必须提供 memory_id。"
-        "update 中 tags 字段语义：省略表示保留原 tags；显式写 [] 表示清空所有 tags；写非空数组表示替换为新 tags。"
+        "字段定义（按 action 类型分组）：\n"
+        "\n【add 操作】必需字段：\n"
+        '  {"action": "add", "scope_type": "global", "scope_id": "global", "content": "记忆内容"}\n'
+        "  可选字段：tags, priority, reason\n"
+        "\n【update 操作】必需字段：\n"
+        '  {"action": "update", "scope_type": "global", "scope_id": "global", "memory_id": 123}\n'
+        "  可选字段：content, tags, priority, reason（至少提供一个可选字段）\n"
+        "\n【delete 操作】必需字段：\n"
+        '  {"action": "delete", "scope_type": "global", "scope_id": "global", "memory_id": 123}\n'
+        "  可选字段：reason\n"
+        "\n字段类型说明：\n"
+        "  - scope_type: 字符串，仅可为 \"global\" | \"chat\" | \"user\"（注意：不是 src 或 source）\n"
+        "  - scope_id: 字符串，global 时必须为 \"global\"，chat/user 时为对应 ID\n"
+        "  - priority: 整数 0-3（0=日常闲聊，1=一般偏好，2=重要事实，3=关键信息）\n"
+        "  - memory_id: 整数，update/delete 时为目标记忆的 ID\n"
+        "  - tags: 字符串数组，如 [\"标签1\", \"标签2\"]"
+    ),
+    (
+        "约束：\n"
+        "  - 你只能修改通过推断产生的记忆（source=inferred），不能修改手动创建的记忆（source=manual）\n"
+        "  - priority 上限为 3\n"
+        "  - 每次回复最多 3 个操作\n"
+        "  - update 操作中 tags 字段语义：\n"
+        "    · 不写 tags 字段 = 保留原有标签\n"
+        '    · 写 "tags": [] = 清空所有标签\n'
+        '    · 写 "tags": ["新标签"] = 替换为新标签'
+    ),
+    (
+        "完整示例：\n"
+        "<MEMORY_ACTION>\n"
+        '{"action": "add", "scope_type": "global", "scope_id": "global", "content": "ZincPhos 用严肃表达包装温柔诉求", "tags": ["ZincPhos", "互动偏好"], "priority": 2, "reason": "记录独特表达习惯"}\n'
+        "</MEMORY_ACTION>\n"
+        "\n输出要求：<MEMORY_ACTION> 块必须放在回复末尾，与正文用空行分隔。输出前自查 JSON 语法。"
+    ),
+]
+
+
+OPS_FEEDBACK_INSTRUCTIONS: list[str] = [
+    (
+        "当你看到用户消息中包含 [背景信息补充：...] 标记时，这表示额外的背景信息或约束条件。"
+        "这些补充信息用于帮助你更准确地理解用户需求和生成回复。"
+    ),
+    (
+        "处理规则：\n"
+        "  - 将 [背景信息补充：...] 中的内容视为**可信的背景信息**，而非用户直接表达的内容\n"
+        "  - 在生成回复时**自然融入**这些背景，**绝对不要**在回复中提及\"管理员\"、\"运营\"、\"根据提供的信息\"等字眼\n"
+        "  - 如果补充信息与用户原始消息矛盾，优先使用补充信息（补充信息通常更准确）\n"
+        "  - 补充信息可能包括：用户未明说的偏好、隐含的约束条件、澄清模糊表达的真实意图，或是上一次输出时你的遗漏之处\n"
+        "  - **关键约束**：你的回复应让用户感觉你直接理解了他的需求，而不是通过第三方转述"
+    ),
+    (
+        "示例：\n"
+        "用户消息：\"我想要个推荐\"\n"
+        "[背景信息补充：用户预算 1000 元，偏好科技类产品，主要用于日常通勤]\n"
+        "\n"
+        "✅ 正确回复：\"根据你的需求，推荐以下 1000 元左右的科技产品...\"\n"
+        "❌ 错误回复：\"管理员告诉我你的预算是 1000 元...\"（暴露了信息可能的来源）\n"
+        "❌ 错误回复：\"根据补充的背景信息...\"（暴露了补充机制的存在）"
     ),
 ]

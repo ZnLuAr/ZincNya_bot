@@ -41,7 +41,7 @@ if (-not $REMOTE_PATH.EndsWith('/')) {
 Write-Host ""
 Write-Host "正在连接 ${REMOTE_HOST}:${REMOTE_PORT} ..." -ForegroundColor Yellow
 
-$sshTest = ssh -p $REMOTE_PORT -o ConnectTimeout=5 $REMOTE_HOST "echo ok" 2>&1
+$sshTest = $null | ssh -p $REMOTE_PORT -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new $REMOTE_HOST "echo ok" 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "SSH 连接失败喵" -ForegroundColor Red
     Write-Host "  主机: $REMOTE_HOST" -ForegroundColor DarkGray
@@ -100,7 +100,7 @@ function Get-RemoteFiles {
     # %P 输出相对 $REMOTE_PATH 的路径（不含起点本身），与本地 Name 字段对齐
     # 跳过 zincnya_backup/ 子树，避免列出大量历史备份
     # 先展开 ~ 再执行 find（单引号会阻止 shell 展开波浪号）
-    $raw = ssh -p $REMOTE_PORT $REMOTE_HOST "cd $REMOTE_PATH && find . -type d -name zincnya_backup -prune -false -o -type f -printf '%P\t%s\n' 2>/dev/null"
+    $raw = $null | ssh -p $REMOTE_PORT -o BatchMode=yes -o StrictHostKeyChecking=accept-new $REMOTE_HOST "cd $REMOTE_PATH && find . -type d -name zincnya_backup -prune -false -o -type f -printf '%P\t%s\n' 2>/dev/null"
     $files = @()
 
     if ($LASTEXITCODE -eq 0 -and $raw) {
@@ -291,11 +291,11 @@ function Invoke-FileUpload {
             $remoteDirFull = "${REMOTE_PATH}${remoteDir}"
             # 转义单引号防止 shell 注入：' -> '\''
             $escapedDir = $remoteDirFull -replace "'", "'\''"
-            ssh -p $REMOTE_PORT $REMOTE_HOST "mkdir -p '$escapedDir'" *>$null
+            $null | ssh -p $REMOTE_PORT -o BatchMode=yes -o StrictHostKeyChecking=accept-new $REMOTE_HOST "mkdir -p '$escapedDir'" *>$null
         }
 
         Write-Host "  上传 $name ..." -ForegroundColor Yellow -NoNewline
-        scp -P $REMOTE_PORT "$src" "$dst" *>$null
+        $null | scp -P $REMOTE_PORT -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$src" "$dst" *>$null
 
         if ($LASTEXITCODE -eq 0) {
             Write-Host " ok" -ForegroundColor Green
@@ -330,7 +330,7 @@ function Invoke-FileDownload {
         }
 
         Write-Host "  下载 $name ..." -ForegroundColor Yellow -NoNewline
-        scp -P $REMOTE_PORT "$src" "$dst" *>$null
+        $null | scp -P $REMOTE_PORT -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$src" "$dst" *>$null
 
         if ($LASTEXITCODE -eq 0) {
             Write-Host " ok" -ForegroundColor Green

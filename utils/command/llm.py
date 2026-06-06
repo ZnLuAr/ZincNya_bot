@@ -71,6 +71,7 @@ from utils.llm.review import (
     reviewCancel,
     reviewEditSubmit,
     reviewRetry,
+    reviewRetryWithFeedback,
     reviewSend,
 )
 from utils.llm.state import getReviewQueue
@@ -528,12 +529,12 @@ end=""
         try:
             await reviewSend(bot, item)
         except Exception as e:
-            print(f"[审核] 操作失败：{e}\n\n")
+            print(f"[审核] 操作失败喵：{e}\n\n")
             queue.put_nowait(item)
 
     elif choice in ("e", "edit"):
         if not canEditReviewItem(item):
-            print("[审核] 当前审核项不可编辑喵")
+            print("[审核] 当前审核项不可编辑喵\n")
             queue.put_nowait(item)
             return
 
@@ -550,20 +551,20 @@ end=""
                 if kind == "memory":
                     # console memory 编辑后立即批准
                     await reviewSend(bot, editedItem)
-                    print("[审核] 记忆操作编辑后已执行")
+                    print("[审核] 记忆操作编辑后已执行喵\n")
                 else:
                     await reviewSend(bot, editedItem)
-                    print(f"[审核] 已发送编辑内容至 {item['chatID']}")
+                    print(f"[审核] 已发送编辑内容至 {item['chatID']}\n")
             except Exception as e:
-                print(f"[审核] 操作失败：{e}")
+                print(f"[审核] 操作失败喵：{e}\n")
                 queue.put_nowait(item)
         else:
-            print("[审核] 取消编辑喵")
+            print("[审核] 取消编辑喵\n")
             queue.put_nowait(item)
 
     elif choice in ("r", "retry"):
         if not canRetryReviewItem(item):
-            print("[审核] 当前审核项不支持重试喵")
+            print("[审核] 当前审核项不支持重试喵\n")
             queue.put_nowait(item)
             return
 
@@ -571,16 +572,37 @@ end=""
         try:
             newQueueItem = await reviewRetry(item)
             queue.put_nowait(newQueueItem)
-            print("[审核] 已重新生成喵，再次输入 :review 就可以查看了")
+            print("[审核] 已重新生成喵，再次输入 /llm review 就可以查看了\n\n")
         except Exception as e:
             print(f"[审核] 重试失败喵：{e}\n\n")
+            queue.put_nowait(item)
+
+    elif choice in ("f", "feedback"):
+        if not canRetryReviewItem(item):
+            print("[审核] 当前审核项不支持重试喵\n")
+            queue.put_nowait(item)
+            return
+
+        print("请输入背景信息补充（Alt+Enter 提交，:q 取消）:")
+        feedback = await asyncMultilineInput(prompt=">> ", continuation_prompt=".. ")
+        if feedback.strip() and feedback.strip() != ":q":
+            print("[审核] 重新生成喵……")
+            try:
+                newQueueItem = await reviewRetryWithFeedback(item, feedback.rstrip('\n'))
+                queue.put_nowait(newQueueItem)
+                print("[审核] 已重新生成喵，再次输入 /llm review 就可以查看了\n\n")
+            except Exception as e:
+                print(f"[审核] 重试失败喵：{e}\n\n")
+                queue.put_nowait(item)
+        else:
+            print("[审核] 取消喵\n")
             queue.put_nowait(item)
 
     elif choice in ("c", "cancel"):
         await reviewCancel(item)
 
     else:
-        print(f"[审核] 无效选项：{choice!r}")
+        print(f"[审核] 无效选项：{choice!r}\n")
         queue.put_nowait(item)
 
 
@@ -645,6 +667,17 @@ async def handleChatScreenReviewCommand(command: str, bot, ui) -> dict | None:
             queue.put_nowait(item)
             ui.showStatus(f" LLM 消息生成重试失败喵：{e}")
 
+    elif command == ":rf":
+        if not canRetryReviewItem(item):
+            queue.put_nowait(item)
+            ui.showStatus(" 当前审核项不支持重试喵")
+            return None
+
+        # 进入编辑模式
+        ui._composerArea.text = ""
+        ui.showStatus(" 输入背景信息补充 | Ctrl+S 提交 | Esc 取消")
+        return {"_mode": "retry_feedback", "item": item}
+
     elif command == ":rc":
         await reviewCancel(item)
 
@@ -661,8 +694,26 @@ async def handleChatScreenEditSubmit(editItem: dict, editedText: str, ui) -> Non
         ui: ChatScreenApp 实例
     """
     queue = getReviewQueue()
-    result = await reviewEditSubmit(editItem, editedText)
-    queue.put_nowait(result)
+
+    # 检查是否是补充反馈重试模式
+    if editItem.get("_mode") == "retry_feedback":
+        item = editItem["item"]
+        feedback = editedText.rstrip('\n')
+        if feedback.strip():
+            try:
+                newItem = await reviewRetryWithFeedback(item, feedback)
+                queue.put_nowait(newItem)
+                ui.showStatus(" 已重新生成喵")
+            except Exception as e:
+                queue.put_nowait(item)
+                ui.showStatus(f" 重试失败喵：{e}")
+        else:
+            queue.put_nowait(item)
+            ui.showStatus(" 取消喵")
+    else:
+        # 正常编辑模式
+        result = await reviewEditSubmit(editItem, editedText)
+        queue.put_nowait(result)
 
 
 

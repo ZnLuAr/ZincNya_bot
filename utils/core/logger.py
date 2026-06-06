@@ -91,7 +91,18 @@ _CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
 
 
 class LogLevel(str, Enum):
-    """日志级别"""
+    """
+    日志级别。
+
+    语义按本项目惯例（非"是否致命"，进程不会因 ERROR 退出）：
+        DEBUG   —— 仅排查用的细节，正常运行不关心。
+        INFO    —— 正常流程的事件记录（操作成功、状态变更等）。
+        WARNING —— 出现异常但可降级：有后备、可重试或可丢弃，流程继续。
+                   例：记忆操作超限截断、单条校验失败、首次网络错误（将重试）。
+        ERROR   —— 操作彻底失败、结果丢失，通常伴随捕获到的异常。
+                   传入 exception 时会双写到独立错误日志（见 log() 中的 logError）。
+                   例：生成回复失败、重试仍失败、数据库操作失败、归档失败。
+    """
     INFO = "INFO"
     WARNING = "WARNING"
     ERROR = "ERROR"
@@ -253,7 +264,9 @@ class TreeLogger:
             if callback:
                 callback(consoleText)
             else:
-                print(consoleText)
+                # 使用 safePrint 避免在 screen 环境下破坏 prompt_toolkit 全屏布局
+                from utils.core.stateManager import safePrint
+                safePrint(consoleText)
 
 
     def _formatConsoleText(self, timestamp, userName, event, details, level: LogLevel, childType: LogChildType):
@@ -313,7 +326,9 @@ class TreeLogger:
         if callback:
             callback(consoleText)
         else:
-            print(consoleText)
+            # 使用 safePrint 避免在 screen 环境下破坏 prompt_toolkit 全屏布局
+            from utils.core.stateManager import safePrint
+            safePrint(consoleText)
 
 
     @staticmethod

@@ -460,7 +460,7 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
             stripped = userInput.strip()
 
             # ── LLM 审核命令 ──
-            if stripped in (":ra", ":re", ":rr", ":rc", ":rq"):
+            if stripped in (":ra", ":re", ":rr", ":rf", ":rc", ":rq"):
                 from utils.command.llm import handleChatScreenReviewCommand
                 _reviewEditItem = await handleChatScreenReviewCommand(stripped, bot, ui)
                 continue
