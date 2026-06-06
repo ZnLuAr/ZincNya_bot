@@ -1,7 +1,7 @@
 """
 handlers/llm.py
 
-LLM 消息处理器。
+LLM 消息处理器
 
 职责：
     - 监听群聊被 @ / 命中关键词 / 私聊消息（文字 + 图片）
@@ -28,7 +28,7 @@ from telegram.ext import (
 
 from config import Permission, LLM_DEBOUNCE_SECONDS
 
-from handlers.llmReview import handleEditReply, sendReviewMessage, sendMemoryReviewMessage, _truncate
+from handlers.llmReview import handleEditReply, handleFeedbackRetry, sendReviewMessage, sendMemoryReviewMessage, _truncate
 
 from utils.core.errorDecorators import handleTelegramErrors
 from utils.llm import (
@@ -84,7 +84,7 @@ def _isCommandLikeMessage(rawText: str) -> bool:
 
 def _extractPureMessage(text: str, botUsername: str) -> tuple[str, bool]:
     """
-    去除 @bot 并检查是否包含 #context 标记。
+    去除 @bot 并检查是否包含 #context 标记
 
     参数:
         text: 原始消息文本
@@ -92,8 +92,8 @@ def _extractPureMessage(text: str, botUsername: str) -> tuple[str, bool]:
 
     返回:
         (纯文本, 是否需要上下文)
-        第二个值：#context 标记存在时为 True；否则跟随全局 memoryEnabled 配置。
-        调用方还需将此值与 consumeContextOnce() 取逻辑或，以叠加 one-shot 标记。
+        第二个值：#context 标记存在时为 True；否则跟随全局 memoryEnabled 配置
+        调用方还需将此值与 consumeContextOnce() 取逻辑或，以叠加 one-shot 标记
     """
     text = removeMention(text, botUsername)
 
@@ -142,7 +142,7 @@ def _matchesGroupTriggerKeyword(message) -> bool:
 
 
 def _shouldTriggerLLM(message, botUsername: str, isPrivate: bool) -> bool:
-    """判断当前消息是否应触发 LLM。私聊始终触发；群聊按配置触发"""
+    """判断当前消息是否应触发 LLM私聊始终触发；群聊按配置触发"""
     if isPrivate:
         return True
     if _isBotMentioned(message, botUsername):
@@ -180,7 +180,7 @@ def _injectReplyTextContext(message, pureText: str) -> str:
         replyUser = replyMsg.from_user.username or replyMsg.from_user.first_name or ""
     if len(replyText) > 300:
         replyText = replyText[:300] + "……"
-    prefix = f"@{replyUser}" if replyUser else "某人"
+    prefix = f"@{replyUser}" if replyUser else "未知"
     return f"[回复 {prefix} 的消息: {replyText}]\n\n{pureText}"
 
 
@@ -194,7 +194,7 @@ def _getReplyURLCandidateText(message) -> str:
 
 def _preparePurePromptText(message, rawText: str, botUsername: str) -> tuple[str, bool, str, str]:
     """
-    准备 LLM prompt text。
+    准备 LLM prompt text
 
     返回:
         pureText:           给 LLM 的 prompt text（可包含 reply 文本注入）
@@ -202,10 +202,10 @@ def _preparePurePromptText(message, rawText: str, botUsername: str) -> tuple[str
         urlIntentText:      当前用户消息去除 mention/#context 后的文本，用于判断 URL 读取意图
         urlCandidateText:   当前用户消息文本 + 被回复消息文本，用于提取 URL
 
-    安全不变式：
+    安全提醒：
         urlIntentText 必须在 _injectReplyTextContext 调用之前取值，
         否则 reply-to 消息里的"帮我总结"等文本会被误判为当前用户的意图，
-        变成第三方无声触发 URL 抓取的攻击面。
+        变成第三方无声触发 URL 抓取的攻击面
     """
     pureText, includeContext = _extractPureMessage(rawText, botUsername)
     if not pureText:
@@ -279,7 +279,7 @@ async def _enqueueLLMDebounce(
 
 def _collectDebouncedBatch(debounceKey: str) -> tuple[str, bool, list[dict], str, str] | None:
     """
-    收集防抖批次消息。
+    收集防抖批次消息
 
     返回:
         combinedText: 聚合后的 prompt text
@@ -452,6 +452,7 @@ async def _dispatchTextReply(
                     userID=userID,
                     includeContext=includeContext,
                     urlContexts=urlContexts,
+                    autoMode=autoMode,
                 )
             await context.bot.set_message_reaction(
                 chat_id=chatID,
@@ -633,7 +634,7 @@ async def _dispatchLLMReply(
 ):
     """
     后台任务异步处理器，负责处理 handleLLMMessage 发来的任务
-    防抖窗口结束后触发 聚合消息、调用 LLM 与 分发回复。
+    防抖窗口结束后触发 聚合消息、调用 LLM 与 分发回复
 
     由 handleLLMMessage 通过 asyncio.create_task 调用，
     不直接持有 update 对象（可能已过期），改用 chatID 和 triggerMsgID
@@ -714,14 +715,14 @@ async def _dispatchLLMReply(
 @handleTelegramErrors(errorReply="……呜、刚才这条消息没能处理好喵……")
 async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    LLM 消息处理器（私聊 / 群聊被 @）。
+    LLM 消息处理器（私聊 / 群聊被 @）
 
-    支持纯文字、图片 + 触发、reply 含图消息三种路径。
+    支持纯文字、图片 + 触发、reply 含图消息三种路径
     流程：
         LLM 开关检查 → :edit 审核捕获 → 白名单 + 速率限制 →
         图片提取与下载 → 防抖缓冲 → 取消旧任务 → 创建新防抖任务
 
-    实际调用 LLM 和分发回复在 _dispatchLLMReply 中异步执行。
+    实际调用 LLM 和分发回复在 _dispatchLLMReply 中异步执行
     """
     if not getLLMEnabled():
         return
@@ -736,8 +737,12 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _isCommandLikeMessage(rawText):
         return
 
-    # 检查消息是否经过 ops 编辑。使带 :edit 标签的消息，其标签被消费，不触发 llm 回复
+    # 检查消息是否经过 ops 编辑使带 :edit 标签的消息，其标签被消费，不触发 llm 回复
     if await handleEditReply(message, context):
+        return
+
+    # 检查消息是否为补充反馈重试使带 :fb 标签的消息，其标签被消费，不触发 llm 回复
+    if await handleFeedbackRetry(message, context):
         return
 
     # 检查文本是否非空，跳过仅适用于仅图片而无文本时
@@ -796,11 +801,11 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def register():
     return {
         "handlers": [
-            # 主消息处理器注册在 group 1，而非默认的 group 0。
+            # 主消息处理器注册在 group 1，而非默认的 group 0
             # 这是因为 shutdown.py 的 _mentionDispatch 也监听 MENTION 消息，
-            # 且注册在 group 0。将 LLM 消息处理器置于 group 1 可确保
+            # 且注册在 group 0将 LLM 消息处理器置于 group 1 可确保
             # _mentionDispatch 优先匹配；若关键词命中，_mentionDispatch 会
-            # 抛出 ApplicationHandlerStop 阻止本 handler 运行。
+            # 抛出 ApplicationHandlerStop 阻止本 handler 运行
             {"handler": MessageHandler(
                 (filters.TEXT | filters.PHOTO | filters.Document.IMAGE)
                 & ~filters.COMMAND,
