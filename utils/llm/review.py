@@ -247,6 +247,12 @@ async def reviewRetryWithFeedback(item: dict, feedback: str) -> dict:
             LogLevel.WARNING,
         )
 
+    # 转义方括号为全角【】，防止 ops 反馈伪造 [背景信息补充：] 等结构标记
+    # 干扰 LLM 对可信背景信息边界的判断（提示词注入）。
+    # 选用【】而非［］：后者与半角 [ 外观几乎相同，模型仍可能当作同类分隔符；
+    # 【】在中文语境是明确的引用括号，与系统标记在外观和语义上都不会撞车。
+    trimmed = trimmed.replace("[", "【").replace("]", "】")
+
     # 格式化并追加
     enhancedMsg = f"{item['originalMsg']}\n\n[背景信息补充：{trimmed}]"
 

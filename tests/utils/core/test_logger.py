@@ -72,6 +72,55 @@ def test_sanitize_for_log_clean_text():
     assert result == text
 
 
+def test_sanitize_for_log_carriage_return():
+    """回车符转义为 \\r（防回车覆盖行首伪造日志来源）
+
+    攻击者用 \\r 把光标移回行首再写入伪造内容，渲染时可覆盖真实时间戳/来源。
+    \\r 又会被 C0 控制字符正则吞掉、不留痕迹，所以必须先转义成字面量。
+    """
+    text = "user input\r[12:34:56] @Admin: rm -rf /"
+    result = sanitizeForLog(text)
+    assert "\r" not in result
+    assert "\\r" in result
+    # 伪造的内容仍在，但 \r 已是可见字面量，不会在渲染时覆盖行首
+    assert result == "user input\\r[12:34:56] @Admin: rm -rf /"
+
+
+def test_sanitize_for_log_redacts_secret_kv():
+    """脱敏 key=value / key: value 形式的密钥，防止误写入日志落盘"""
+    cases = [
+        "api_key=sk-abcdef123456",
+        "apikey: sk-abcdef123456",
+        "token=ghp_xxxxxxxxxxxx",
+        "password = hunter2",
+        'authorization: "Bearer abc.def.ghi"',
+        "secret=topsecret",
+    ]
+    for text in cases:
+        result = sanitizeForLog(text)
+        assert "REDACTED" in result, f"未脱敏: {text}"
+        # 原始敏感值不应残留
+        assert "sk-abcdef123456" not in result
+        assert "hunter2" not in result
+        assert "topsecret" not in result
+        assert "ghp_xxxxxxxxxxxx" not in result
+
+
+def test_sanitize_for_log_keeps_key_name():
+    """脱敏只替换值，键名保留（便于运维定位是哪个字段泄露）"""
+    result = sanitizeForLog("api_key=sk-secret")
+    assert "api_key" in result
+    assert "sk-secret" not in result
+
+
+def test_sanitize_for_log_no_false_positive_redaction():
+    """不含密钥键名的普通文本不被误脱敏"""
+    text = "user said: the value is 42 and the result is ok"
+    result = sanitizeForLog(text)
+    assert result == text
+    assert "REDACTED" not in result
+
+
 # ============================================================================
 # 测试 TreeLogger._extractUserName() — 纯函数
 # ============================================================================

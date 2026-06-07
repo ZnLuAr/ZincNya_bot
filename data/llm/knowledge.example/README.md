@@ -4,6 +4,8 @@
 > 真正的知识库条目放在 `data/llm/knowledge/` 下，含人设细节，已经被 `.gitignore` 排除掉了。
 > 想看完整设计的话，去翻 [docs/llm-knowledge.md](../../../docs/llm-knowledge.md) 喵。
 
+---
+
 ## 这是什么东西
 
 知识库（Knowledge Base）是咱 LLM 模块里的「按话题召回」层，跟 system prompt 是互补关系：
@@ -40,6 +42,8 @@ frontmatter 字段说明：
 | `tags_expanded` | 否 | 由 `scripts/expand_knowledge_tags.py` 自动维护，与 `tags` 合并入库 |
 | `priority` | 否 | 排序加成，相同分数时优先；默认 0 就好 |
 
+---
+
 ## 怎么开张一个新知识库
 
 ```bash
@@ -65,6 +69,8 @@ python scripts/expand_knowledge_tags.py
 - **tags 选词要贴近用户实际会说的词** —— 同义词全集就交给 `expand_knowledge_tags.py` 离线扩展，自己扩展太累了
 - **priority 别乱调** —— 默认 0 就行，只有「这条必须优先被召回」的时候再调高。
 - **风格类条目** —— 在正文里放 1-2 个示范回复（用引用块），再加一段触发条件说明会更好用。
+
+---
 
 ## 跟隐私的关系喵
 

@@ -361,6 +361,60 @@ def test_backup_restore_unknown_entry(backupEnv):
     assert mgr.restore_backup("does_not_exist.json") is False
 
 
+def test_restore_rejects_traversal_in_manifest(backupEnv):
+    """manifest 被篡改成 .. 穿越路径时，restore 必须拒绝写出到项目外。
+
+    original_path 来自 data/ 下无保护的 manifest.json，攻击者可改成
+    '../../evil.txt' 让 restore 把备份内容写到项目目录之外。
+    """
+    root, backup_dir, mgr = backupEnv
+    # 准备一个真实备份文件（内容随便写）
+    payload = backup_dir / "payload.bak"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    payload.write_text("attacker-controlled", encoding="utf-8")
+
+    mgr.manifest["backups"] = [{
+        "backup_file": "payload.bak",
+        "original_path": "../../evil.txt",
+        "sha256": edit_data.calculate_sha256(payload),
+        "timestamp": "2026-06-07T00:00:00",
+    }]
+
+    outside = root.parent.parent / "evil.txt"
+    existed_before = outside.exists()
+
+    ok = mgr.restore_backup("payload.bak")
+
+    assert ok is False
+    # 没有在项目外创建文件
+    if not existed_before:
+        assert not outside.exists()
+
+
+def test_restore_rejects_absolute_path_in_manifest(backupEnv, tmp_path):
+    """manifest original_path 为绝对路径（指向项目外）时，restore 必须拒绝。"""
+    root, backup_dir, mgr = backupEnv
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    payload = backup_dir / "payload.bak"
+    payload.write_text("attacker-controlled", encoding="utf-8")
+
+    target = tmp_path.parent / "abs_evil.txt"  # 在项目根之外
+    existed_before = target.exists()
+
+    mgr.manifest["backups"] = [{
+        "backup_file": "payload.bak",
+        "original_path": str(target),
+        "sha256": edit_data.calculate_sha256(payload),
+        "timestamp": "2026-06-07T00:00:00",
+    }]
+
+    ok = mgr.restore_backup("payload.bak")
+
+    assert ok is False
+    if not existed_before:
+        assert not target.exists()
+
+
 # ===========================================================================
 # DBEditor（明文单表数据库）
 # ===========================================================================
@@ -459,6 +513,39 @@ def test_dbeditor_import_rejects_bad_table_name(tmp_path):
     data = {"table": "mem; DROP TABLE x", "records": []}
     with pytest.raises(ValueError):
         edit_data.DBEditor.import_from_json(db, data)
+
+
+def test_dbeditor_import_rejects_unknown_column(tmp_path):
+    """记录里出现 schema 之外的列名应被拒绝（防止恶意 key 注入 SQL）
+
+    列名来自不可信 JSON 且会被直接拼进 INSERT/UPDATE 语句。
+    即使表名合法，含未知/构造列名的记录也必须在执行前被挡下。
+    """
+    db = tmp_path / "mem.db"
+    _make_single_table_db(db)
+    data = {
+        "table": "memory_entries",
+        "records": [
+            {"id": None, "content": "x", 'evil) VALUES (1)--': "boom"},
+        ],
+    }
+    with pytest.raises(ValueError):
+        edit_data.DBEditor.import_from_json(db, data, dry_run=False)
+
+    # 表与原数据未被破坏
+    conn = sqlite3.connect(db)
+    count = conn.execute("SELECT COUNT(*) FROM memory_entries").fetchone()[0]
+    conn.close()
+    assert count == 1
+
+
+def test_dbeditor_import_unknown_column_blocked_even_dry_run(tmp_path):
+    """dry_run 下同样要拒绝未知列名（校验先于任何 SQL 生成）"""
+    db = tmp_path / "mem.db"
+    _make_single_table_db(db)
+    data = {"table": "memory_entries", "records": [{"id": None, "bogus": 1}]}
+    with pytest.raises(ValueError):
+        edit_data.DBEditor.import_from_json(db, data, dry_run=True)
 
 
 # ===========================================================================

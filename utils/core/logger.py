@@ -86,6 +86,18 @@ from config import LOG_DIR
 # 匹配 ANSI 转义序列（如 \x1b[31m）和其他 C0/C1 控制字符
 _ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b[^[]?')
 _CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+# 即使调用方误把密钥/令牌写进日志，也应该在落盘前脱敏。
+# 匹配 api_key / apikey / token / password / passwd / secret / authorization
+# 等键名后跟 = 或 : 的取值，把值替换为 ***REDACTED***。
+# 取值分两种形态：
+#   带引号 —— 匹配到对应的右引号（值内允许空格，如 "Bearer ab cd"）；
+#   不带引号 —— 匹配到首个空白为止。
+_SECRET_RE = re.compile(
+    r'((?:api[_-]?key|token|password|passwd|secret|authorization|access[_-]?token)'
+    r'\s*[=:]\s*)'
+    r'(?:(["\'])[^"\']*\2|[^\s"\']+)',
+    re.IGNORECASE,
+)
 
 
 
@@ -123,12 +135,17 @@ class LogChildType(str , Enum):
 
 
 def sanitizeForLog(text: str) -> str:
-    """剥离 ANSI 转义序列和控制字符，防止日志注入；换行符转义为 \\n"""
+    """剥离 ANSI 转义序列和控制字符，防止日志注入；换行/回车转义为字面量"""
     if not text:
         return text
     text = _ANSI_ESCAPE_RE.sub('', text)
+    # 先把回车/换行转义为字面量，再剥离其余控制字符。
+    # 必须先处理 \r：否则攻击者用 \r 回车覆盖行首，可在日志里伪造来源
+    # （如 "\r[12:34] @Admin: ..."），而 \r 本身会被控制字符正则吞掉、不留痕迹。
+    text = text.replace('\r', '\\r').replace('\n', '\\n')
     text = _CONTROL_CHAR_RE.sub('', text)
-    text = text.replace('\n', '\\n')
+    # 即使调用方误传密钥/令牌，也应该在落盘前把取值脱敏
+    text = _SECRET_RE.sub(r'\1\2***REDACTED***\2', text)
     return text
 
 
