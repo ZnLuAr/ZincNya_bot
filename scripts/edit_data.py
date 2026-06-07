@@ -55,7 +55,7 @@ except ImportError:
 # ============================================================================
 
 # 项目根目录
-PROJECT_ROOT = Path(__file__).parent.parent.absolute()
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 DATA_DIR = PROJECT_ROOT / "data"
 BACKUP_DIR = DATA_DIR / "zincnya_backup" / "edit_data"
 KEY_PATH = DATA_DIR / ".chatKey"
@@ -314,6 +314,11 @@ def get_db_record_count(db_path: Path) -> Optional[int]:
 
         if len(tables) == 1:
             table_name = tables[0][0]
+            # 表名虽来自 sqlite_master（非用户直接输入），但库文件本身可能被替换，
+            # 仍按与其它查询一致的规则校验，避免恶意库名注入。
+            if not is_valid_table_name(table_name):
+                conn.close()
+                return None
             count = cur.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
             conn.close()
             return count
@@ -453,7 +458,13 @@ class BackupManager:
             print_error(f"备份文件不存在: {backup_path}")
             return False
 
-        original_path = PROJECT_ROOT / backup_entry['original_path']
+        # manifest.json 是 data/ 下的明文文件，可能被篡改。original_path 取自其中，
+        # 必须 resolve 后限制在项目目录内，否则被篡改的绝对路径或 .. 遍历会让
+        # 下方的 replace() 把备份内容写到项目外的任意可写位置（如 /etc/cron.d）。
+        original_path = (PROJECT_ROOT / backup_entry['original_path']).resolve()
+        if original_path != PROJECT_ROOT and PROJECT_ROOT not in original_path.parents:
+            print_error(f"备份记录的原始路径越界，拒绝恢复: {backup_entry['original_path']}")
+            return False
 
         # 验证 SHA256
         current_sha256 = calculate_sha256(backup_path)
@@ -649,74 +660,93 @@ class DBEditor:
         if not is_valid_table_name(table_name):
             raise ValueError(f"不安全的表名: {table_name}")
 
-        # 连接数据库
+        # 连接数据库。用 try/finally 确保任何异常路径都回滚并关闭连接，
+        # 否则中途抛错会泄露连接（依赖 GC 隐式回滚），在 Windows 上还会锁住 DB 文件。
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
-        # 读取现有记录
-        existing_rows = cur.execute(f"SELECT * FROM {table_name}").fetchall()
-        existing_records = {row["id"]: dict(row) for row in existing_rows if "id" in row.keys()}
+        try:
+            # 取出表的真实列名作为白名单。列名来自被编辑/恢复的 JSON（不可信），
+            # 会被直接拼进 INSERT/UPDATE 语句，因此必须按真实 schema 校验，
+            # 防止恶意 key（如 "x); DROP TABLE ..--"）注入 SQL。
+            valid_columns = {row[1] for row in cur.execute(f"PRAGMA table_info({table_name})").fetchall()}
 
-        # 对比生成 SQL
-        sql_statements = []
-        stats = {"insert": 0, "update": 0, "delete": 0}
+            def _check_columns(rec_keys):
+                for k in rec_keys:
+                    if k not in valid_columns:
+                        raise ValueError(f"不安全或未知的列名: {k}")
 
-        # 处理新记录（INSERT 或 UPDATE）
-        for rec in new_records:
-            rec_id = rec.get("id")
+            # 读取现有记录
+            existing_rows = cur.execute(f"SELECT * FROM {table_name}").fetchall()
+            existing_records = {row["id"]: dict(row) for row in existing_rows if "id" in row.keys()}
 
-            # 序列化 JSON 字段
-            if 'tags_json' in rec and isinstance(rec['tags_json'], list):
-                rec['tags_json'] = json.dumps(rec['tags_json'], ensure_ascii=False)
+            # 对比生成 SQL
+            sql_statements = []
+            stats = {"insert": 0, "update": 0, "delete": 0}
 
-            if rec_id is None or rec_id not in existing_records:
-                # INSERT（新记录或 id 为 null）
-                columns = [k for k in rec.keys() if k != 'id' or rec['id'] is not None]
-                placeholders = ', '.join(['?'] * len(columns))
-                col_names = ', '.join(columns)
-                values = [rec[k] for k in columns]
+            # 处理新记录（INSERT 或 UPDATE）
+            for rec in new_records:
+                rec_id = rec.get("id")
 
-                sql = f"INSERT INTO {table_name} ({col_names}) VALUES ({placeholders})"
-                sql_statements.append((sql, values))
-                stats["insert"] += 1
+                # 校验本条记录的所有列名都属于真实 schema（防 SQL 注入）
+                _check_columns(rec.keys())
 
-                if not dry_run:
-                    cur.execute(sql, values)
+                # 序列化 JSON 字段
+                if 'tags_json' in rec and isinstance(rec['tags_json'], list):
+                    rec['tags_json'] = json.dumps(rec['tags_json'], ensure_ascii=False)
+
+                if rec_id is None or rec_id not in existing_records:
+                    # INSERT（新记录或 id 为 null）
+                    columns = [k for k in rec.keys() if k != 'id' or rec['id'] is not None]
+                    placeholders = ', '.join(['?'] * len(columns))
+                    col_names = ', '.join(columns)
+                    values = [rec[k] for k in columns]
+
+                    sql = f"INSERT INTO {table_name} ({col_names}) VALUES ({placeholders})"
+                    sql_statements.append((sql, values))
+                    stats["insert"] += 1
+
+                    if not dry_run:
+                        cur.execute(sql, values)
+                else:
+                    # UPDATE（更新现有记录）
+                    set_clause = ', '.join([f"{k} = ?" for k in rec.keys() if k != 'id'])
+                    values = [rec[k] for k in rec.keys() if k != 'id'] + [rec_id]
+
+                    sql = f"UPDATE {table_name} SET {set_clause} WHERE id = ?"
+                    sql_statements.append((sql, values))
+                    stats["update"] += 1
+
+                    if not dry_run:
+                        cur.execute(sql, values)
+
+            # 处理删除（现有记录在新 JSON 中不存在）
+            new_ids = {rec.get("id") for rec in new_records if rec.get("id") is not None}
+            for existing_id in existing_records:
+                if existing_id not in new_ids:
+                    sql = f"DELETE FROM {table_name} WHERE id = ?"
+                    sql_statements.append((sql, [existing_id]))
+                    stats["delete"] += 1
+
+                    if not dry_run:
+                        cur.execute(sql, [existing_id])
+
+            # 提交或回滚
+            if not dry_run:
+                conn.commit()
+                print_success(f"事务提交成功")
+                print_info(f"插入 {stats['insert']} 条, 更新 {stats['update']} 条, 删除 {stats['delete']} 条")
             else:
-                # UPDATE（更新现有记录）
-                set_clause = ', '.join([f"{k} = ?" for k in rec.keys() if k != 'id'])
-                values = [rec[k] for k in rec.keys() if k != 'id'] + [rec_id]
+                print_info(f"[DRY-RUN] 将执行:")
+                print_info(f"  插入 {stats['insert']} 条, 更新 {stats['update']} 条, 删除 {stats['delete']} 条")
 
-                sql = f"UPDATE {table_name} SET {set_clause} WHERE id = ?"
-                sql_statements.append((sql, values))
-                stats["update"] += 1
-
-                if not dry_run:
-                    cur.execute(sql, values)
-
-        # 处理删除（现有记录在新 JSON 中不存在）
-        new_ids = {rec.get("id") for rec in new_records if rec.get("id") is not None}
-        for existing_id in existing_records:
-            if existing_id not in new_ids:
-                sql = f"DELETE FROM {table_name} WHERE id = ?"
-                sql_statements.append((sql, [existing_id]))
-                stats["delete"] += 1
-
-                if not dry_run:
-                    cur.execute(sql, [existing_id])
-
-        # 提交或回滚
-        if not dry_run:
-            conn.commit()
-            print_success(f"事务提交成功")
-            print_info(f"插入 {stats['insert']} 条, 更新 {stats['update']} 条, 删除 {stats['delete']} 条")
-        else:
-            print_info(f"[DRY-RUN] 将执行:")
-            print_info(f"  插入 {stats['insert']} 条, 更新 {stats['update']} 条, 删除 {stats['delete']} 条")
-
-        conn.close()
-        return sql_statements
+            return sql_statements
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 class EncryptedDBEditor:
@@ -813,70 +843,76 @@ class EncryptedDBEditor:
 
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
+        # 异常时显式回滚并关闭连接，避免连接泄漏与 Windows 下 DB 文件被锁。
+        try:
+            cur = conn.cursor()
 
-        # 读取现有记录
-        existing_rows = cur.execute("SELECT * FROM messages").fetchall()
-        existing_records = {row["id"]: dict(row) for row in existing_rows}
+            # 读取现有记录
+            existing_rows = cur.execute("SELECT * FROM messages").fetchall()
+            existing_records = {row["id"]: dict(row) for row in existing_rows}
 
-        sql_statements = []
-        stats = {"insert": 0, "update": 0, "delete": 0}
+            sql_statements = []
+            stats = {"insert": 0, "update": 0, "delete": 0}
 
-        # 处理新记录
-        for rec in new_records:
-            rec_id = rec.get("id")
+            # 处理新记录
+            for rec in new_records:
+                rec_id = rec.get("id")
 
-            # 加密 content 字段
-            if 'content' in rec:
-                encrypted_content = fernet.encrypt(rec['content'].encode('utf-8'))
-                rec['content'] = encrypted_content
+                # 加密 content 字段
+                if 'content' in rec:
+                    encrypted_content = fernet.encrypt(rec['content'].encode('utf-8'))
+                    rec['content'] = encrypted_content
 
-            if rec_id is None or rec_id not in existing_records:
-                # INSERT
-                columns = ['chat_id', 'direction', 'sender', 'content', 'timestamp']
-                placeholders = ', '.join(['?'] * len(columns))
-                col_names = ', '.join(columns)
-                values = [rec.get(k) for k in columns]
+                if rec_id is None or rec_id not in existing_records:
+                    # INSERT
+                    columns = ['chat_id', 'direction', 'sender', 'content', 'timestamp']
+                    placeholders = ', '.join(['?'] * len(columns))
+                    col_names = ', '.join(columns)
+                    values = [rec.get(k) for k in columns]
 
-                sql = f"INSERT INTO messages ({col_names}) VALUES ({placeholders})"
-                sql_statements.append((sql, values))
-                stats["insert"] += 1
+                    sql = f"INSERT INTO messages ({col_names}) VALUES ({placeholders})"
+                    sql_statements.append((sql, values))
+                    stats["insert"] += 1
 
-                if not dry_run:
-                    cur.execute(sql, values)
+                    if not dry_run:
+                        cur.execute(sql, values)
+                else:
+                    # UPDATE
+                    set_clause = 'chat_id = ?, direction = ?, sender = ?, content = ?, timestamp = ?'
+                    values = [rec['chat_id'], rec['direction'], rec['sender'], rec['content'], rec['timestamp'], rec_id]
+
+                    sql = f"UPDATE messages SET {set_clause} WHERE id = ?"
+                    sql_statements.append((sql, values))
+                    stats["update"] += 1
+
+                    if not dry_run:
+                        cur.execute(sql, values)
+
+            # 处理删除
+            new_ids = {rec.get("id") for rec in new_records if rec.get("id") is not None}
+            for existing_id in existing_records:
+                if existing_id not in new_ids:
+                    sql = f"DELETE FROM messages WHERE id = ?"
+                    sql_statements.append((sql, [existing_id]))
+                    stats["delete"] += 1
+
+                    if not dry_run:
+                        cur.execute(sql, [existing_id])
+
+            if not dry_run:
+                conn.commit()
+                print_success(f"事务提交成功")
+                print_info(f"插入 {stats['insert']} 条, 更新 {stats['update']} 条, 删除 {stats['delete']} 条")
             else:
-                # UPDATE
-                set_clause = 'chat_id = ?, direction = ?, sender = ?, content = ?, timestamp = ?'
-                values = [rec['chat_id'], rec['direction'], rec['sender'], rec['content'], rec['timestamp'], rec_id]
+                print_info(f"[DRY-RUN] 将执行:")
+                print_info(f"  插入 {stats['insert']} 条, 更新 {stats['update']} 条, 删除 {stats['delete']} 条")
 
-                sql = f"UPDATE messages SET {set_clause} WHERE id = ?"
-                sql_statements.append((sql, values))
-                stats["update"] += 1
-
-                if not dry_run:
-                    cur.execute(sql, values)
-
-        # 处理删除
-        new_ids = {rec.get("id") for rec in new_records if rec.get("id") is not None}
-        for existing_id in existing_records:
-            if existing_id not in new_ids:
-                sql = f"DELETE FROM messages WHERE id = ?"
-                sql_statements.append((sql, [existing_id]))
-                stats["delete"] += 1
-
-                if not dry_run:
-                    cur.execute(sql, [existing_id])
-
-        if not dry_run:
-            conn.commit()
-            print_success(f"事务提交成功")
-            print_info(f"插入 {stats['insert']} 条, 更新 {stats['update']} 条, 删除 {stats['delete']} 条")
-        else:
-            print_info(f"[DRY-RUN] 将执行:")
-            print_info(f"  插入 {stats['insert']} 条, 更新 {stats['update']} 条, 删除 {stats['delete']} 条")
-
-        conn.close()
-        return sql_statements
+            return sql_statements
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 # ============================================================================
@@ -1174,6 +1210,7 @@ def edit_encrypted_database(db_path: Path, backup_mgr: BackupManager, editor_ove
         print_info("已取消")
         return False
 
+    tmp_path = None
     try:
         # 导出
         print_info("解密并导出...")
@@ -1196,14 +1233,12 @@ def edit_encrypted_database(db_path: Path, backup_mgr: BackupManager, editor_ove
         # 打开编辑器
         if not EditorSelector.open_file(tmp_path, editor_override):
             print_error("编辑器打开失败")
-            tmp_path.unlink()
             return False
 
         # 检查是否修改
         new_sha256 = calculate_sha256(tmp_path)
         if original_sha256 == new_sha256:
             print_info("文件未修改，跳过写入")
-            tmp_path.unlink()
             return True
 
         print_info("检测到文件已修改")
@@ -1215,13 +1250,11 @@ def edit_encrypted_database(db_path: Path, backup_mgr: BackupManager, editor_ove
         valid, parsed_data, error = Validator.validate_json_format(modified_data)
         if not valid:
             print_error(f"JSON 格式错误: {error}")
-            print_warning(f"临时文件保留在: {tmp_path}")
             return False
 
         valid, error = Validator.validate_required_fields(parsed_data)
         if not valid:
             print_error(f"必需字段验证失败: {error}")
-            print_warning(f"临时文件保留在: {tmp_path}")
             return False
 
         # 确认写入
@@ -1231,7 +1264,6 @@ def edit_encrypted_database(db_path: Path, backup_mgr: BackupManager, editor_ove
                 dry_run = True
             elif response != 'y':
                 print_info("已取消")
-                tmp_path.unlink()
                 return False
 
         # 导入
@@ -1245,12 +1277,8 @@ def edit_encrypted_database(db_path: Path, backup_mgr: BackupManager, editor_ove
 
         except Exception as e:
             print_error(f"数据库写入失败: {e}")
-            print_warning(f"临时文件保留在: {tmp_path}")
             return False
 
-        # 清理
-        tmp_path.unlink()
-        print_info("临时文件已清理")
         return True
 
     except Exception as e:
@@ -1258,6 +1286,17 @@ def edit_encrypted_database(db_path: Path, backup_mgr: BackupManager, editor_ove
         import traceback
         traceback.print_exc()
         return False
+
+    finally:
+        # 安全：临时文件含解密后的明文聊天记录，无论成功/失败/取消/异常，
+        # 都必须删除，绝不保留在系统临时目录（多用户环境下可被其它用户读取）。
+        if tmp_path is not None and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+            else:
+                print_info("临时文件已清理")
 
 
 def show_main_menu(files_by_type: Dict[str, List[Path]]) -> Optional[Path]:
@@ -1476,14 +1515,15 @@ def main():
         # 直接编辑指定文件
         file_path = Path(args.file)
 
-        # 如果是相对路径，转换为绝对路径
+        # 统一先解析为真实绝对路径（消解 .. 与符号链接），再做项目目录限制。
+        # 注意：绝对路径同样必须 resolve，否则 D:\proj\..\..\secret 这类路径
+        # 能在词法层通过 relative_to 检查，却在 OS 层逃逸到项目外（路径遍历）。
         if not file_path.is_absolute():
-            file_path = (PROJECT_ROOT / file_path).resolve()
+            file_path = PROJECT_ROOT / file_path
+        file_path = file_path.resolve()
 
         # 安全检查：验证路径在项目目录下（防止路径遍历攻击）
-        try:
-            file_path.relative_to(PROJECT_ROOT)
-        except ValueError:
+        if file_path != PROJECT_ROOT and PROJECT_ROOT not in file_path.parents:
             print_error(f"文件路径必须在项目目录下: {PROJECT_ROOT}")
             return
 

@@ -409,8 +409,10 @@ async def chatScreen(app , bot: Bot , targetChatID: str):
                     content = _extractDisplayText(msg)
                     await saveMessage(targetChatID, "incoming", sender, content)
 
-                    ts, sndr, txt = _formatMessage("incomingMessage", msg)
-                    ui.appendIncomingMessage(ts, sndr, txt)
+                    # sender / content 已解析，直接复用，不再走 _formatMessage()
+                    # 对同一 msg 二次调用 _getSenderName + _extractDisplayText。
+                    timestamp = datetime.now().strftime("%H:%M:%S")
+                    ui.appendIncomingMessage(timestamp, sender, content)
 
                 except asyncio.CancelledError:
                     break

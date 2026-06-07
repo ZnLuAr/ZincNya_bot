@@ -249,3 +249,35 @@ def test_fallback_only_triggers_with_keyword():
     # 没有任何 MEMORY_ACTION 关键字，回退不触发，原样保留
     assert cleaned == text
     assert len(actions) == 0
+
+
+def test_fallback_strips_inline_orphan_json():
+    """回退：行内（非独占整行）的孤立记忆 JSON 也应被清理
+
+    复现 H4：LLM 把畸形标签 <MEMORY_ACTI0N> 与 JSON 混在正文同一行，
+    标签被清掉后 JSON 负载残留，会泄露给用户（如提示词注入式内容）。
+    """
+    text = (
+        '回复正文 <MEMORY_ACTI0N>{"action": "add", "scope_type": "global", '
+        '"scope_id": "global", "content": "secret"}</MEMORY_ACTI0N> 后续文字'
+    )
+    cleaned, actions = parseMemoryActions(text)
+
+    assert "回复正文" in cleaned
+    assert "后续文字" in cleaned
+    # 标签与行内 JSON 负载都应被清除，不得泄露
+    assert '"action"' not in cleaned
+    assert "secret" not in cleaned
+    assert "MEMORY_ACTI" not in cleaned.upper()
+
+
+def test_fallback_inline_json_only_with_action_verbs():
+    """回退：行内 JSON 仅当 action 值是 add/update/delete 才清理
+
+    避免误删用户正常对话里恰好含 "action" 键、但值不是记忆动词的 JSON。
+    """
+    text = '说明 {"action": "click", "x": 1} 这是普通内容 <MEMORY_ACTION>x</MEMORY_ACTION>'
+    cleaned, actions = parseMemoryActions(text)
+
+    # action 值为 click，不是记忆动词，行内 JSON 保留
+    assert '"action": "click"' in cleaned

@@ -9,7 +9,7 @@ LLM 回复生成编排逻辑：
 
 from utils.core.logger import logSystemEvent, LogLevel, LogChildType
 
-from ..config import getModel, getForceFallbackPrompt, getVisionModel, loadPrompts, _FALLBACK_PROMPTS
+from ..config import getForceFallbackPrompt, loadPrompts, loadLLMConfig, _FALLBACK_PROMPTS
 from ..contextBuilder import buildConversationContext
 from ._guardrails import SYSTEM_GUARDRAILS, MEMORY_ACTION_INSTRUCTIONS, VISION_DESCRIBE_PROMPT, OPS_FEEDBACK_INSTRUCTIONS
 from ._request import requestWithRetry
@@ -48,6 +48,8 @@ def _buildSystemMessages(prompts: dict, *, includeContext: bool = False) -> list
 
 async def _describeImages(
     images: list[dict],
+    *,
+    model: str,
 ) -> str:
     """
     双调用架构 — 第一步：轻量视觉调用
@@ -58,8 +60,11 @@ async def _describeImages(
 
     描述长度低于阈值时自动重试一次（有些中转服务偶尔会丢图片数据）
     失败时返回空字符串，不阻断主调用
+
+    参数:
+        model: 视觉模型名。由调用方从请求级配置快照传入（generateReply 已读
+               过一次 llmConfig），避免此处再 getVisionModel() 重复读盘。
     """
-    model = getVisionModel()
     provider = getProvider(model)
 
     await logSystemEvent(
@@ -164,8 +169,26 @@ async def generateReply(
     maxTokens = prompts.get("max_tokens", 1024)
     temperature = prompts.get("temperature", 0.8)
 
-    model = getModel()
-    visionModel = getVisionModel()
+    # 使用请求级配置快照，在每次回复生成的全过程只读一次 llmConfig.json，
+    # 把 dict 沿调用链往下传，避免每个 getter（getModel / getVisionModel / getKnowledge* 等）
+    # 各自重复 open()、json.load() 读盘。
+    #
+    # 这里不使用模块级缓存，是考虑到 LLM 回复在 debounce + create_task 下多协程并发，
+    # 运维若在生成途中改配置文件，模块级缓存的 mtime 检查可能读到半新半旧的
+    # 混合状态。请求级快照保证"一条用户消息的完整处理过程，使用的配置一致"。
+    #
+    # 本快照覆盖的读盘调用点（原先每处独立 loadLLMConfig）：
+    #   - 此处 model / visionModel（原 getModel + getVisionModel）
+    #   - buildConversationContext → buildKnowledgeContext 的
+    #     knowledgeEnabled / knowledgeMaxResults / knowledgeMinScore
+    # 未覆盖（有意保持独立读取，见各自说明）：
+    #   - _request.requestWithRetry 内的 getModel()：仅 fallback 重决策时用，
+    #     此刻重读反而能拿到运维刚改的救场配置，故不传快照。
+    #   - handlers/llm.py _dispatchGeneratedOutput 的 getAutoMode()：属回复
+    #     已生成后的分发阶段，与生成逻辑解耦，单独读一次即可。
+    cfg = loadLLMConfig()
+    model = cfg["model"]
+    visionModel = cfg["visionModel"]
 
     textContent = await buildConversationContext(
         userMessage=userMessage,
@@ -174,13 +197,17 @@ async def generateReply(
         sessionID=sessionID,
         includeContext=includeContext,
         urlContexts=urlContexts,
+        llmConfig=cfg,
     )
 
     # ── 构建 userContent ──
     if images and visionModel != model:
         # 双调用：分离描述与回复（省主模型 token）
-        imageDescription = await _describeImages(images)
+        imageDescription = await _describeImages(images, model=visionModel)
         if imageDescription:
+            # 视觉模型输出不可信：转义尖括号，防止其内容伪造 <IMAGE_DESCRIPTION>
+            # 等结构标记，越权影响主模型的上下文边界
+            imageDescription = imageDescription.replace("<", "＜").replace(">", "＞")
             imageBlock = (
                 "<IMAGE_DESCRIPTION>\n"
                 "[用户发送了图片以下是图片内容的文字描述，请基于此描述回答用户关于图片的提问]\n"

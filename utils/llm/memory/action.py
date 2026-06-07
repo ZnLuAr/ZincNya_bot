@@ -43,6 +43,7 @@ from .database import (
 LLM_MEMORY_PRIORITY_CAP = 3
 LLM_MEMORY_MAX_CONTENT_LEN = 500
 LLM_MEMORY_MAX_ACTIONS = 3
+LLM_MEMORY_MAX_TAGS = 10            # 单条记忆最多标签数，防止 LLM 输出超长 tags 撑爆条目
 _VALID_ACTIONS = {"add", "update", "delete"}
 _VALID_SCOPE_TYPES = {
     MEMORY_SCOPE_GLOBAL,
@@ -112,6 +113,8 @@ def _normalizeTags(tags) -> Optional[list[str]]:
             continue
         seen.add(tag)
         result.append(tag)
+        if len(result) >= LLM_MEMORY_MAX_TAGS:
+            break
     return result
 
 
@@ -251,13 +254,22 @@ def parseMemoryActions(text: str) -> tuple[str, list[MemoryAction]]:
         # 匹配 <MEMORY_ACTION 或 <MEMORY_ACTI 开头的标签（容忍常见拼写错误如 ACTI0N）
         cleaned = re.sub(r"</?MEMORY_ACTI(?:ON|0N)[^>]*>", "", cleaned, flags=re.IGNORECASE)
         # 清理孤立的 JSON 块（疑似记忆操作但标签缺失）
-        # 只匹配单行 JSON 且包含 "action": "add|update|delete"
+        # 同时覆盖两种残留形态：
+        #   1) JSON 独占整行（^...$）
+        #   2) JSON 夹在正常文本中间（如「Reply {"action":...} 谢谢」）——
+        #      标签丢失时若只删整行 JSON，行内残留会把记忆操作负载泄露给用户
         # 限制 [^}] 匹配长度防止灾难性回溯
         cleaned = re.sub(
             r'^\s*\{[^}]{0,500}"action"\s*:\s*"(?:add|update|delete)"[^}]{0,500}\}\s*$',
             "",
             cleaned,
             flags=re.MULTILINE | re.IGNORECASE
+        )
+        cleaned = re.sub(
+            r'\{[^}]{0,500}"action"\s*:\s*"(?:add|update|delete)"[^}]{0,500}\}',
+            "",
+            cleaned,
+            flags=re.IGNORECASE
         )
 
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)

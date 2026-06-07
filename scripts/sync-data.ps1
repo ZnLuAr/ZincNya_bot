@@ -21,6 +21,25 @@ if (-not $REMOTE_HOST -or -not $REMOTE_PORT -or -not $REMOTE_PATH) {
     exit 1
 }
 
+# 安全校验：REMOTE_PATH / REMOTE_HOST / REMOTE_PORT 会被拼进 SSH 远程命令
+# 字符串，含 shell 元字符时可在服务器执行任意命令（命令注入 → RCE）。
+# 采用白名单（只允许已知安全字符），比黑名单更稳妥；正则用单引号字符串
+# 承载，避免 PowerShell 转义歧义。配合下游单引号包裹形成双重防护。
+# REMOTE_PATH：unix 路径，允许字母数字与 / . _ - ~（不含空格与元字符）
+if ($REMOTE_PATH -notmatch '^[A-Za-z0-9/._~-]+$') {
+    Write-Host "错误: REMOTE_PATH 含有非法字符，仅允许字母数字与 / . _ - ~，疑似命令注入，已拒绝" -ForegroundColor Red
+    exit 1
+}
+# REMOTE_HOST：[user@]host[:port]，允许字母数字与 @ . _ - :
+if ($REMOTE_HOST -notmatch '^[A-Za-z0-9@._:-]+$') {
+    Write-Host "错误: REMOTE_HOST 含有非法字符，疑似命令注入，已拒绝" -ForegroundColor Red
+    exit 1
+}
+if ($REMOTE_PORT -notmatch '^\d+$') {
+    Write-Host "错误: REMOTE_PORT 必须为数字" -ForegroundColor Red
+    exit 1
+}
+
 $LocalPath = Join-Path $PSScriptRoot "..\data\"
 
 # 确保本地 data/ 目录存在

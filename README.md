@@ -226,12 +226,45 @@ ZincNya_bot/
 │   ├── conftest.py             # 全局 fixture 与测试配置
 │   ├── test_module_system.py   # 模块系统测试
 │   ├── handlers/               # Handler 层测试
+│   │   ├── test_reaction.py    # reaction 记录测试
+│   │   └── test_shutdown.py    # 远程关机/重启/状态测试
+│   ├── scripts/                # 辅助脚本测试
+│   │   └── test_edit_data.py   # data 编辑器（路径越界、列名注入、备份恢复）测试
+│   ├── integration/            # 集成测试
 │   └── utils/                  # 工具模块测试
+│       ├── test_bookSearchAPI.py # Open Library API 测试
+│       ├── test_chatUI.py      # 聊天界面测试
+│       ├── test_downloader.py  # 表情包下载与转换测试
+│       ├── test_newsAPI.py     # 新闻 API 测试
 │       ├── core/               # 核心基础设施测试
+│       │   ├── test_database.py      # SQLite 封装测试
+│       │   ├── test_errorHandler.py  # 错误处理测试
+│       │   ├── test_logger.py        # 日志系统（含日志注入/密钥脱敏）测试
+│       │   └── test_resourceManager.py # 资源清理测试
 │       ├── llm/                # LLM 模块测试
+│       │   ├── test_config.py        # 配置管理测试
+│       │   ├── test_contextBuilder.py # 上下文组装测试
+│       │   ├── test_review.py        # 审核共享操作测试
+│       │   ├── test_state.py         # 运行时状态测试
+│       │   ├── test_urlReader.py     # 受控 URL 抓取（SSRF 防护）测试
+│       │   ├── client/               # API 客户端测试
+│       │   │   └── test_generate.py  # 回复生成编排测试
+│       │   ├── knowledge/            # 知识库子系统测试
+│       │   │   ├── test_loader.py    # Markdown 解析与增量索引测试
+│       │   │   └── test_tokenizer.py # 分词与 BM25 评分测试
+│       │   └── memory/               # Structured memory 测试
+│       │       └── test_action_parsing.py # 记忆操作解析/校验测试
 │       ├── todos/              # 待办事项测试
+│       │   ├── test_database.py      # 数据存储测试
+│       │   ├── test_reminder.py      # 提醒循环测试
+│       │   ├── test_tgRender.py      # Telegram 渲染测试
+│       │   └── test_utils.py         # 时间/优先级解析测试
 │       ├── nyaQuoteManager/    # 语录管理测试
+│       │   ├── test_data.py          # 数据层测试
+│       │   └── test_ui.py            # UI 层测试
 │       └── whitelistManager/   # 白名单管理测试
+│           ├── test_data.py          # 数据层测试
+│           └── test_ui.py            # UI 层测试
 │
 └── log/                        # 日志文件（不会被提交）
     ├── log_YYYY-MM-DD.log      # 操作日志（每天一个）
