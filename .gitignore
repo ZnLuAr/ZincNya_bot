@@ -39,6 +39,7 @@ env/
 .vscode/
 .idea/
 .claude/
+CLAUDE.md
 *.swp
 *.swo
 *~

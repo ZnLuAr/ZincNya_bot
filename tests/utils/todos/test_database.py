@@ -23,6 +23,7 @@ from utils.todos.database import (
     getPendingReminders,
     TIMESTAMP_FORMAT,
 )
+from utils.core.crypto import decryptText
 
 
 # ============================================================================
@@ -156,7 +157,8 @@ async def test_add_todo_basic(todos_db):
 
         assert row['chat_id'] == 'chat1'
         assert row['user_id'] == 'user1'
-        assert row['content'] == 'Buy milk'
+        # content 列已加密存储，需解密后比对
+        assert decryptText(row['content']) == 'Buy milk'
         assert row['remind_time'] is None
         assert row['priority'] == 'P_'
         assert row['status'] == 'pending'
@@ -382,7 +384,7 @@ async def test_update_todo_content(todos_db):
 
         cursor.execute("SELECT content FROM todos WHERE id = ?", (todo_id,))
         row = cursor.fetchone()
-        assert row['content'] == 'New content'
+        assert decryptText(row['content']) == 'New content'
 
 
 @pytest.mark.asyncio
@@ -786,7 +788,7 @@ async def test_sql_injection_protection(todos_db):
         row = cursor.fetchone()
         assert row is not None
 
-        # 内容应该被当作普通字符串存储
+        # 内容应该被当作普通字符串存储（加密后），解密可还原
         cursor.execute("SELECT content FROM todos WHERE id = ?", (todo_id,))
         row = cursor.fetchone()
-        assert row['content'] == malicious_content
+        assert decryptText(row['content']) == malicious_content

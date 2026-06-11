@@ -1,7 +1,7 @@
 """
 utils/todos/database.py
 
-待办事项数据库模块，使用 SQLite 实现本地明文存储。
+待办事项数据库模块，使用 SQLite 存储；content 列经 Fernet 加密（at-rest）。
 
 主要功能：
     - 添加、查询、更新、删除待办事项
@@ -13,13 +13,17 @@ utils/todos/database.py
 数据存储
 ================================================================================
 
-数据库文件：data/todos.db（明文存储）
+数据库文件：data/todos.db（content 列加密存储，元数据明文）
+
+待办内容承载用户隐私（如「几点写什么作业」），故 content 列经 Fernet
+加密后以 BLOB 存储；其余用于检索/排序的元数据列保持明文。
+加密机制见 utils/core/crypto.py（与 chatHistory / llmMemory 共用 .chatKey）。
 
 数据库表结构 todos：
     - id:           INTEGER PRIMARY KEY
     - chat_id:      TEXT        会话 ID（私聊=用户ID，群组=群ID）
     - user_id:      TEXT        创建者 ID
-    - content:      TEXT        待办内容（明文）
+    - content:      BLOB        待办内容（加密）
     - remind_time:  DATETIME    提醒时间（NULL=无提醒）
     - priority:     TEXT        优先级（P0/P1/P2/P3/P_）
     - status:       TEXT        状态（pending/done）
@@ -71,6 +75,7 @@ from config import TODOS_DB_PATH
 
 from utils.core.database import Database
 from utils.core.schema import loadSchema
+from utils.core.crypto import encryptText, decryptText
 from utils.core.logger import logSystemEvent, LogLevel
 
 
@@ -107,13 +112,30 @@ def initDatabase():
 # 行转换工具
 # ============================================================================
 
+def _decryptContent(raw) -> str:
+    """
+    解密 content 列。
+
+    正常情况下 content 是 encryptText 写入的密文 bytes。
+    解密失败时（如个别历史明文行未被迁移脚本处理）回退为原始文本，
+    避免单条记录拖垮整次查询。
+    """
+    try:
+        return decryptText(raw)
+    except Exception:
+        # 兜底：可能是未加密的历史明文（bytes 或 str）
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8", errors="replace")
+        return str(raw)
+
+
 def _rowToTodoDict(row) -> Dict[str, Any]:
     """将 sqlite3.Row 转换为待办字典"""
     return {
         "id": row["id"],
         "chat_id": row["chat_id"],
         "user_id": row["user_id"],
-        "content": row["content"],
+        "content": _decryptContent(row["content"]),
         "remind_time": datetime.fromisoformat(row["remind_time"]) if row["remind_time"] else None,
         "priority": row["priority"],
         "status": row["status"],
@@ -151,6 +173,7 @@ async def addTodo(
     """
     try:
         remindTimeStr = remindTime.strftime(TIMESTAMP_FORMAT) if remindTime else None
+        encryptedContent = encryptText(str(content))
 
         def _query(conn):
             cursor = conn.cursor()
@@ -159,7 +182,7 @@ async def addTodo(
                 INSERT INTO todos (chat_id, user_id, content, remind_time, priority)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (str(chatID), str(userID), content, remindTimeStr, priority)
+                (str(chatID), str(userID), encryptedContent, remindTimeStr, priority)
             )
             return cursor.lastrowid
 
@@ -285,7 +308,7 @@ async def updateTodo(todoID: int, **kwargs) -> bool:
 
             if "content" in kwargs:
                 updates.append("content = ?")
-                params.append(kwargs["content"])
+                params.append(encryptText(str(kwargs["content"])))
 
             if "remind_time" in kwargs:
                 updates.append("remind_time = ?")

@@ -416,10 +416,29 @@ def test_restore_rejects_absolute_path_in_manifest(backupEnv, tmp_path):
 
 
 # ===========================================================================
-# DBEditor（明文单表数据库）
+# DBEditor（单表数据库：memory_entries / todos 的 content 列加密）
 # ===========================================================================
 
+@pytest.fixture
+def dbeditorKey(tmp_path, monkeypatch):
+    """
+    为 DBEditor 测试隔离一把加密密钥。
+
+    DBEditor 对 memory_entries / todos 的 content 列加解密时，通过模块级
+    KEY_PATH 读取 data/.chatKey。测试里 monkeypatch 到临时密钥，避免依赖
+    （或污染）真实的项目密钥。返回对应的 Fernet 实例供断言解密。
+    """
+    from cryptography.fernet import Fernet
+
+    key = Fernet.generate_key()
+    key_path = tmp_path / ".chatKey"
+    key_path.write_bytes(key)
+    monkeypatch.setattr(edit_data, "KEY_PATH", key_path)
+    return Fernet(key)
+
+
 def _make_single_table_db(path):
+    """构造一张明文 content 的 memory_entries 表（模拟历史明文行）。"""
     conn = sqlite3.connect(path)
     conn.execute(
         "CREATE TABLE memory_entries ("
@@ -433,8 +452,12 @@ def _make_single_table_db(path):
     conn.close()
 
 
-def test_dbeditor_export_parses_tags(tmp_path):
-    """export_to_json 返回单表结构并把 tags_json 解析为 list"""
+def test_dbeditor_export_parses_tags(tmp_path, dbeditorKey):
+    """export_to_json 返回单表结构并把 tags_json 解析为 list
+
+    content 为历史明文行：export 解密失败时回退为原文（不影响 tags 解析）。
+    使用隔离密钥，避免读取真实项目密钥。
+    """
     db = tmp_path / "mem.db"
     _make_single_table_db(db)
 
@@ -443,6 +466,8 @@ def test_dbeditor_export_parses_tags(tmp_path):
     assert result["table"] == "memory_entries"
     assert len(result["records"]) == 1
     assert result["records"][0]["tags_json"] == ["t1", "t2"]
+    # 明文行解密失败 → 兜底返回原文
+    assert result["records"][0]["content"] == "first"
 
 
 def test_dbeditor_export_empty_db_raises(tmp_path):
@@ -453,8 +478,8 @@ def test_dbeditor_export_empty_db_raises(tmp_path):
         edit_data.DBEditor.export_to_json(db)
 
 
-def test_dbeditor_import_insert_update_delete(tmp_path):
-    """import_from_json 正确执行新增/更新/删除"""
+def test_dbeditor_import_insert_update_delete(tmp_path, dbeditorKey):
+    """import_from_json 正确执行新增/更新/删除，且 content 列写入为密文"""
     db = tmp_path / "mem.db"
     _make_single_table_db(db)
 
@@ -470,14 +495,16 @@ def test_dbeditor_import_insert_update_delete(tmp_path):
 
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
-    rows = {r["content"] for r in conn.execute("SELECT content FROM memory_entries").fetchall()}
+    raw = [r["content"] for r in conn.execute("SELECT content FROM memory_entries").fetchall()]
     conn.close()
+    # content 应为密文（不再是明文），解密后才等于原文
+    rows = {dbeditorKey.decrypt(c).decode("utf-8") for c in raw}
     assert "updated" in rows
     assert "brand new" in rows
     assert "first" not in rows  # 已被 update 覆盖
 
 
-def test_dbeditor_import_delete_missing(tmp_path):
+def test_dbeditor_import_delete_missing(tmp_path, dbeditorKey):
     """新 JSON 中不含的现有记录会被删除"""
     db = tmp_path / "mem.db"
     _make_single_table_db(db)
@@ -491,7 +518,7 @@ def test_dbeditor_import_delete_missing(tmp_path):
     assert count == 0
 
 
-def test_dbeditor_import_dry_run_no_write(tmp_path):
+def test_dbeditor_import_dry_run_no_write(tmp_path, dbeditorKey):
     """dry_run 不应改动数据库，但返回 SQL 列表"""
     db = tmp_path / "mem.db"
     _make_single_table_db(db)
