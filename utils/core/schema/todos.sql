@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS todos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     chat_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
-    content TEXT NOT NULL,
+    content BLOB NOT NULL,              -- 加密存储（Fernet）：用户待办正文，见 utils/core/crypto.py
     remind_time DATETIME,
     priority TEXT DEFAULT 'P_',
     status TEXT DEFAULT 'pending',

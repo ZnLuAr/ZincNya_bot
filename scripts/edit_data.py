@@ -82,6 +82,15 @@ EXCLUDE_PATTERNS = [
     "*~",
 ]
 
+# 单表数据库中需要加解密的 content 列（与 utils/core/crypto.py 加密口径一致）。
+# memory_entries（长期记忆）和 todos（用户待办）的 content 列加密存储；
+# knowledge_entries 是 bot 自身知识、明文进 git，不加密，故不在此表中。
+# DBEditor 在导出时解密这些列供编辑、导入时重新加密回写。
+ENCRYPTED_CONTENT_COLUMNS = {
+    "memory_entries": "content",
+    "todos": "content",
+}
+
 
 # ============================================================================
 # JSON Schema 定义
@@ -581,6 +590,33 @@ class DBEditor:
     """数据库 ↔ JSON 转换编辑器"""
 
     @staticmethod
+    def _load_fernet() -> "Fernet":
+        """
+        加载共享密钥的 Fernet 实例（用于 memory_entries / todos 的 content 列）。
+
+        与 EncryptedDBEditor.load_key 同源（同一把 data/.chatKey），但独立加载，
+        保持脚本自包含、不依赖运行时模块。
+        """
+        return EncryptedDBEditor.load_key(KEY_PATH)
+
+    @staticmethod
+    def _decrypt_content_value(fernet: "Fernet", value) -> str:
+        """
+        解密单个 content 值供编辑展示。
+
+        正常情况下 value 是密文 bytes；解密失败时（如历史明文行）回退为原文，
+        避免单条记录拖垮整个导出。
+        """
+        try:
+            if isinstance(value, str):
+                value = value.encode("utf-8")
+            return fernet.decrypt(value).decode("utf-8")
+        except Exception:
+            if isinstance(value, (bytes, bytearray, memoryview)):
+                return bytes(value).decode("utf-8", errors="replace")
+            return str(value)
+
+    @staticmethod
     def export_to_json(db_path: Path) -> Dict:
         """
         导出数据库为 JSON
@@ -621,6 +657,14 @@ class DBEditor:
                     except json.JSONDecodeError:
                         rec['tags_json'] = []
 
+            # 解密加密的 content 列（memory_entries / todos），使编辑时看到明文。
+            enc_col = ENCRYPTED_CONTENT_COLUMNS.get(table_name)
+            if enc_col:
+                fernet = DBEditor._load_fernet()
+                for rec in records:
+                    if enc_col in rec and rec[enc_col] is not None:
+                        rec[enc_col] = DBEditor._decrypt_content_value(fernet, rec[enc_col])
+
             conn.close()
             return {"table": table_name, "records": records}
         else:
@@ -660,6 +704,10 @@ class DBEditor:
         if not is_valid_table_name(table_name):
             raise ValueError(f"不安全的表名: {table_name}")
 
+        # 该表的 content 列是否需要加密回写（memory_entries / todos）
+        enc_col = ENCRYPTED_CONTENT_COLUMNS.get(table_name)
+        fernet = DBEditor._load_fernet() if enc_col else None
+
         # 连接数据库。用 try/finally 确保任何异常路径都回滚并关闭连接，
         # 否则中途抛错会泄露连接（依赖 GC 隐式回滚），在 Windows 上还会锁住 DB 文件。
         conn = sqlite3.connect(db_path)
@@ -695,6 +743,11 @@ class DBEditor:
                 # 序列化 JSON 字段
                 if 'tags_json' in rec and isinstance(rec['tags_json'], list):
                     rec['tags_json'] = json.dumps(rec['tags_json'], ensure_ascii=False)
+
+                # 加密 content 列回写（编辑时是明文，落库需还原为密文）。
+                # 即便 dry_run 也加密，保证预览出的 values 与实际写入一致。
+                if enc_col and enc_col in rec and rec[enc_col] is not None:
+                    rec[enc_col] = fernet.encrypt(str(rec[enc_col]).encode("utf-8"))
 
                 if rec_id is None or rec_id not in existing_records:
                     # INSERT（新记录或 id 为 null）

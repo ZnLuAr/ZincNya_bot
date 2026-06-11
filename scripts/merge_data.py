@@ -465,10 +465,24 @@ def plan_llm_memory(ctx: ScriptContext) -> SectionPlan:
         "@@ memory_entries @@",
     ])
 
+    # content 列已加密：source / target 必须共用同一把 .chatKey，否则解密后的明文
+    # 去重 key 无意义（且 --apply 时无法用 target key 正确回写）。与 chat-history 同此前提。
+    source_key_path = ctx.source_data / CHAT_KEY
+    target_key_path = ctx.target_data / CHAT_KEY
+    source_key = source_key_path.read_bytes() if source_key_path.exists() else None
+    target_key = target_key_path.read_bytes() if target_key_path.exists() else None
+    if source_key is not None and target_key is not None and source_key != target_key:
+        plan.apply_capable = False
+        plan.warnings.append("source and target .chatKey differ; skipping llm-memory")
+        plan.preview_lines.append("# 跳过：源与目标 .chatKey 不一致，无法对齐加密的记忆 content")
+        return plan
+    # 解密用 source/target 任一可用 key（已确认一致）；写回用 target key（见 apply_llm_memory）。
+    fernet = load_shared_fernet(ctx.target_data) or load_shared_fernet(ctx.source_data)
+
     sql = (
         "SELECT id, scope_type, scope_id, content, tags_json, enabled, priority, "
         "source, created_at, updated_at FROM memory_entries "
-        "ORDER BY scope_type, scope_id, source, content, id"
+        "ORDER BY scope_type, scope_id, source, id"
     )
 
     try:
@@ -492,6 +506,10 @@ def plan_llm_memory(ctx: ScriptContext) -> SectionPlan:
         )
         if target_state == "missing":
             plan.warnings.append("target llmMemory.db not found; --apply will create it")
+
+        # 读取收口：解密 content，使下游 normalize / 去重 key / 预览全部基于明文。
+        decrypt_content_in_rows(source_rows, fernet)
+        decrypt_content_in_rows(target_rows, fernet)
 
         target_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
         skipped_target = 0
@@ -630,6 +648,73 @@ def decrypt_chat_content(fernet: Any, row: dict[str, Any]) -> str:
     else:
         content = bytes(content)
     return fernet.decrypt(content).decode("utf-8")
+
+
+
+
+def load_shared_fernet(data_dir: Path) -> Any:
+    """
+    加载 data/.chatKey 对应的 Fernet 实例（memory_entries / todos 的 content 列共用）。
+
+    与 chatHistory 同源（同一把 .chatKey）。密钥不存在或 cryptography 未安装时返回 None，
+    由调用方决定降级行为（如跳过该 section 的解密/合并）。
+    """
+    key_path = data_dir / CHAT_KEY
+    if not key_path.exists():
+        return None
+    try:
+        from cryptography.fernet import Fernet
+    except ImportError:
+        return None
+    return Fernet(key_path.read_bytes())
+
+
+
+
+def decrypt_content_in_rows(rows: list[dict[str, Any]], fernet: Any) -> None:
+    """
+    就地解密一批行的 content 列（用于 memory_entries / todos）。
+
+    读取收口：调用方在 read_table_rows 之后立即调用本函数，使下游的
+    normalize / 去重 key / 预览全部基于明文 content，无需各自感知加密。
+
+    fernet 为 None（无密钥）时不做任何处理——视为历史明文库。
+    单行解密失败（如历史明文行）回退为原文，不影响其它行。
+    """
+    if fernet is None:
+        return
+    for row in rows:
+        value = row.get("content")
+        if value is None:
+            continue
+        try:
+            if isinstance(value, memoryview):
+                value = value.tobytes()
+            elif isinstance(value, str):
+                value = value.encode("utf-8")
+            else:
+                value = bytes(value)
+            row["content"] = fernet.decrypt(value).decode("utf-8")
+        except Exception:
+            # 历史明文行或解密失败：尽量还原为可读文本
+            raw = row.get("content")
+            if isinstance(raw, (bytes, bytearray, memoryview)):
+                row["content"] = bytes(raw).decode("utf-8", errors="replace")
+            else:
+                row["content"] = str(raw)
+
+
+
+
+def encrypt_content_value(fernet: Any, plaintext: Any) -> Any:
+    """
+    把明文 content 加密为密文 bytes，供 INSERT 回写 memory_entries / todos。
+
+    fernet 为 None 时原样返回（明文库场景）。
+    """
+    if fernet is None:
+        return plaintext
+    return fernet.encrypt(str(plaintext).encode("utf-8"))
 
 
 
@@ -972,6 +1057,12 @@ def plan_todos_report(ctx: ScriptContext) -> SectionPlan:
             target_rows = []
             plan.warnings.append("target todos.db not found; reporting source rows as source-only")
 
+        # content 加密：解密后再做去重 key 比对与预览展示（todos 仅报告，不写回）。
+        source_fernet = load_shared_fernet(ctx.source_data)
+        target_fernet = load_shared_fernet(ctx.target_data)
+        decrypt_content_in_rows(source_rows, source_fernet)
+        decrypt_content_in_rows(target_rows, target_fernet)
+
         target_by_key = {todo_key(row): row for row in target_rows}
         source_only = 0
         duplicates = 0
@@ -1084,6 +1175,9 @@ def write_manifest(
 def apply_llm_memory(plan: SectionPlan) -> int:
     if not plan.inserts or plan.target_path is None:
         return 0
+    # content 在读取时已解密为明文（见 plan_llm_memory），回写前用 target 库的
+    # .chatKey 重新加密。source/target key 一致性已在 plan_llm_memory 校验。
+    fernet = load_shared_fernet(plan.target_path.parent)
     conn = connect_writable(plan.target_path)
     try:
         ensure_memory_schema(conn)
@@ -1099,7 +1193,7 @@ def apply_llm_memory(plan: SectionPlan) -> int:
                 (
                     item.values["scope_type"],
                     item.values["scope_id"],
-                    item.values["content"],
+                    encrypt_content_value(fernet, item.values["content"]),
                     item.values["tags_json"],
                     item.values["enabled"],
                     item.values["priority"],
@@ -1566,7 +1660,7 @@ def analyze_memory_diff(local_path: Path, remote_path: Path) -> DiffResult:
     sql = (
         "SELECT id, scope_type, scope_id, content, tags_json, enabled, priority, "
         "source, created_at, updated_at FROM memory_entries "
-        "ORDER BY scope_type, scope_id, source, content, id"
+        "ORDER BY scope_type, scope_id, source, id"
     )
     local_rows, local_state = read_table_rows(
         local_path, table="memory_entries",
@@ -1580,6 +1674,11 @@ def analyze_memory_diff(local_path: Path, remote_path: Path) -> DiffResult:
         local_rows = []
     if remote_state == "missing":
         remote_rows = []
+
+    # 读取收口：解密 content（local/remote 各用各自 .chatKey），下游 normalize / 去重
+    # key 基于明文。remote_only 的行随后由 _merge_memory 用 target key 重新加密回写。
+    decrypt_content_in_rows(local_rows, load_shared_fernet(local_path.parent))
+    decrypt_content_in_rows(remote_rows, load_shared_fernet(remote_path.parent))
 
     local_by_key: dict[tuple, dict] = {}
     for row in local_rows:
@@ -1684,6 +1783,11 @@ def analyze_todos_diff(local_path: Path, remote_path: Path) -> DiffResult:
         local_rows = []
     if remote_state == "missing":
         remote_rows = []
+
+    # 读取收口：解密 content，使 todo_key 去重与预览基于明文。
+    # remote_only 行随后由 _merge_todos 用 target key 重新加密回写。
+    decrypt_content_in_rows(local_rows, load_shared_fernet(local_path.parent))
+    decrypt_content_in_rows(remote_rows, load_shared_fernet(remote_path.parent))
 
     local_by_key = {todo_key(row): row for row in local_rows}
     remote_by_key = {todo_key(row): row for row in remote_rows}
@@ -1888,6 +1992,8 @@ def action_merge(
 
 
 def _merge_memory(diff: DiffResult, target_path: Path) -> bool:
+    # remote_only 的 content 已是明文（analyze_memory_diff 解密），用 target key 重新加密回写。
+    fernet = load_shared_fernet(target_path.parent)
     conn = connect_writable(target_path)
     try:
         ensure_memory_schema(conn)
@@ -1902,7 +2008,7 @@ def _merge_memory(diff: DiffResult, target_path: Path) -> bool:
                 "INSERT INTO memory_entries "
                 "(scope_type, scope_id, content, tags_json, enabled, priority, source, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (n["scope_type"], n["scope_id"], n["content"], n["tags_json"],
+                (n["scope_type"], n["scope_id"], encrypt_content_value(fernet, n["content"]), n["tags_json"],
                  n["enabled"], n["priority"], n["source"], n["created_at"], n["updated_at"]),
             )
         conn.commit()
@@ -1953,6 +2059,8 @@ def _merge_chat(
 
 
 def _merge_todos(diff: DiffResult, target_path: Path) -> bool:
+    # remote_only 的 content 已是明文（analyze_todos_diff 解密），用 target key 重新加密回写。
+    fernet = load_shared_fernet(target_path.parent)
     conn = connect_writable(target_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -1961,7 +2069,7 @@ def _merge_todos(diff: DiffResult, target_path: Path) -> bool:
                 "INSERT INTO todos "
                 "(chat_id, user_id, content, remind_time, priority, status, reminded, created_at, completed_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (row.get("chat_id"), row.get("user_id"), row.get("content"),
+                (row.get("chat_id"), row.get("user_id"), encrypt_content_value(fernet, row.get("content")),
                  row.get("remind_time"), row.get("priority"), row.get("status"),
                  row.get("reminded"), row.get("created_at"), row.get("completed_at")),
             )

@@ -83,76 +83,25 @@ getMessageCount(chatID=None)
 
 
 import os
-import sys
 import sqlite3
 from datetime import datetime
 from typing import List, Optional
 
-from cryptography.fernet import Fernet
-
 from config import (
     DB_PATH,
-    KEY_PATH,
     CHAT_BACKUP_DIR,
     CHAT_HISTORY_LIMIT,
 )
 
 from utils.core.database import Database
 from utils.core.schema import loadSchema
+from utils.core.crypto import getFernet
 from utils.core.logger import logSystemEvent, LogLevel
 
 
 TIMESTAMP_FORMAT_DATE = "%Y%m%d"                # 归档文件名日期格式
 TIMESTAMP_FORMAT_DATETIME = "%Y-%m-%d %H:%M:%S" # 数据库时间戳格式
 TIMESTAMP_FORMAT_DISPLAY = "%Y/%m/%d"           # 日期分隔符显示格式
-
-
-
-
-# ============================================================================
-# 密钥管理
-# ============================================================================
-
-# 缓存 Fernet 实例，避免重复读取密钥文件
-_fernet_cache: Optional[Fernet] = None
-
-
-def loadOrCreateKey() -> bytes:
-    """
-    加载或创建加密密钥。
-
-    密钥存储在 data/.chat_key 文件中。
-    如果文件不存在，会自动生成新密钥。
-    """
-    if os.path.exists(KEY_PATH):
-        with open(KEY_PATH, "rb") as f:
-            return f.read()
-
-    # 生成新密钥
-    key = Fernet.generate_key()
-    with open(KEY_PATH, "wb") as f:
-        f.write(key)
-
-    # 限制文件权限为仅属主可读写（非 Windows 系统）
-    if sys.platform != "win32":
-        os.chmod(KEY_PATH, 0o600)
-
-    return key
-
-
-def getFernet() -> Fernet:
-    """
-    获取 Fernet 加密器实例（带缓存）。
-
-    首次调用时从磁盘加载密钥，后续调用直接返回缓存的实例。
-    """
-    global _fernet_cache
-
-    if _fernet_cache is None:
-        key = loadOrCreateKey()
-        _fernet_cache = Fernet(key)
-
-    return _fernet_cache
 
 
 

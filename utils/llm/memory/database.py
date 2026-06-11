@@ -22,6 +22,7 @@ from config import LLM_MEMORY_DB_PATH
 
 from utils.core.database import Database
 from utils.core.schema import loadSchema
+from utils.core.crypto import encryptText, decryptText
 from utils.core.logger import logSystemEvent, LogLevel
 
 
@@ -93,13 +94,30 @@ def initDatabase():
     memoryDB.initSchema(_initSchema)
 
 
+def _decryptContent(raw) -> str:
+    """
+    解密 content 列。
+
+    正常情况下 content 是 encryptText 写入的密文 bytes。
+    解密失败时（如个别历史明文行未被迁移脚本处理）回退为原始文本，
+    避免单条记录拖垮整次检索。
+    """
+    try:
+        return decryptText(raw)
+    except Exception:
+        # 兜底：可能是未加密的历史明文（bytes 或 str）
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8", errors="replace")
+        return str(raw)
+
+
 def _rowToMemoryDict(row) -> dict[str, Any]:
     """将 sqlite3.Row 转换为 memory 字典。"""
     return {
         "id": row["id"],
         "scope_type": row["scope_type"],
         "scope_id": row["scope_id"],
-        "content": row["content"],
+        "content": _decryptContent(row["content"]),
         "tags": json.loads(row["tags_json"] or "[]"),
         "enabled": bool(row["enabled"]),
         "priority": row["priority"],
@@ -128,6 +146,9 @@ async def addMemory(
         if not content:
             raise ValueError("content 不能为空")
 
+        # content 是用户隐私正文，写入前加密为密文 bytes（存入 BLOB 列）。
+        encryptedContent = encryptText(content)
+
         def _query(conn):
             cursor = conn.cursor()
             cursor.execute(
@@ -136,7 +157,7 @@ async def addMemory(
                     scope_type, scope_id, content, tags_json, enabled, priority, source
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (scopeType, scopeID, content, tagsJson, int(enabled), int(priority), source)
+                (scopeType, scopeID, encryptedContent, tagsJson, int(enabled), int(priority), source)
             )
             return cursor.lastrowid
 
@@ -250,7 +271,7 @@ async def updateMemory(
                 if not normalizedContent:
                     raise ValueError("content 不能为空")
                 updates.append("content = ?")
-                params.append(normalizedContent)
+                params.append(encryptText(normalizedContent))
 
             if tags is not None:
                 updates.append("tags_json = ?")
