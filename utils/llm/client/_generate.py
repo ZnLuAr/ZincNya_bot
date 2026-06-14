@@ -11,6 +11,7 @@ from utils.core.logger import logSystemEvent, LogLevel, LogChildType
 
 from ..config import getForceFallbackPrompt, loadPrompts, loadLLMConfig, _FALLBACK_PROMPTS
 from ..contextBuilder import buildConversationContext
+from ..promptSafety import neutralizePromptDelimiters
 from ._guardrails import SYSTEM_GUARDRAILS, MEMORY_ACTION_INSTRUCTIONS, VISION_DESCRIBE_PROMPT, OPS_FEEDBACK_INSTRUCTIONS
 from ._request import requestWithRetry
 from ._router import getProvider
@@ -202,12 +203,13 @@ async def generateReply(
 
     # ── 构建 userContent ──
     if images and visionModel != model:
-        # 双调用：分离描述与回复（省主模型 token）
+        # 双调用：分离描述与回复（省主模型 token 并或能改善模型文本读取表现）
         imageDescription = await _describeImages(images, model=visionModel)
         if imageDescription:
-            # 视觉模型输出不可信：转义尖括号，防止其内容伪造 <IMAGE_DESCRIPTION>
-            # 等结构标记，越权影响主模型的上下文边界
-            imageDescription = imageDescription.replace("<", "＜").replace(">", "＞")
+            # 视觉模型输出不可信。中和结构分隔符，防止其内容伪造 <IMAGE_DESCRIPTION>
+            # 等结构标记，越权影响主模型的上下文边界。
+            # imageBlock 在 buildConversationContext 之后拼接，不经主路径中和，故就地处理。
+            imageDescription = neutralizePromptDelimiters(imageDescription)
             imageBlock = (
                 "<IMAGE_DESCRIPTION>\n"
                 "[用户发送了图片以下是图片内容的文字描述，请基于此描述回答用户关于图片的提问]\n"
