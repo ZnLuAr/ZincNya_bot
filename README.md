@@ -179,6 +179,7 @@ ZincNya_bot/
 │   │   ├── state.py                # 运行时状态（多类型审核队列、速率限制、防抖、one-shot）
 │   │   ├── review.py               # 审核共享操作（console / chatScreen 的 send/retry/cancel）
 │   │   ├── contextBuilder.py       # 上下文组装（memory + knowledge + history + URL + 当前消息）
+│   │   ├── promptSafety.py         # 提示注入防护（统一中和结构分隔符）
 │   │   ├── vision.py               # 图片提取（photo/document/reply）与下载编码
 │   │   ├── urlIntent.py            # URL 读取意图判断（关键词 / 正则 / 全局抑制 / 近邻否定）
 │   │   ├── urlReader.py            # 受控 URL 抓取（SSRF 防护、redirect、byte cap、HTML/text 提取）
@@ -301,7 +302,7 @@ Operator 权限位（在 `operators.json` 里配置）：
 | `notify` | 接收未授权用户访问通知 |
 | `llm` | 接收 LLM 生成内容与记忆操作的 Telegram 审核消息 |
 
-想知道某个命令更细的用法，敲 `/help <command>` 或者 `<command> --h` 就可以啦。
+想知道某个命令更细的用法，敲 `/help <command>` 或者 `/<command> --h` 就可以啦。
 
 ---
 

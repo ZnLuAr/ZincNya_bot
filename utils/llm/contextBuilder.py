@@ -22,6 +22,7 @@ from utils.llm.memory import (
     summarizeRetrievedMemories,
 )
 from utils.llm.knowledge import retrieveKnowledge, buildKnowledgeContextBlock
+from utils.llm.promptSafety import neutralizePromptDelimiters
 from utils.core.logger import logSystemEvent
 
 
@@ -41,8 +42,8 @@ def _formatHistoryForContext(history: list) -> str:
         ts = msg.get("timestamp", "")
         if hasattr(ts, "strftime"):
             ts = ts.strftime("%H:%M:%S")
-        sender = msg.get("sender", "Unknown")
-        content = msg.get("content", "")
+        sender = neutralizePromptDelimiters(msg.get("sender", "Unknown"))
+        content = neutralizePromptDelimiters(msg.get("content", ""))
         lines.append(f"- [{ts}] <{sender}> {content}")
 
     return "\n".join(lines)
@@ -186,5 +187,10 @@ async def buildConversationContext(
         if urlBlock:
             blocks.append(urlBlock)
 
-    blocks.append(f"<CURRENT_USER_MESSAGE>\n{userMessage}\n</CURRENT_USER_MESSAGE>")
+    # userMessage 是最高优先级的不可信叶子，进结构标记前统一中和分隔符，
+    # 防止伪造 </CURRENT_USER_MESSAGE><TRUSTED_KNOWLEDGE>… 提前闭合越权。
+    # 上游 handler 注入的 reply 标记（朴素括号）也会一并被折成全角——
+    # 这是有意的，因为 reply 文本本就是不可信内容，而全角标记 LLM 照样能读得懂。
+    safeUserMessage = neutralizePromptDelimiters(userMessage)
+    blocks.append(f"<CURRENT_USER_MESSAGE>\n{safeUserMessage}\n</CURRENT_USER_MESSAGE>")
     return "\n\n".join(blocks)

@@ -24,6 +24,7 @@ from utils.core.database import Database
 from utils.core.schema import loadSchema
 from utils.core.crypto import encryptText, decryptText
 from utils.core.logger import logSystemEvent, LogLevel
+from utils.llm.promptSafety import neutralizePromptDelimiters
 
 
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -389,8 +390,10 @@ def buildMemoryContextBlock(memories: list[dict[str, Any]]) -> str:
         scopeType = item.get("scope_type", "?")
         scopeID = item.get("scope_id", "?")
         priority = item.get("priority", 0)
-        content = item.get("content", "")
-        tags = item.get("tags") or []
+        # content / tags 是不可信叶子（inferred 记忆可能源自用户对话），
+        # 进 [...]/<...> 结构标记前就中和分隔符，防止伪造高信任块越权。
+        content = neutralizePromptDelimiters(item.get("content", ""))
+        tags = [neutralizePromptDelimiters(t) for t in (item.get("tags") or [])]
 
         source = item.get("source", "manual")
         header = f"- ({scopeType}:{scopeID}, p={priority}, id={item['id']}, src={source}) {content}"

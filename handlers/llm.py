@@ -167,6 +167,29 @@ def _extractImageRefsForLLM(message):
 
 
 def _injectReplyTextContext(message, pureText: str) -> str:
+    """
+    将 reply-to 消息的文本注入到 prompt 中，格式上明确标注这是「引用别人说过的话」。
+
+    参数:
+        message: 当前用户消息
+        pureText: 已去除 @bot / #context 的用户消息
+
+    返回:
+        注入 reply 上下文后的 prompt text
+
+    设计思路:
+        - 格式上接近 history 块的 `<sender> xxx`，让 LLM 识别这是「别人说过的话」而非「用户现在说的话」
+
+    分隔符安全:
+        这里用朴素括号写 [引用消息] / <sender> / [当前用户消息] 标记。整段 pureText
+        作为 userMessage 流经 contextBuilder，进 <CURRENT_USER_MESSAGE> 前会被
+        neutralizePromptDelimiters 整体折成全角——包括这里的标记和 replyText / pureText。
+        这是有意且安全的：
+        - replyText（不可信叶子）里的 <...> tag 一并折叠，如此则无法伪造 <TRUSTED_KNOWLEDGE> 等高信任块跨层越权；
+        - 本函数的标记折成全角后仍语义可读，「引用 vs 当前」的角色区分照样生效，
+          且与 replyText 内可能预置的全角标记同处 CURRENT_USER_MESSAGE 信任层，
+          不会造成跨层混淆。
+    """
     replyMsg = message.reply_to_message
     if not replyMsg:
         return pureText
@@ -175,13 +198,18 @@ def _injectReplyTextContext(message, pureText: str) -> str:
     if not replyText:
         return pureText
 
+    # 截断过长的 reply 文本
+    if len(replyText) > 300:
+        replyText = replyText[:300] + "……"
+
+    # 提取 reply 消息的发送者
     replyUser = ""
     if replyMsg.from_user:
         replyUser = replyMsg.from_user.username or replyMsg.from_user.first_name or ""
-    if len(replyText) > 300:
-        replyText = replyText[:300] + "……"
-    prefix = f"@{replyUser}" if replyUser else "未知"
-    return f"[回复 {prefix} 的消息: {replyText}]\n\n{pureText}"
+    displayName = f"@{replyUser}" if replyUser else "未知用户"
+
+    # 格式接近 history 块的 "<sender> 说的内容"
+    return f"[引用消息]\n<{displayName}> {replyText}\n\n[当前用户消息]\n{pureText}"
 
 
 def _getReplyURLCandidateText(message) -> str:
@@ -205,7 +233,7 @@ def _preparePurePromptText(message, rawText: str, botUsername: str) -> tuple[str
     安全提醒：
         urlIntentText 必须在 _injectReplyTextContext 调用之前取值，
         否则 reply-to 消息里的"帮我总结"等文本会被误判为当前用户的意图，
-        变成第三方无声触发 URL 抓取的攻击面
+        或可能变成第三方无声触发 URL 抓取的攻击面
     """
     pureText, includeContext = _extractPureMessage(rawText, botUsername)
     if not pureText:
