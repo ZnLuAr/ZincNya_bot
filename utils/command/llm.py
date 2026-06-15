@@ -648,10 +648,12 @@ async def handleChatScreenReviewCommand(command: str, bot, ui) -> dict | None:
 
         if kind == "memory":
             ui._composerArea.text = item.get("action", {}).get("content", "")
-            ui.showStatus(" 记忆内容编辑审核中 | Ctrl+S 提交 | Esc 取消编辑")
+            from utils.chatScreen.statusBar import getEditModeStatus
+            ui.showStatus(getEditModeStatus("memory"))
         else:
             ui._composerArea.text = item["reply"]
-            ui.showStatus(" LLM 生成消息编辑审核中 | Ctrl+S 提交 | Esc 取消编辑")
+            from utils.chatScreen.statusBar import getEditModeStatus
+            ui.showStatus(getEditModeStatus("llm"))
         return item
 
     elif command == ":rr":

@@ -217,7 +217,17 @@ ZincNya_bot/
 │   │   └── ui.py                   # UI 层（ViewModel + TUI）
 │   │
 │   ├── chatHistory.py              # 聊天记录加密存储
-│   ├── chatUI.py                   # prompt_toolkit 全屏聊天界面（固定底部输入）
+│   │
+│   ├── chatScreen/                 # 聊天界面模块
+│   │   ├── __init__.py             # 模块入口
+│   │   ├── session.py              # chatScreen 主函数与生命周期
+│   │   ├── receiver.py             # 消息接收后台协程
+│   │   ├── mainLoop.py             # 主循环输入处理
+│   │   ├── formatter.py            # 消息格式化工具
+│   │   ├── history.py              # 历史加载与显示
+│   │   ├── statusBar.py            # 状态栏文本常量
+│   │   └── ui.py                   # ChatScreenApp UI 控制层
+│   │
 │   ├── bookSearchAPI.py            # Open Library API 封装
 │   ├── newsAPI.py                  # 新闻抓取 API 封装（先咕着喵）
 │   ├── downloader.py               # 表情包下载与格式转换
