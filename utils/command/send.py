@@ -3,10 +3,11 @@ utils/command/send.py
 
 用于实现 /send 命令的逻辑模块，负责从控制台发送消息，或进入与某个用户的实时本地聊天界面。
 
-本模块大致可分为三个部分：
+本模块精简为两个部分：
     - 参数解析与入口函数（execute）
-    - 普通消息发送逻辑（sendMsg）
-    - 本地交互式聊天界面（chatScreen）
+    - 普通消息发送逻辑（sendMsg、chatIDList）
+
+注：chatScreen 聊天界面已重构到 utils/chatScreen/ 模块。
 
 
 ================================================================================
@@ -47,9 +48,20 @@ chatScreen(app , bot: Bot , targetChatID: str)
 其操作模式为全屏 CLI 聊天窗口：
     · 使用 prompt_toolkit full_screen Application 管理终端布局
     · 上方：滚动聊天记录区（历史 + 实时消息）
-    · 底部：固定多行输入区（Enter 换行，Ctrl+S / Esc+Enter 发送）
+    · 底部：固定多行输入区（Enter 换行，Ctrl+S / Alt+Enter 发送）
     · 收发的消息会自动保存到加密数据库（chatHistory 模块）
     · 按 Esc 或 Ctrl+C 退出界面
+    · 支持 LLM 审核命令(:ra/:re/:rr/:rc)、滚动历史(Alt+↑↓ / PgUp/PgDn)
+
+键绑定:
+    · Enter          - 换行
+    · Ctrl+S / Alt+Enter  - 发送消息
+    · Esc / Ctrl+C   - 退出聊天界面
+    · Ctrl+X         - 清空输入框
+    · Alt+↑ / PgUp   - 向上滚动历史
+    · Alt+↓ / PgDn   - 向下滚动历史
+
+详细技术文档请参阅: docs/chatScreen.md
 
 内部结构：
     - 设置 interactiveMode = True，暂停外层 CLI
@@ -74,25 +86,17 @@ chatScreen(app , bot: Bot , targetChatID: str)
 仅通过 whitelistManager 提供的 whitelistMenuController() 来选择聊天对象。
 
 聊天记录通过 chatHistory 模块进行加密存储和读取。
-异步输入通过 inputHelper 模块的 asyncInput() 实现（基于 run_in_executor）。
-聊天界面使用 ChatScreenApp (utils/chatUI.py) 管理，基于 prompt_toolkit 全屏 Application。
+chatScreen 聊天界面已重构到独立模块 utils/chatScreen/，详见 docs/chatScreen.md。
 
 """
 
 
-
-
-import asyncio
-from datetime import datetime
 
 from telegram import Bot
 from telegram.error import Forbidden
 
 from handlers.cli import parseArgsTokens
 
-from utils.chatHistory import saveMessage, loadHistory, iterMessagesWithDateMarkers
-from utils.core.stateManager import getStateManager
-from utils.llm.state import getReviewQueue, peekReviewHint
 from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.whitelistManager.ui import whitelistMenuController
 
@@ -127,7 +131,15 @@ async def execute(app , args):
 
     # 参数验证
     if screenChatID is not None:
-        await chatScreen(app , bot , screenChatID)
+        # 聊天界面模式
+        if screenChatID == "NoValue":
+            # 未指定 ID，弹出白名单列表供选择
+            screenChatID = await chatIDList(app, bot)
+
+        if screenChatID:
+            # 传入有效的 chatID
+            from utils.chatScreen import chatScreen
+            await chatScreen(app, bot, screenChatID)
         return
 
     if not text or text == "NoValue":
@@ -175,338 +187,6 @@ async def sendMsg(bot: Bot , idList , atUser , text):
                 LogChildType.WITH_ONE_CHILD
             )
 
-
-
-
-def _getSenderName(message) -> str:
-    """提取消息发送者名称，缺失时回退为 Unknown。"""
-    from_user = getattr(message, "from_user", None)
-    if from_user:
-        return from_user.username or from_user.first_name or "Unknown"
-
-    chat = getattr(message, "chat", None)
-    if chat:
-        return getattr(chat, "title", None) or getattr(chat, "full_name", None) or "Unknown"
-
-    return "Unknown"
-
-
-
-def _formatMessageLines(timestamp: str, sender: str, text: str) -> list[str]:
-    """按统一规则将单条消息格式化为行列表，支持多行内容。"""
-    sender = sender or "Unknown"
-    text = text or ""
-
-    if '\n' in text:
-        lines = text.split('\n')
-        result = [f"[{timestamp}] <{sender}> {lines[0]}"]
-        indent = "          | "
-        for line in lines[1:]:
-            result.append(f"{indent}{line}")
-        return result
-    else:
-        return [f"[{timestamp}] <{sender}> {text}"]
-
-
-def _printFormattedMessage(timestamp: str, sender: str, text: str):
-    """按统一规则打印单条消息（兼容现有调用点）。"""
-    for line in _formatMessageLines(timestamp, sender, text):
-        print(line)
-
-
-
-def _extractDisplayText(msg) -> str:
-    """
-    从 Telegram Message 对象提取展示文本。
-
-    纯文字消息返回 text；带 caption 的媒体返回 caption；
-    其余媒体类型返回方括号标注（如 [图片]、[贴纸]）。
-    """
-    if msg.text:
-        return msg.text
-    if msg.caption:
-        prefix = ""
-        if msg.photo:
-            prefix = "[图片] "
-        elif msg.document:
-            prefix = "[文件] "
-        elif msg.video:
-            prefix = "[视频] "
-        elif msg.animation:
-            prefix = "[GIF] "
-        return prefix + msg.caption
-    if msg.photo:
-        return "[图片]"
-    if msg.sticker:
-        emoji = msg.sticker.emoji or ""
-        return f"[贴纸] {emoji}".strip()
-    if msg.animation:
-        return "[GIF]"
-    if msg.video:
-        return "[视频]"
-    if msg.voice:
-        return "[语音消息]"
-    if msg.video_note:
-        return "[视频留言]"
-    if msg.audio:
-        title = msg.audio.title or ""
-        return f"[音频] {title}".strip()
-    if msg.document:
-        name = msg.document.file_name or ""
-        return f"[文件] {name}".strip()
-    if msg.contact:
-        return "[联系人]"
-    if msg.location:
-        return "[位置]"
-    if msg.poll:
-        return f"[投票] {msg.poll.question}"
-    return ""
-
-
-def _formatMessage(mode, content) -> tuple[str, str, str]:
-    """
-    格式化单条消息，返回 (timestamp, sender, text)。
-    供 UI 层与 print 层共用。
-
-    参数:
-        mode: "incomingMessage" 或 "selfMessage"
-        content: incomingMessage 时为 Telegram Message 对象，selfMessage 时为字符串
-    """
-    match mode:
-        case "incomingMessage":
-            sender = _getSenderName(content)
-            text = _extractDisplayText(content)
-        case "selfMessage":
-            sender = "ZincNya~"
-            text = content
-
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    return timestamp, sender, text
-
-
-def printMessage(mode, content):
-    """打印消息到屏幕（兼容现有调用点）。"""
-    timestamp, sender, text = _formatMessage(mode, content)
-    _printFormattedMessage(timestamp, sender, text)
-
-
-
-
-async def buildHistoryLines(targetChatID) -> list[str]:
-    """将历史聊天记录格式化为行列表，不打印。"""
-    history = await loadHistory(targetChatID)
-    lines: list[str] = []
-    if history:
-        lines.append("─────── 历史记录 ───────")
-        lines.append("")
-        for item_type, item_data in iterMessagesWithDateMarkers(history):
-            if item_type == "date":
-                lines.append(f"[{item_data}]")
-            else:
-                msg = item_data
-                ts = msg["timestamp"].strftime("%H:%M:%S") if msg["timestamp"] else "??:??:??"
-                sender = msg["sender"] or "Unknown"
-                content = msg["content"]
-                lines.extend(_formatMessageLines(ts, sender, content))
-        lines.append(f"<以上 {len(history)} 条>")
-        lines.append("")
-        lines.append("─────── 实时聊天 ───────")
-        lines.append("")
-    return lines
-
-
-async def displayHistory(targetChatID):
-    """显示历史聊天记录（兼容现有调用点）。"""
-    for line in await buildHistoryLines(targetChatID):
-        print(line)
-
-
-
-
-async def chatScreen(app , bot: Bot , targetChatID: str):
-    """
-    进入与指定 chatID 的用户/群聊的本地交互聊天界面。
-
-    业务编排入口，负责：
-        - interactiveMode 管理
-        - 目标聊天选择
-        - 后台 receiverLoop 启动与清理
-        - 将 UI 交互委托给 ChatScreenApp
-    """
-    from utils.chatUI import ChatScreenApp
-
-    state = getStateManager()
-
-    # 设置交互模式，暂停外层 CLI 的输入读取
-    state.setInteractiveMode(True)
-    queue: asyncio.Queue = state.getMessageQueue()
-
-    # 如果用户仅输入 -c（未指定 ID），弹出白名单列表供选择
-    if targetChatID == "NoValue":
-        targetChatID = await chatIDList(app , bot)
-
-    if not targetChatID:
-        state.setInteractiveMode(False)
-        return
-
-    # chatIDList 会把 interactiveMode 设为 False，需要重新设为 True
-    state.setInteractiveMode(True)
-
-    shutdownEvent = state.getShutdownEvent()
-
-    # ── 初始化 UI ──
-    # 先构建初始内容（历史记录 + 欢迎信息）
-    initialLines = await buildHistoryLines(targetChatID)
-    initialLines.extend([
-        "",
-        f"已进入聊天界面喵",
-        f"与 {targetChatID} 的实时聊天已连接",
-        "=" * 64,
-    ])
-    ui = ChatScreenApp(targetChatID, initialLines=initialLines)
-
-    # 注册控制台输出回调，让 logger 输出路由到 UI transcript
-    def _consoleOutputHandler(text: str):
-        lines = text.rstrip('\n').split('\n')
-        ui.appendLines(lines)
-
-    state.setConsoleOutputCallback(_consoleOutputHandler)
-
-
-    # ========================================================================
-    async def receiverLoop():
-        """后台协程：持续监听对方发来的消息并展示到 UI"""
-        nonTargetMessages = []
-
-        try:
-            while state.isInteractive():
-                try:
-                    try:
-                        msg = await asyncio.wait_for(queue.get(), timeout=0.5)
-                    except asyncio.TimeoutError:
-                        # 检测外部关机信号，强制退出 UI
-                        if shutdownEvent.is_set():
-                            ui.requestExit()
-                            break
-                        # 定期检查审核队列，更新状态栏提示
-                        try:
-                            rq = getReviewQueue()
-                            if rq.qsize() > 0:
-                                hint = peekReviewHint() or ""
-                                ui.showStatus(f" 待审核: ({rq.qsize()} 条) | :ra 通过 :re 编辑 :rr 重试 :rc 取消 | {hint} ")
-                        except Exception:
-                            pass
-                        continue
-
-                    if not msg:
-                        continue
-
-                    if str(msg.chat.id) != str(targetChatID):
-                        nonTargetMessages.append(msg)
-                        continue
-
-                    sender = _getSenderName(msg)
-                    content = _extractDisplayText(msg)
-                    await saveMessage(targetChatID, "incoming", sender, content)
-
-                    # sender / content 已解析，直接复用，不再走 _formatMessage()
-                    # 对同一 msg 二次调用 _getSenderName + _extractDisplayText。
-                    timestamp = datetime.now().strftime("%H:%M:%S")
-                    ui.appendIncomingMessage(timestamp, sender, content)
-
-                except asyncio.CancelledError:
-                    break
-                except Exception:
-                    pass
-        finally:
-            for msg in nonTargetMessages:
-                await queue.put(msg)
-    # ========================================================================
-
-
-    receiverTask = asyncio.create_task(receiverLoop())
-    await asyncio.sleep(0.1)
-
-    # 审核编辑模式状态（局部变量，仅 chatScreen 内使用）
-    _reviewEditItem: dict | None = None
-
-    # ── 恢复默认状态栏 ──
-    def _restoreDefaultStatus():
-        ui.showStatus(
-            " Enter 换行 | Ctrl+S / Alt+Enter 发送 | Esc 退出 | Ctrl+X 清空"
-            f" | Alt+↑↓ / PgUp PgDn 滚动历史 | 聊天对象: {targetChatID}"
-        )
-
-
-    # ── 主循环：UI 事件驱动 ──
-    try:
-        while not shutdownEvent.is_set():
-            # 运行 UI，等待用户提交
-            userInput = await ui.run()
-
-            # 用户 Ctrl+C / Esc 退出
-            if userInput is None:
-                if _reviewEditItem is not None:
-                    # 编辑模式中 Esc → 取消编辑，放回队列，不退出聊天
-                    getReviewQueue().put_nowait(_reviewEditItem)
-                    _reviewEditItem = None
-                    ui.resetExitFlag()
-                    ui.clearComposer()
-                    _restoreDefaultStatus()
-                    continue
-                break
-
-            # 清空 composer 以准备下一轮输入
-            ui.clearComposer()
-
-            stripped = userInput.strip()
-
-            # ── LLM 审核命令 ──
-            if stripped in (":ra", ":re", ":rr", ":rf", ":rc", ":rq"):
-                from utils.command.llm import handleChatScreenReviewCommand
-                _reviewEditItem = await handleChatScreenReviewCommand(stripped, bot, ui)
-                continue
-
-            # 空消息不发送
-            if not stripped:
-                continue
-
-            # 编辑模式提交 → 放回审核队列，不直接发送
-            if _reviewEditItem is not None:
-                from utils.command.llm import handleChatScreenEditSubmit
-                await handleChatScreenEditSubmit(_reviewEditItem, userInput.rstrip('\n'), ui)
-                _reviewEditItem = None
-                continue
-
-            textToSend = userInput.rstrip('\n')
-
-            try:
-                ts, sndr, txt = _formatMessage("selfMessage", textToSend)
-                ui.appendSelfMessage(ts, sndr, txt)
-                await bot.send_message(chat_id=targetChatID , text=textToSend)
-                await saveMessage(targetChatID, "outgoing", "ZincNya~", textToSend)
-            except Forbidden:
-                ui.showStatus("被 Forbidden 了……对方可能还没跟咱开始聊天")
-            except Exception as e:
-                ui.showStatus(f"发送失败: {e}")
-
-    finally:
-        # 编辑模式中退出 → 放回队列
-        if _reviewEditItem is not None:
-            getReviewQueue().put_nowait(_reviewEditItem)
-            _reviewEditItem = None
-
-        # 注销控制台输出回调
-        state.setConsoleOutputCallback(None)
-        state.setInteractiveMode(False)
-        receiverTask.cancel()
-        try:
-            await receiverTask
-        except asyncio.CancelledError:
-            pass
-
-        if not shutdownEvent.is_set():
-            print("退出聊天界面喵——\n\n")
 
 
 

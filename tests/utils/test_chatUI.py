@@ -1,13 +1,13 @@
 """
 tests/utils/test_chatUI.py
 
-测试 utils/chatUI.py
+测试 utils/chatScreen/ui.py
 """
 
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from utils.chatUI import ChatScreenApp
+from utils.chatScreen.ui import ChatScreenApp
 
 
 # ============================================================================
@@ -21,9 +21,9 @@ def test_format_message_lines_lazy_load():
 
     mock_fn = MagicMock(return_value=["formatted line"])
     mock_module = MagicMock()
-    mock_module._formatMessageLines = mock_fn
+    mock_module.formatMessageLines = mock_fn
 
-    with patch.dict('sys.modules', {'utils.command.send': mock_module}):
+    with patch.dict('sys.modules', {'utils.chatScreen.formatter': mock_module}):
         result = ChatScreenApp._formatMessageLines("2023-01-01 12:00", "Alice", "Hello")
 
     assert ChatScreenApp._fmtLinesFn is mock_fn
@@ -54,8 +54,8 @@ def test_get_term_width_normal():
     mock_app.output.get_size.return_value = mock_size
 
     # 创建实例并替换 _app
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._app = mock_app
 
@@ -67,8 +67,8 @@ def test_get_term_width_exception():
     mock_app = MagicMock()
     mock_app.output.get_size.side_effect = Exception("Terminal error")
 
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._app = mock_app
 
@@ -81,8 +81,8 @@ def test_get_term_width_exception():
 
 def test_default_status():
     """返回默认状态栏文本"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat_123")
 
     status = app._defaultStatus()
@@ -97,8 +97,8 @@ def test_default_status():
 
 def test_update_status_at_bottom():
     """滚动偏移为 0 时显示默认状态"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._scrollOffset = 0
             app._pendingNewMessages = 5
@@ -110,8 +110,8 @@ def test_update_status_at_bottom():
 
 def test_update_status_scrolled():
     """滚动偏移 > 0 时显示历史浏览状态"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._scrollOffset = 10
             app._pendingNewMessages = 3
@@ -128,8 +128,8 @@ def test_update_status_scrolled():
 
 def test_get_window_height_from_render_info():
     """从 render_info 获取高度"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             mock_render_info = MagicMock()
             mock_render_info.window_height = 25
@@ -140,8 +140,8 @@ def test_get_window_height_from_render_info():
 
 def test_get_window_height_from_output():
     """render_info 为 None 时从 output.get_size() 获取"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._transcriptWindow.render_info = None
             mock_size = MagicMock()
@@ -154,8 +154,8 @@ def test_get_window_height_from_output():
 
 def test_get_window_height_exception():
     """异常时返回默认值 20"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._transcriptWindow.render_info = None
             app._app.output.get_size.side_effect = Exception("Terminal error")
@@ -169,8 +169,8 @@ def test_get_window_height_exception():
 
 def test_clamp_offset_within_range():
     """偏移量在有效范围内"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._allLines = ["line1", "line2", "line3", "line4", "line5"]
             app._scrollOffset = 2
@@ -184,8 +184,8 @@ def test_clamp_offset_within_range():
 
 def test_clamp_offset_exceeds_max():
     """偏移量超过最大值时被限制"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._allLines = ["line1", "line2", "line3"]
             app._scrollOffset = 100
@@ -199,8 +199,8 @@ def test_clamp_offset_exceeds_max():
 
 def test_clamp_offset_empty_history():
     """空历史时偏移量为 0"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._allLines = []
             app._scrollOffset = 10
@@ -217,8 +217,8 @@ def test_clamp_offset_empty_history():
 
 def test_scroll_up():
     """向上滚动增加偏移量"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._scrollOffset = 5
             app._allLines = ["line"] * 50
@@ -233,8 +233,8 @@ def test_scroll_up():
 
 def test_scroll_down():
     """向下滚动减少偏移量（不低于 0）"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._scrollOffset = 5
 
@@ -247,8 +247,8 @@ def test_scroll_down():
 
 def test_scroll_calls_clamp_and_update():
     """滚动后调用 _clampOffset() 和 _updateStatus()"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._scrollOffset = 5
             app._allLines = ["line"] * 50
@@ -270,8 +270,8 @@ def test_scroll_calls_clamp_and_update():
 
 def test_refresh_transcript_at_bottom():
     """滚动偏移为 0 时显示最后 N 行"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._allLines = [f"line{i}" for i in range(10)]
             app._scrollOffset = 0
@@ -288,8 +288,8 @@ def test_refresh_transcript_at_bottom():
 
 def test_refresh_transcript_scrolled():
     """滚动偏移 > 0 时显示历史范围"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._allLines = [f"line{i}" for i in range(20)]
             app._scrollOffset = 5
@@ -307,8 +307,8 @@ def test_refresh_transcript_scrolled():
 
 def test_refresh_transcript_pad_empty_lines():
     """不足窗口高度时顶部补空行"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._allLines = ["line0", "line1"]
             app._scrollOffset = 0
@@ -329,8 +329,8 @@ def test_refresh_transcript_pad_empty_lines():
 
 def test_refresh_transcript_cursor_at_end():
     """光标位置设置到底部"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._allLines = ["line0", "line1", "line2"]
             app._scrollOffset = 0
@@ -348,8 +348,8 @@ def test_refresh_transcript_cursor_at_end():
 
 def test_append_lines_basic():
     """追加文本到 _allLines"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._allLines = []
             app._scrollOffset = 0
@@ -363,8 +363,8 @@ def test_append_lines_basic():
 
 def test_append_lines_split_newlines():
     """文本中的 \\n 被拆分为多行"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._allLines = []
             app._scrollOffset = 0
@@ -378,8 +378,8 @@ def test_append_lines_split_newlines():
 
 def test_append_lines_at_bottom_resets_pending():
     """滚动偏移为 0 时重置新消息计数"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._allLines = []
             app._scrollOffset = 0
@@ -394,8 +394,8 @@ def test_append_lines_at_bottom_resets_pending():
 
 def test_append_lines_scrolled_increments_pending():
     """滚动偏移 > 0 时增加新消息计数"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._allLines = []
             app._scrollOffset = 10
@@ -414,8 +414,8 @@ def test_append_lines_scrolled_increments_pending():
 
 def test_append_incoming_message():
     """追加接收到的消息"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._allLines = []
             app._scrollOffset = 0
@@ -432,8 +432,8 @@ def test_append_incoming_message():
 
 def test_append_self_message():
     """追加自己发送的消息"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._allLines = []
             app._scrollOffset = 0
@@ -454,8 +454,8 @@ def test_append_self_message():
 
 def test_clear_composer():
     """清空 _composerArea.text"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._composerArea.text = "some text"
 
@@ -469,8 +469,8 @@ def test_clear_composer():
 
 def test_show_status():
     """更新 _statusText 并调用 _app.invalidate()"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
 
     app.showStatus("New status text")
@@ -484,8 +484,8 @@ def test_show_status():
 
 def test_request_exit_success():
     """设置 _exitRequested = True 并调用 _app.exit()"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._exitRequested = False
 
@@ -496,8 +496,8 @@ def test_request_exit_success():
 
 def test_request_exit_with_exception():
     """异常时不抛出"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._app.exit.side_effect = Exception("Already exited")
 
@@ -512,8 +512,8 @@ def test_request_exit_with_exception():
 
 def test_reset_exit_flag():
     """重置 _exitRequested = False"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat")
             app._exitRequested = True
 
@@ -527,8 +527,8 @@ def test_reset_exit_flag():
 
 def test_init_with_initial_lines():
     """初始化时加载 initialLines"""
-    with patch('utils.chatUI.Application'):
-        with patch('utils.chatUI.sys.stdout'):
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
             app = ChatScreenApp("test_chat", initialLines=["line1\nline2", "line3"])
 
     # initialLines 中的 \n 应被拆分

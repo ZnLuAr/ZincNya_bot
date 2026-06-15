@@ -33,6 +33,11 @@ from prompt_toolkit.widgets import TextArea
 class ChatScreenApp:
 
     def __init__(self, targetChatID: str, initialLines: list[str] | None = None):
+        # 在开头导入 statusBar 函数，避免每次 _defaultStatus/_updateStatus 时重复导入
+        from .statusBar import getDefaultStatus, getHistoryBrowsingStatus
+        self._getDefaultStatusFn = getDefaultStatus
+        self._getHistoryBrowsingStatusFn = getHistoryBrowsingStatus
+
         self._targetChatID = targetChatID
         self._exitRequested = False
         self._pendingNewMessages = 0
@@ -205,8 +210,8 @@ class ChatScreenApp:
     @classmethod
     def _formatMessageLines(cls, timestamp: str, sender: str, text: str) -> list[str]:
         if cls._fmtLinesFn is None:
-            from utils.command.send import _formatMessageLines
-            cls._fmtLinesFn = _formatMessageLines
+            from .formatter import formatMessageLines
+            cls._fmtLinesFn = formatMessageLines
         return cls._fmtLinesFn(timestamp, sender, text)
 
 
@@ -218,27 +223,23 @@ class ChatScreenApp:
 
 
     def _defaultStatus(self) -> str:
-        return (
-            "Enter 换行 | Ctrl+S / Alt+Enter 发送 | Esc 退出 | Ctrl+X 清空"
-            f" | Alt+↑↓ / PgUp PgDn 滚动历史 | 聊天对象: {self._targetChatID}"
-        )
+        return self._getDefaultStatusFn(self._targetChatID)
 
 
     def _updateStatus(self):
         if self._scrollOffset == 0:
-            self._statusText = self._defaultStatus()
+            self._statusText = self._getDefaultStatusFn(self._targetChatID)
         else:
-            pending = f"  ▼ 有 {self._pendingNewMessages} 条新消息喵" if self._pendingNewMessages else ""
-            self._statusText = (
-                f"[历史浏览] PgDn/Alt+↓ 向下 | PgUp/Alt+↑ 向上 | 偏移 {self._scrollOffset} 行{pending}"
-                f"  |  Esc 退出 | 聊天对象: {self._targetChatID}"
+            self._statusText = self._getHistoryBrowsingStatusFn(
+                self._scrollOffset,
+                self._pendingNewMessages,
+                self._targetChatID
             )
         self._app.invalidate()
 
 
     def _getWindowHeight(self) -> int:
         """获取 transcript 区的实际渲染高度（行数）。"""
-        # 孩子们是强制 snake_case 命名变量，我们没救了
         render_info = self._transcriptWindow.render_info
         if render_info is not None:
             return max(1, render_info.window_height)
