@@ -13,8 +13,8 @@ receiver.py / command/llm.py 等多处硬编码同一串文本导致漂移。
 def getDefaultStatus(targetChatID: str) -> str:
     """默认状态栏：显示所有快捷键提示。"""
     return (
-        "Enter 换行 | Ctrl+S / Alt+Enter 发送 | Esc 退出 | Ctrl+X 清空"
-        f" | Alt+↑↓ / PgUp PgDn 滚动历史 | 聊天对象: {targetChatID}"
+        "Ctrl+S 发送 | Esc 退出 | Ctrl+X 清空 | Alt+↑↓ 滚动 | Alt+←→ 切换"
+        f" | 聊天: {targetChatID}"
     )
 
 

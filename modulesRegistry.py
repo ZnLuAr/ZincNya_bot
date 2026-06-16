@@ -242,6 +242,7 @@ MODULES = {
             "utils/chatScreen/formatter.py",
             "utils/chatScreen/history.py",
             "utils/chatScreen/statusBar.py",
+            "utils/chatScreen/helpers.py",
             "utils/chatScreen/ui.py",
         ],
         "handlers": [],
