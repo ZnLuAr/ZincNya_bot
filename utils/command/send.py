@@ -60,6 +60,7 @@ chatScreen(app , bot: Bot , targetChatID: str)
     · Ctrl+X         - 清空输入框
     · Alt+↑ / PgUp   - 向上滚动历史
     · Alt+↓ / PgDn   - 向下滚动历史
+    · Alt+← / Alt+→  - 切换聊天对象（上一个/下一个）
 
 详细技术文档请参阅: docs/chatScreen.md
 
@@ -89,8 +90,6 @@ chatScreen(app , bot: Bot , targetChatID: str)
 chatScreen 聊天界面已重构到独立模块 utils/chatScreen/，详见 docs/chatScreen.md。
 
 """
-
-
 
 from telegram import Bot
 from telegram.error import Forbidden
@@ -136,10 +135,37 @@ async def execute(app , args):
             # 未指定 ID，弹出白名单列表供选择
             screenChatID = await chatIDList(app, bot)
 
+            # 用户未选择或 whitelist 为空
+            if not screenChatID:
+                print("没有可用的聊天对象喵（whitelist 为空或未选择）\n")
+                return
+
         if screenChatID:
-            # 传入有效的 chatID
+            # ── 循环支持切换 ──
+            # 用 while 循环实现非递归切换:
+            # chatScreen 返回 {"action": "switch", "direction": ...} 时继续循环
             from utils.chatScreen import chatScreen
-            await chatScreen(app, bot, screenChatID)
+            from utils.chatScreen.helpers import getNextChatID
+
+            currentChatID = screenChatID
+            while currentChatID:
+                result = await chatScreen(app, bot, currentChatID)
+
+                # 检测切换信号 (mainLoop → session → 这里)
+                if result and result.get("action") == "switch":
+                    direction = result["direction"]
+                    nextChatID = getNextChatID(currentChatID, direction)
+
+                    if nextChatID and nextChatID != currentChatID:
+                        currentChatID = nextChatID
+                        continue  # 进入下一个聊天
+
+                # 正常退出,结束循环
+                break
+
+            # 退出 chatScreen 循环后打印提示
+            print("\n退出聊天界面喵——\n")
+
         return
 
     if not text or text == "NoValue":
@@ -186,7 +212,6 @@ async def sendMsg(bot: Bot , idList , atUser , text):
                 LogLevel.INFO,
                 LogChildType.WITH_ONE_CHILD
             )
-
 
 
 

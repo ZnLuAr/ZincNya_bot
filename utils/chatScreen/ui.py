@@ -41,6 +41,7 @@ class ChatScreenApp:
         self._targetChatID = targetChatID
         self._exitRequested = False
         self._pendingNewMessages = 0
+        self._switchDirection: str | None = None  # "prev" / "next" / None
 
         # ── 聊天记录区（只读 TextArea）──
         self._transcriptArea = TextArea(
@@ -114,6 +115,20 @@ class ChatScreenApp:
         @kb.add("escape", "down")
         def _lineDown(event):
             self._scrollDown(1)
+
+        @kb.add("escape", "left")
+        def _switchPrev(event):
+            """Alt+← 切换到上一个聊天对象"""
+            self._switchDirection = "prev"
+            self._exitRequested = True
+            event.app.exit(result=None)
+
+        @kb.add("escape", "right")
+        def _switchNext(event):
+            """Alt+→ 切换到下一个聊天对象"""
+            self._switchDirection = "next"
+            self._exitRequested = True
+            event.app.exit(result=None)
 
         # ── 布局 ──
         body = HSplit([
@@ -195,7 +210,6 @@ class ChatScreenApp:
         # 退出全屏后重置终端状态，清除残留的状态栏
         self._app.output.reset_attributes()
         self._app.output.flush()
-        print()
         return None if self._exitRequested else result
 
 

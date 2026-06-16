@@ -22,7 +22,10 @@ async def runMainLoop(bot, targetChatID: str, ui, shutdownEvent) -> dict | None:
     """
     运行 chatScreen 主循环，处理用户输入。
 
-    返回退出时仍处于编辑模式的审核项（dict）或 None。
+    返回值约定:
+        - None: 正常退出 (Esc / Ctrl+C)
+        - {"action": "switch", "direction": "next"/"prev"}: 请求切换聊天对象
+        - 审核项 dict: 编辑模式中退出，需放回审核队列
     """
     _reviewEditItem: dict | None = None
 
@@ -39,6 +42,26 @@ async def runMainLoop(bot, targetChatID: str, ui, shutdownEvent) -> dict | None:
                 ui.clearComposer()
                 ui.showStatus(getDefaultStatus(targetChatID))
                 continue
+
+            # ── 检测切换信号 ──
+            # Alt+← / Alt+→ 触发 ui._switchDirection = "prev"/"next"
+            # 返回切换信号给 session.py → send.py，实现聊天对象的切换（就不用递归了）
+            if ui._switchDirection:
+                # 先检查是否可以切换
+                from utils.chatScreen.helpers import getNextChatID
+                direction = ui._switchDirection
+                nextChatID = getNextChatID(targetChatID, direction)
+
+                if nextChatID and nextChatID != targetChatID:
+                    # 可以切换，返回切换信号
+                    return {"action": "switch", "direction": direction}
+                else:
+                    # 无法切换（单用户或空列表），显示提示并留在当前聊天
+                    ui.showStatus(" 只有一个聊天对象，无法切换喵")
+                    ui._switchDirection = None
+                    ui.resetExitFlag()
+                    continue
+
             break
 
         # 清空 composer 以准备下一轮输入
@@ -71,7 +94,7 @@ async def runMainLoop(bot, targetChatID: str, ui, shutdownEvent) -> dict | None:
             await bot.send_message(chat_id=targetChatID , text=textToSend)
             await saveMessage(targetChatID, "outgoing", "ZincNya~", textToSend)
         except Forbidden:
-            ui.showStatus("被 Forbidden 了……对方可能还没跟咱开始聊天")
+            ui.showStatus(" 被 Forbidden 了……对方可能还没跟咱开始聊天")
         except Exception as e:
             ui.showStatus(f"发送失败: {e}")
 

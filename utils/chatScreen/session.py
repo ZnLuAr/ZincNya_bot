@@ -73,8 +73,10 @@ async def chatScreen(app, bot, targetChatID: str):
         reviewEditItem = await runMainLoop(bot, targetChatID, ui, shutdownEvent)
     finally:
         # 编辑模式中退出 → 放回队列
+        # 切换信号 ({"action": "switch", ...}) 不是审核项,不放回队列
         if reviewEditItem is not None:
-            getReviewQueue().put_nowait(reviewEditItem)
+            if not (isinstance(reviewEditItem, dict) and reviewEditItem.get("action") == "switch"):
+                getReviewQueue().put_nowait(reviewEditItem)
 
         # 注销控制台输出回调
         state.setConsoleOutputCallback(None)
@@ -85,5 +87,10 @@ async def chatScreen(app, bot, targetChatID: str):
         except asyncio.CancelledError:
             pass
 
-        if not shutdownEvent.is_set():
-            print("退出聊天界面喵——\n\n")
+    # ── 透传切换信号给调用方 (send.py) ──
+    # 返回 {"action": "switch", "direction": "next"/"prev"} 时,
+    # send.py 的 while 循环会获取下一个 chatID 并再次调用 chatScreen
+    if isinstance(reviewEditItem, dict) and reviewEditItem.get("action") == "switch":
+        return reviewEditItem
+
+    return None

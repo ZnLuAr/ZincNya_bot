@@ -42,12 +42,21 @@ def saveWhitelistFile(data):
     cache.set(data)
 
 
-
-
 def whetherAuthorizedUser(userID: int | str) -> bool:
     data = loadWhitelistFile()
     userID = str(userID)
     return userID in data.get("allowed" , {}) and userID not in data.get("suspended" , {})
+
+
+def getAllowedUserIDs() -> list[str]:
+    """
+    返回所有 allowed 用户的 chatID 列表（按 whitelist 插入顺序）。
+
+    不包含 suspended 用户。顺序与 /send -c 选择列表一致。
+    复用 loadWhitelistFile() 的 fileCache,不重复读盘。
+    """
+    data = loadWhitelistFile()
+    return list(data.get("allowed", {}).keys())
 
 
 

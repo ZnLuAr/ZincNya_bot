@@ -70,7 +70,7 @@ MEMORY_ACTION_INSTRUCTIONS: list[str] = [
     (
         "完整示例：\n"
         "<MEMORY_ACTION>\n"
-        '{"action": "add", "scope_type": "global", "scope_id": "global", "content": "ZincPhos 用严肃表达包装温柔诉求", "tags": ["ZincPhos", "互动偏好"], "priority": 2, "reason": "记录独特表达习惯"}\n'
+        '{"action": "add", "scope_type": "global", "scope_id": "global", "content": "用户喜欢在周末下午喝咖啡时看书", "tags": ["生活习惯", "休闲偏好"], "priority": 1, "reason": "记录日常偏好"}\n'
         "</MEMORY_ACTION>\n"
         "\n输出要求：<MEMORY_ACTION> 块必须放在回复末尾，与正文用空行分隔。输出前自查 JSON 语法。"
     ),
