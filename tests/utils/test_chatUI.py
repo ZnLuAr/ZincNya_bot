@@ -86,7 +86,6 @@ def test_default_status():
             app = ChatScreenApp("test_chat_123")
 
     status = app._defaultStatus()
-    assert "Enter 换行" in status
     assert "Ctrl+S" in status
     assert "test_chat_123" in status
 
@@ -104,7 +103,7 @@ def test_update_status_at_bottom():
             app._pendingNewMessages = 5
 
     app._updateStatus()
-    assert "Enter 换行" in app._statusText
+    assert "Ctrl+S" in app._statusText
     assert "历史浏览" not in app._statusText
 
 

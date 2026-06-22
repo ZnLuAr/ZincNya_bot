@@ -142,7 +142,22 @@ def mockUpdate(mockMessage):
     update.effective_user = mockMessage.from_user
     update.effective_chat = mockMessage.chat
     update.effective_message = mockMessage
+    # callback_query 默认 None；测试回调时手动设为 mockCallbackQuery
+    update.callback_query = None
     return update
+
+
+@pytest.fixture
+def mockCallbackQuery(mockMessage, mockUser):
+    """Mock Telegram CallbackQuery（用于 InlineKeyboard 回调测试）"""
+    query = MagicMock()
+    query.id = "callback_query_id_123"
+    query.data = "action:arg1:arg2"
+    query.from_user = mockUser
+    query.message = mockMessage
+    query.answer = AsyncMock()
+    query.edit_message_text = AsyncMock()
+    return query
 
 
 @pytest.fixture
