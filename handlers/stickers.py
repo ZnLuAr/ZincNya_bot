@@ -14,15 +14,14 @@ from telegram.ext import (
 from config import (
     CACHE_TTL,
     DELETE_DELAY,
-    DEFAULT_READ_TIMEOUT,
-    DEFAULT_WRITE_TIMEOUT,
     GIF_QUEUE_ALERT_THRESHOLD,
     GIF_ALERT_COOLDOWN,
     Permission,
 )
 
 from utils.core.errorDecorators import handleTelegramErrors
-from utils.downloader import createStickerZip, deleteMessageLater, registerFileCleanup, getActiveGifJobs
+from utils.stickerDownloader import createStickerZip, deleteMessageLater, registerFileCleanup, getActiveGifJobs
+from utils.fileSender import sendFileSmart
 from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.operators import getOperatorsWithPermission
 
@@ -70,7 +69,6 @@ def setCachedSticker(setName: str, stickerSet: Any):
             del _stickerCache[oldest]
 
         _stickerCache[setName] = (stickerSet, now)
-
 
 
 
@@ -275,18 +273,18 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
             stickerSuffix
         )
 
-        with open(zipPath , "rb") as f:
-            sent = await context.bot.send_document(
-                read_timeout=DEFAULT_READ_TIMEOUT,
-                write_timeout=DEFAULT_WRITE_TIMEOUT,
-                chat_id=query.message.chat.id,
-                document=f,
-                caption=(
-                    f"@{query.from_user.username or query.from_user.first_name} 様——\n"
-                    f"表情包 {setName}，\n"
-                    "就发出来啦，请查收喵——\n"
-                ),
-            )
+        # 智能发送（自动分卷）
+        messages = await sendFileSmart(
+            bot=context.bot,
+            chatID=query.message.chat.id,
+            filePath=zipPath,
+            caption=(
+                f"@{query.from_user.username or query.from_user.first_name} 様——\n"
+                f"表情包 {setName}，\n"
+                "就发出来啦，请查收喵——\n"
+            ),
+            deleteAfter=False  # 由 resourceManager 和延时任务负责清理
+        )
 
         await logAction(
             "System",
@@ -297,11 +295,14 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # 文件清理注册到 resourceManager（关机时保证执行）
-        registerFileCleanup(zipPath)
-        # 消息延时删除
-        asyncio.create_task(
-            deleteMessageLater(context, sent.chat_id, sent.message_id, DELETE_DELAY)
-        )
+        if os.path.exists(zipPath):
+            registerFileCleanup(zipPath)
+
+        # 消息延时删除（所有发送的消息）
+        for msg in messages:
+            asyncio.create_task(
+                deleteMessageLater(context, msg.chat_id, msg.message_id, DELETE_DELAY)
+            )
 
 
     except Exception as e:

@@ -1,7 +1,7 @@
 """
-tests/utils/test_downloader.py
+tests/utils/test_stickerDownloader.py
 
-测试 utils/downloader.py
+测试 utils/stickerDownloader.py
 """
 
 import pytest
@@ -9,7 +9,7 @@ import asyncio
 from unittest.mock import patch, AsyncMock, MagicMock
 from telegram.error import TelegramError, NetworkError
 
-from utils.downloader import (
+from utils.stickerDownloader import (
     _sanitizeSetName,
     getActiveGifJobs,
     _ensureFFmpeg,
@@ -66,14 +66,14 @@ def test_get_active_gif_jobs_initial():
 
 def test_ensure_ffmpeg_missing():
     """FFMPEG 为 None 时抛出 RuntimeError"""
-    with patch('utils.downloader.FFMPEG', None):
+    with patch('utils.stickerDownloader.FFMPEG', None):
         with pytest.raises(RuntimeError, match="缺失 ffmpeg"):
             _ensureFFmpeg()
 
 
 def test_ensure_ffmpeg_available():
     """FFMPEG 可用时不抛出"""
-    with patch('utils.downloader.FFMPEG', "/path/to/ffmpeg"):
+    with patch('utils.stickerDownloader.FFMPEG', "/path/to/ffmpeg"):
         # 不应抛出异常
         _ensureFFmpeg()
 
@@ -123,9 +123,9 @@ async def test_convert_to_gif_webp_static():
     async def mock_create_subprocess(*args, **kwargs):
         return next(proc_iter)
 
-    with patch('utils.downloader.FFMPEG', "/path/to/ffmpeg"):
-        with patch('utils.downloader.asyncio.create_subprocess_exec', side_effect=mock_create_subprocess):
-            with patch('utils.downloader.tempfile.TemporaryDirectory') as mock_tmp:
+    with patch('utils.stickerDownloader.FFMPEG', "/path/to/ffmpeg"):
+        with patch('utils.stickerDownloader.asyncio.create_subprocess_exec', side_effect=mock_create_subprocess):
+            with patch('utils.stickerDownloader.tempfile.TemporaryDirectory') as mock_tmp:
                 mock_tmp.return_value.__enter__ = MagicMock(return_value="/tmp/fake")
                 mock_tmp.return_value.__exit__ = MagicMock(return_value=None)
                 result = await convertToGif("/path/to/sticker.webp")
@@ -152,9 +152,9 @@ async def test_convert_to_gif_palettegen_failure():
     async def mock_create_subprocess(*args, **kwargs):
         return next(proc_iter)
 
-    with patch('utils.downloader.FFMPEG', "/path/to/ffmpeg"):
-        with patch('utils.downloader.asyncio.create_subprocess_exec', side_effect=mock_create_subprocess):
-            with patch('utils.downloader.tempfile.TemporaryDirectory') as mock_tmp:
+    with patch('utils.stickerDownloader.FFMPEG', "/path/to/ffmpeg"):
+        with patch('utils.stickerDownloader.asyncio.create_subprocess_exec', side_effect=mock_create_subprocess):
+            with patch('utils.stickerDownloader.tempfile.TemporaryDirectory') as mock_tmp:
                 mock_tmp.return_value.__enter__ = MagicMock(return_value="/tmp/fake")
                 mock_tmp.return_value.__exit__ = MagicMock(return_value=None)
                 with pytest.raises(RuntimeError):
@@ -174,6 +174,12 @@ async def test_download_each_one_webp_success():
     mock_bot = MagicMock()
     mock_bot.get_file = AsyncMock(return_value=mock_file)
 
+    with patch('utils.stickerDownloader.magic.from_file', return_value="image/webp"):
+        result = await downloadEachOne(mock_bot, "file_id", "/path/to/out.webp", "webp")
+
+    assert result["ok"] is True
+    assert result.get("converted") is False
+
 @pytest.mark.asyncio
 async def test_download_each_one_webm_renamed():
     """WebM 格式 MIME 检测和重命名"""
@@ -183,8 +189,8 @@ async def test_download_each_one_webm_renamed():
     mock_bot = MagicMock()
     mock_bot.get_file = AsyncMock(return_value=mock_file)
 
-    with patch('utils.downloader.magic.from_file', return_value="video/webm"):
-        with patch('utils.downloader.os.rename') as mock_rename:
+    with patch('utils.stickerDownloader.magic.from_file', return_value="video/webm"):
+        with patch('utils.stickerDownloader.os.rename') as mock_rename:
             result = await downloadEachOne(mock_bot, "file_id", "/path/to/out.webp", "webm")
 
     assert result["ok"] is True
@@ -203,8 +209,8 @@ async def test_download_each_one_tgs_renamed():
     mock_bot = MagicMock()
     mock_bot.get_file = AsyncMock(return_value=mock_file)
 
-    with patch('utils.downloader.magic.from_file', return_value="application/x-tgsticker"):
-        with patch('utils.downloader.os.rename') as mock_rename:
+    with patch('utils.stickerDownloader.magic.from_file', return_value="application/x-tgsticker"):
+        with patch('utils.stickerDownloader.os.rename') as mock_rename:
             result = await downloadEachOne(mock_bot, "file_id", "/path/to/out.webp", "webp")
 
     assert result["ok"] is True
@@ -228,9 +234,9 @@ async def test_download_each_one_telegram_error_retry():
         ]
     )
 
-    with patch('utils.downloader.magic.from_file', return_value="image/webp"):
-        with patch('utils.downloader.asyncio.sleep', new_callable=AsyncMock):
-            with patch('utils.downloader.MAX_DOWNLOADS_ATTEMPTS', 3):
+    with patch('utils.stickerDownloader.magic.from_file', return_value="image/webp"):
+        with patch('utils.stickerDownloader.asyncio.sleep', new_callable=AsyncMock):
+            with patch('utils.stickerDownloader.MAX_DOWNLOADS_ATTEMPTS', 3):
                 result = await downloadEachOne(mock_bot, "file_id", "/path/to/out.webp", "webp")
 
     assert result["ok"] is True
@@ -243,8 +249,8 @@ async def test_download_each_one_max_retries_exhausted():
     mock_bot = MagicMock()
     mock_bot.get_file = AsyncMock(side_effect=TelegramError("Always fail"))
 
-    with patch('utils.downloader.asyncio.sleep', new_callable=AsyncMock):
-        with patch('utils.downloader.MAX_DOWNLOADS_ATTEMPTS', 2):
+    with patch('utils.stickerDownloader.asyncio.sleep', new_callable=AsyncMock):
+        with patch('utils.stickerDownloader.MAX_DOWNLOADS_ATTEMPTS', 2):
             result = await downloadEachOne(mock_bot, "file_id", "/path/to/out.webp", "webp")
 
     assert result["ok"] is False
@@ -256,6 +262,12 @@ async def test_download_each_one_unexpected_error():
     """不可预期异常返回错误"""
     mock_bot = MagicMock()
     mock_bot.get_file = AsyncMock(side_effect=ValueError("Unexpected error"))
+
+    result = await downloadEachOne(mock_bot, "file_id", "/path/to/out.webp", "webp")
+
+    assert result["ok"] is False
+    assert "error" in result
+
 
 # ============================================================================
 # createStickerZip() 测试
@@ -277,10 +289,10 @@ async def test_create_sticker_zip_basic(tmp_path):
     async def mock_download(*args, **kwargs):
         return {"ok": True, "converted": False}
 
-    with patch('utils.downloader.downloadEachOne', side_effect=mock_download):
-        with patch('utils.downloader.shutil.make_archive', return_value=str(tmp_path / "test.zip")):
-            with patch('utils.downloader.shutil.rmtree') as mock_rmtree:
-                with patch('utils.downloader.logAction', new_callable=AsyncMock):
+    with patch('utils.stickerDownloader.downloadEachOne', side_effect=mock_download):
+        with patch('utils.stickerDownloader.createZip', return_value=str(tmp_path / "test.zip")):
+            with patch('utils.stickerDownloader.shutil.rmtree') as mock_rmtree:
+                with patch('utils.stickerDownloader.logAction', new_callable=AsyncMock):
                     result = await createStickerZip(
                         bot=mock_bot,
                         stickerSet=mock_sticker_set,
@@ -312,10 +324,10 @@ async def test_create_sticker_zip_gif_counter(tmp_path):
 
     initial_count = getActiveGifJobs()
 
-    with patch('utils.downloader.downloadEachOne', side_effect=mock_download):
-        with patch('utils.downloader.shutil.make_archive', return_value=str(tmp_path / "test.zip")):
-            with patch('utils.downloader.shutil.rmtree'):
-                with patch('utils.downloader.logAction', new_callable=AsyncMock):
+    with patch('utils.stickerDownloader.downloadEachOne', side_effect=mock_download):
+        with patch('utils.stickerDownloader.createZip', return_value=str(tmp_path / "test.zip")):
+            with patch('utils.stickerDownloader.shutil.rmtree'):
+                with patch('utils.stickerDownloader.logAction', new_callable=AsyncMock):
                     await createStickerZip(
                         bot=mock_bot,
                         stickerSet=mock_sticker_set,
@@ -342,9 +354,9 @@ async def test_create_sticker_zip_cleanup_on_exception(tmp_path):
     async def mock_download(*args, **kwargs):
         raise RuntimeError("Download failed")
 
-    with patch('utils.downloader.downloadEachOne', side_effect=mock_download):
-        with patch('utils.downloader.shutil.rmtree') as mock_rmtree:
-            with patch('utils.downloader.logAction', new_callable=AsyncMock):
+    with patch('utils.stickerDownloader.downloadEachOne', side_effect=mock_download):
+        with patch('utils.stickerDownloader.shutil.rmtree') as mock_rmtree:
+            with patch('utils.stickerDownloader.logAction', new_callable=AsyncMock):
                 with pytest.raises(RuntimeError):
                     await createStickerZip(
                         bot=mock_bot,
@@ -364,9 +376,9 @@ async def test_delete_later_success():
     mockContext = MagicMock()
     mockContext.bot.delete_message = AsyncMock()
 
-    with patch('utils.downloader.asyncio.sleep', new_callable=AsyncMock):
-        with patch('utils.downloader.os.path.exists', return_value=True):
-            with patch('utils.downloader.os.remove') as mock_remove:
+    with patch('utils.stickerDownloader.asyncio.sleep', new_callable=AsyncMock):
+        with patch('utils.stickerDownloader.os.path.exists', return_value=True):
+            with patch('utils.stickerDownloader.os.remove') as mock_remove:
                 await deleteLater(mockContext, 123, 456, "/path/to/file.zip", 1)
 
     mockContext.bot.delete_message.assert_called_once_with(123, message_id=456)
@@ -379,8 +391,8 @@ async def test_delete_later_no_file_path():
     mockContext = MagicMock()
     mockContext.bot.delete_message = AsyncMock()
 
-    with patch('utils.downloader.asyncio.sleep', new_callable=AsyncMock):
-        with patch('utils.downloader.os.remove') as mock_remove:
+    with patch('utils.stickerDownloader.asyncio.sleep', new_callable=AsyncMock):
+        with patch('utils.stickerDownloader.os.remove') as mock_remove:
             await deleteLater(mockContext, 123, 456, None, 1)
 
     mock_remove.assert_not_called()
@@ -392,9 +404,9 @@ async def test_delete_later_file_not_exists():
     mockContext = MagicMock()
     mockContext.bot.delete_message = AsyncMock()
 
-    with patch('utils.downloader.asyncio.sleep', new_callable=AsyncMock):
-        with patch('utils.downloader.os.path.exists', return_value=False):
-            with patch('utils.downloader.os.remove') as mock_remove:
+    with patch('utils.stickerDownloader.asyncio.sleep', new_callable=AsyncMock):
+        with patch('utils.stickerDownloader.os.path.exists', return_value=False):
+            with patch('utils.stickerDownloader.os.remove') as mock_remove:
                 # 不应抛出异常
                 await deleteLater(mockContext, 123, 456, "/path/to/missing.zip", 1)
 
@@ -407,8 +419,8 @@ async def test_delete_later_message_delete_fails():
     mockContext = MagicMock()
     mockContext.bot.delete_message = AsyncMock(side_effect=Exception("Failed"))
 
-    with patch('utils.downloader.asyncio.sleep', new_callable=AsyncMock):
-        with patch('utils.downloader.os.path.exists', return_value=False):
+    with patch('utils.stickerDownloader.asyncio.sleep', new_callable=AsyncMock):
+        with patch('utils.stickerDownloader.os.path.exists', return_value=False):
             # 不应抛出异常
             await deleteLater(mockContext, 123, 456, None, 1)
 
@@ -423,7 +435,7 @@ async def test_delete_message_later_success():
     mockContext = MagicMock()
     mockContext.bot.delete_message = AsyncMock()
 
-    with patch('utils.downloader.asyncio.sleep', new_callable=AsyncMock):
+    with patch('utils.stickerDownloader.asyncio.sleep', new_callable=AsyncMock):
         await deleteMessageLater(mockContext, 123, 456, 1)
 
     mockContext.bot.delete_message.assert_called_once_with(123, message_id=456)
@@ -435,7 +447,7 @@ async def test_delete_message_later_failure_silent():
     mockContext = MagicMock()
     mockContext.bot.delete_message = AsyncMock(side_effect=Exception("Failed"))
 
-    with patch('utils.downloader.asyncio.sleep', new_callable=AsyncMock):
+    with patch('utils.stickerDownloader.asyncio.sleep', new_callable=AsyncMock):
         # 不应抛出异常
         await deleteMessageLater(mockContext, 123, 456, 1)
 

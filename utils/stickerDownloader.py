@@ -1,5 +1,5 @@
 """
-utils/downloader.py
+utils/stickerDownloader.py
 
 Telegram 表情包下载与格式转换模块。
 
@@ -156,6 +156,7 @@ from config import (
     PROJECT_ROOT,                   # 项目根目录
 )
 
+from utils.archiver import createZip
 from utils.core.logger import logAction, LogLevel, LogChildType
 
 
@@ -205,9 +206,8 @@ def getActiveGifJobs() -> int:
 
 
 
-
 # 下载并打包完整表情包，之后的发送消息交给 /handlers/stickers.py
-# 这是 utils/downloader.py 的主入口，下载并打包整个表情包
+# 这是 utils/stickerDownloader.py 的主入口，下载并打包整个表情包
 async def createStickerZip(
         bot,
         stickerSet,
@@ -274,7 +274,7 @@ async def _createStickerZipImpl(
 
         # 打包为.zip
         zipBase = os.path.join(outputDir , f"{setName}_{uniqueID}")
-        zipPath = shutil.make_archive(zipBase , "zip" , tmpDir)
+        zipPath = createZip(tmpDir, zipBase)
         await logAction(
             "System",
             "打包完毕",

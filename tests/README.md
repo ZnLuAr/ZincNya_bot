@@ -46,7 +46,9 @@ tests/
 │   ├── whitelistManager/    # 白名单管理
 │   ├── test_bookSearchAPI.py
 │   ├── test_chatUI.py
-│   ├── test_downloader.py
+│   ├── test_stickerDownloader.py
+│   ├── test_archiver.py
+│   ├── test_fileSender.py
 │   └── test_newsAPI.py
 └── integration/             # 集成测试（预留，暂无测试）
 ```
@@ -55,7 +57,7 @@ tests/
 
 ### 测试统计
 
-总计 **550+ 个测试**，整体行覆盖率 **40%**。
+总计 **800+ 个测试**，整体行覆盖率 **40%**。
 
 | 模块组 | 测试数 | 平均覆盖率 |
 |--------|--------|-----------|
@@ -63,7 +65,7 @@ tests/
 | LLM 模块 | 90+ | 60-100% |
 | 业务模块（todos/nya/whitelist/book） | 200+ | 80-100% |
 | Handler 层（reaction/shutdown） | 50+ | 100% |
-| 工具模块（chatUI/downloader/news） | 100+ | 85-99% |
+| 工具模块（chatUI/stickerDownloader/archiver/fileSender/news） | 135+ | 85-99% |
 | 模块系统（registry/manager） | 20+ | 85% |
 
 各模块目录下若有 `*README.md`，记录该模块特有的测试策略与陷阱。无文档的模块按通用约定即可。

@@ -70,7 +70,7 @@ async def mock_create_subprocess(*args, **kwargs):
 模拟上下文管理器：
 
 ```python
-with patch('utils.downloader.tempfile.TemporaryDirectory') as mock_tmp:
+with patch('utils.stickerDownloader.tempfile.TemporaryDirectory') as mock_tmp:
     mock_tmp.return_value.__enter__ = MagicMock(return_value="/tmp/fake")
     mock_tmp.return_value.__exit__ = MagicMock(return_value=None)
 ```
