@@ -28,6 +28,7 @@ from utils.llm.memory.action import MemoryAction, executeAction
 from utils.llm.review import extractMemoryActionFields, extractValidatedMemoryActions, queueMemoryActionsToConsole
 from utils.core.logger import logAction, LogLevel, LogChildType, logSystemEvent
 from utils.operators import hasPermission
+from utils.telegramHelpers import sendLLMReply
 
 
 _TG_MAX_LEN = 4096
@@ -419,10 +420,12 @@ async def handleReviewCallback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
 
     if action == "send":
-        await context.bot.send_message(
-            chatID,
-            _truncate(reviewData["reply"], _TG_MAX_LEN),
-            reply_to_message_id=reviewData.get("triggerMsgID"),
+        await sendLLMReply(
+            bot=context.bot,
+            chatID=chatID,
+            reply=reviewData["reply"],
+            replyToMessageID=reviewData.get("triggerMsgID"),
+            maxLength=_TG_MAX_LEN,
         )
 
         sentText = (

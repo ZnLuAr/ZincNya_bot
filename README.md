@@ -231,6 +231,7 @@ ZincNya_bot/
 │   ├── bookSearchAPI.py            # Open Library API 封装
 │   ├── newsAPI.py                  # 新闻抓取 API 封装（先咕着喵）
 │   ├── downloader.py               # 表情包下载与格式转换
+│   ├── markdownToHtml.py           # Markdown → Telegram HTML 转换工具
 │   ├── operators.py                # Operators 权限管理
 │   ├── telegramHelpers.py          # Telegram 消息操作工具
 │   ├── fileEditor.py               # TUI 文本编辑器

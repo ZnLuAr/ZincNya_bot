@@ -61,7 +61,7 @@ from utils.llm.state import addMemoryReviewItem
 from utils.llm.vision import extractImageRefs, extractReplyImageRefs, downloadImages
 from utils.core.logger import logAction, logSystemEvent, LogLevel, LogChildType
 from utils.operators import loadOperators
-from utils.telegramHelpers import removeMention
+from utils.telegramHelpers import removeMention, sendLLMReply
 from utils.whitelistManager.data import whetherAuthorizedUser
 
 
@@ -453,10 +453,12 @@ async def _dispatchTextReply(
     urlContexts: list[dict] | None = None,
 ) -> None:
     if autoMode == "on":
-        await context.bot.send_message(
-            chat_id=chatID,
-            text=_truncate(reply, _TG_MAX_LEN),
-            reply_to_message_id=triggerMsgID,
+        await sendLLMReply(
+            bot=context.bot,
+            chatID=chatID,
+            reply=reply,
+            replyToMessageID=triggerMsgID,
+            maxLength=_TG_MAX_LEN,
         )
         await logAction("System", f"LLM 生成内容直接发送至 @{username}（{chatID}）", f"原文：{displayOriginalMsg}", LogLevel.INFO, LogChildType.WITH_CHILD)
         await logAction("System", "", f"生成的消息：{reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
@@ -636,10 +638,12 @@ async def _dispatchGeneratedOutput(
         await asyncio.sleep(2)
         try:
             if reply.strip() and autoMode == "on":
-                await context.bot.send_message(
-                    chat_id=chatID,
-                    text=_truncate(reply, _TG_MAX_LEN),
-                    reply_to_message_id=triggerMsgID,
+                await sendLLMReply(
+                    bot=context.bot,
+                    chatID=chatID,
+                    reply=reply,
+                    replyToMessageID=triggerMsgID,
+                    maxLength=_TG_MAX_LEN,
                 )
                 await logAction("System", f"LLM 分发重试成功：{chatID}", "", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
         except NetworkError as e2:
@@ -841,6 +845,6 @@ def register():
             ), "group": 1},
         ],
         "name": "LLM 聊天",
-        "description": "Claude LLM 自动回复（支持图片）",
+        "description": "LLM 自动回复",
         "auth": False,  # 内部自行检查 whitelist + llmEnabled
     }
