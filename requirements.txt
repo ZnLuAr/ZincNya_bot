@@ -43,3 +43,7 @@ PyYAML==6.0.2            # LLM 知识库（YAML frontmatter 解析）
 
 # 数据验证（离线编辑脚本）
 jsonschema==4.23.0       # JSON Schema 验证
+
+# 大文件分卷压缩（表情包/通用大文件发送）
+py7zr==0.22.0
+

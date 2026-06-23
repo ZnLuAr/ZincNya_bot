@@ -53,6 +53,9 @@ GIF_ALERT_COOLDOWN = 300        # operator 告警冷却（秒）
 DEFAULT_READ_TIMEOUT = 300      # 请求发出后，等待返回响应的超时缓冲区 (秒)
 DEFAULT_WRITE_TIMEOUT = 60      # 将请求上传至 Telegram 请求体的超时缓冲区（秒）
 
+# 大文件发送相关常量
+TELEGRAM_FILE_SIZE_LIMIT_MB = 48  # Telegram 文件大小限制（MB，留 2MB 裕度）
+
 
 
 

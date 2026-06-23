@@ -228,9 +228,11 @@ ZincNya_bot/
 │   │   ├── statusBar.py            # 状态栏文本常量
 │   │   └── ui.py                   # ChatScreenApp UI 控制层
 │   │
+│   ├── archiver.py                 # 文件打包工具（ZIP / 7z 分卷）
+│   ├── fileSender.py               # 智能文件发送（自动分卷）
+│   ├── stickerDownloader.py        # 表情包下载与格式转换
 │   ├── bookSearchAPI.py            # Open Library API 封装
 │   ├── newsAPI.py                  # 新闻抓取 API 封装（先咕着喵）
-│   ├── downloader.py               # 表情包下载与格式转换
 │   ├── markdownToHtml.py           # Markdown → Telegram HTML 转换工具
 │   ├── operators.py                # Operators 权限管理
 │   ├── telegramHelpers.py          # Telegram 消息操作工具
@@ -587,6 +589,24 @@ python scripts/merge_data.py --source /path/to/other/data --apply
   }
 
   ```
+
+### 在 Linux 因为 OOM 被杀
+
+部署 Linux 上，如果发现客户端进程被 `killed` ，且记得前后有大批次表情包下载操作的话，就有可能是机器的内存被吃光了，系统自动杀死了进程。
+
+应该注意——客户端的大批量 GIF 表情包转换，或大文件打包操作，是有可能会把整台机器的内存吃光的。
+
+这个时候，就建议通过 systemd 给进程加内存上限啦——
+
+```ini
+# /etc/systemd/system/zincnya-bot.service
+[Service]
+MemoryMax=512M
+MemoryHigh=400M
+RestartForceExitStatus=137  # OOM 被 kill 时自动重启
+```
+
+`MemoryMax` 具体值视服务器内存自行调整。**不配置也能正常运行**的……这只是防止极端情况下影响同机其他服务的保险措施。
 
 ### 还是搞不定的话——
 
