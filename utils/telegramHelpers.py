@@ -6,6 +6,8 @@ Telegram 消息操作的公共工具函数。
 
 from telegram.error import BadRequest
 
+from utils.markdownToHtml import convertMarkdownToHtml
+
 
 async def safeEditMessage(message, text: str, **kwargs) -> bool:
     """
@@ -25,6 +27,8 @@ async def safeEditMessage(message, text: str, **kwargs) -> bool:
         if "Message is not modified" in str(e):
             return False
         raise
+
+
 
 
 def isMentioned(message, botUsername: str) -> bool:
@@ -47,6 +51,8 @@ def isMentioned(message, botUsername: str) -> bool:
     return mention in text.lower() or mention in caption.lower()
 
 
+
+
 def removeMention(text: str, botUsername: str) -> str:
     """
     去除消息中的 @bot 前缀，返回纯文本。
@@ -61,3 +67,96 @@ def removeMention(text: str, botUsername: str) -> str:
     import re
     pattern = re.compile(re.escape(f"@{botUsername}"), re.IGNORECASE)
     return pattern.sub("", text).strip()
+
+
+
+
+
+def prepareMarkdownReply(reply: str, maxLength: int = 4096) -> tuple[str, str]:
+    """
+    准备 LLM 回复文本：转换 Markdown → HTML
+
+    功能：
+    - 将 LLM 输出的 Markdown 格式转换为 Telegram HTML
+    - 自动截断过长消息
+    - 返回 (text, parse_mode) 元组，供调用方发送
+
+    参数：
+        reply: LLM 原始回复（Markdown 格式）
+        maxLength: 最大消息长度（默认 4096）
+
+    返回：
+        (text, parse_mode) 元组
+        - text: 转换后的 HTML 文本（已截断）
+        - parse_mode: "HTML"
+
+    示例：
+        >>> prepareMarkdownReply("这是 **重要** 内容")
+        ('这是 <b>重要</b> 内容', 'HTML')
+    """
+    htmlText = convertMarkdownToHtml(reply)
+    if len(htmlText) > maxLength:
+        htmlText = htmlText[:maxLength - 3] + "..."
+    return (htmlText, "HTML")
+
+
+async def sendLLMReply(
+    bot,
+    chatID: str | int,
+    reply: str,
+    replyToMessageID: int | None = None,
+    maxLength: int = 4096,
+) -> None:
+    """
+    发送 LLM 回复：转换 Markdown → HTML + 自动错误降级
+
+    功能：
+    - 调用 prepareMarkdownReply 转换格式
+    - 发送消息
+    - 如果 Telegram HTML 解析失败，自动降级为纯文本重新发送
+
+    参数：
+        bot: Telegram Bot 实例
+        chatID: 目标聊天 ID
+        reply: LLM 原始回复（Markdown 格式）
+        replyToMessageID: 回复的消息 ID（可选）
+        maxLength: 最大消息长度（默认 4096）
+
+    示例：
+        await sendLLMReply(
+            bot=context.bot,
+            chatID=123456,
+            reply="这是 **重要** 内容",
+            replyToMessageID=789,
+        )
+    """
+    from utils.core.logger import logAction, LogLevel, LogChildType
+
+    text, parse_mode = prepareMarkdownReply(reply, maxLength)
+
+    try:
+        await bot.send_message(
+            chat_id=chatID,
+            text=text,
+            parse_mode=parse_mode,
+            reply_to_message_id=replyToMessageID,
+        )
+    except BadRequest as e:
+        if "can't parse entities" in str(e).lower():
+            # HTML 解析失败，降级为纯文本
+            await logAction(
+                "System",
+                "LLM 回复 HTML 解析失败，降级为纯文本",
+                str(e),
+                LogLevel.WARNING,
+                LogChildType.WITH_ONE_CHILD,
+            )
+            truncated = reply[:maxLength - 3] + "..." if len(reply) > maxLength else reply
+            await bot.send_message(
+                chat_id=chatID,
+                text=truncated,
+                reply_to_message_id=replyToMessageID,
+            )
+        else:
+            raise
+

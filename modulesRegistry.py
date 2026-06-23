@@ -35,6 +35,7 @@ MODULES = {
             "handlers/llmCommand.py",
             "handlers/llmReview.py",
             "utils/chatHistory.py",
+            "utils/markdownToHtml.py",
             "utils/operators.py",
             "utils/telegramHelpers.py",
             "utils/llm/__init__.py",

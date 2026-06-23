@@ -20,6 +20,7 @@ from utils.llm.memory.action import (
     validateAction,
 )
 from utils.core.logger import logAction, LogLevel, LogChildType, logSystemEvent
+from utils.telegramHelpers import sendLLMReply
 
 
 
@@ -326,10 +327,11 @@ async def reviewSend(bot, item: dict) -> None:
         return
 
     # kind == "reply"
-    await bot.send_message(
-        chat_id=item["chatID"],
-        text=item["reply"],
-        reply_to_message_id=item.get("messageID"),
+    await sendLLMReply(
+        bot=bot,
+        chatID=item["chatID"],
+        reply=item["reply"],
+        replyToMessageID=item.get("messageID"),
     )
     await logAction(
         "System", "LLM 控制台审核：发送",
