@@ -149,6 +149,7 @@ ZincNya_bot/
 │   │   ├── todos.py                # /todos 待办事项管理（控制台）
 │   │   ├── llm.py                  # /llm LLM 功能控制与控制台审核
 │   │   ├── news.py                 # /news 新闻推送管理
+│   │   ├── killsticker.py          # /killsticker 中止表情包下载任务
 │   │   ├── clear.py                # /clear 清屏
 │   │   └── shutdown.py             # /shutdown 关闭
 │   │
@@ -231,6 +232,7 @@ ZincNya_bot/
 │   ├── archiver.py                 # 文件打包工具（ZIP / 7z 分卷）
 │   ├── fileSender.py               # 智能文件发送（自动分卷）
 │   ├── stickerDownloader.py        # 表情包下载与格式转换
+│   ├── memoryMonitor.py            # 内存监控后台任务（告警 / 拦截 / 任务中止）
 │   ├── bookSearchAPI.py            # Open Library API 封装
 │   ├── newsAPI.py                  # 新闻抓取 API 封装（先咕着喵）
 │   ├── markdownToHtml.py           # Markdown → Telegram HTML 转换工具
@@ -279,6 +281,7 @@ ZincNya_bot/
 | `/nya` | 语录相关功能 |
 | `/todos` | 管理待办事项 |
 | `/llm` | 控制 LLM 功能开关、审核模式、模型、群聊触发、记忆与 URL 读取 |
+| `/killsticker` | 中止所有正在进行的表情包下载任务 |
 | `/log` | 管理日志文件 |
 | `/clear` | 清理控制台 |
 | `/shutdown` | 关闭程序 |
@@ -596,7 +599,7 @@ python scripts/merge_data.py --source /path/to/other/data --apply
 
 应该注意——客户端的大批量 GIF 表情包转换，或大文件打包操作，是有可能会把整台机器的内存吃光的。
 
-这个时候，就建议通过 systemd 给进程加内存上限啦——
+若需进一步隔离，可选配 systemd 内存上限——
 
 ```ini
 # /etc/systemd/system/zincnya-bot.service
@@ -607,6 +610,21 @@ RestartForceExitStatus=137  # OOM 被 kill 时自动重启
 ```
 
 `MemoryMax` 具体值视服务器内存自行调整。**不配置也能正常运行**的……这只是防止极端情况下影响同机其他服务的保险措施。
+
+
+<details>
+<summary>不过，客户端是有内置主动防护的……如果你想看的话—— </summary>
+
+> **主动防护（内置）**
+>
+> 目前是自带三层内存防护的（`utils/memoryMonitor.py`，随 stickers 模块启用）：
+>
+> - **监控层**：后台每 60 秒检查可用内存，低于 300MB 时，就会向所有拥有 `NOTIFY` 权限的 OP 发送告警。若当时有表情包下载任务正在进行的话，还会附带"终止下载"按钮；
+> - **拦截层**：每次下载请求启动前检查内存，低于 200MB 时，表情包下载任务就会被直接拒绝，提示用户稍后再试。
+> - **干预层**：OP 可点击 Telegram 告警消息里的按钮，或在控制台执行 `/killsticker`，立即中止所有进行中的下载任务。
+>
+> 阈值可在 `config.py` 调整：`MEMORY_WARNING_THRESHOLD_MB`（告警）和 `MEMORY_GATE_THRESHOLD_MB`（拦截）。
+</details>
 
 ### 还是搞不定的话——
 
