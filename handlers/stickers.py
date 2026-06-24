@@ -22,8 +22,9 @@ from config import (
 from utils.core.errorDecorators import handleTelegramErrors
 from utils.stickerDownloader import createStickerZip, deleteMessageLater, registerFileCleanup, getActiveGifJobs
 from utils.fileSender import sendFileSmart
+from utils.memoryMonitor import isMemoryLow, registerStickerTask, unregisterStickerTask, cancelAllStickerTasks
 from utils.core.logger import logAction, LogLevel, LogChildType
-from utils.operators import getOperatorsWithPermission
+from utils.operators import getOperatorsWithPermission, hasPermission
 
 
 
@@ -178,16 +179,34 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     _ , setName , action = parts
+
+    # ── kill 分支：来自内存告警消息的"终止下载"按钮（仅 NOTIFY 权限可触发）──
+    if setName == "kill" and action == "all":
+        if not hasPermission(query.from_user.id, Permission.NOTIFY):
+            await query.answer(
+                "……被咱拦下来啦。\n"
+                "这个按钮，你暂时还没有点击的权限哦——\n\n"
+                "……咱就假装没看见这次点击……0 w0",
+                show_alert=True
+            )
+            return
+        count = await cancelAllStickerTasks()
+        await query.edit_message_text(
+            f"收到啦，已中止 {count} 个下载任务……" if count > 0
+            else "诶——？晚了 w\n任务已经完成了，不需要中止啦……"
+        )
+        return
+
     stickerSet = getCachedSticker(setName)
 
     if not stickerSet:
         await query.edit_message_text(
-            "フム……找找……\n"
-            "找、找不到了喵😰——\n"
-            "……试试再用/findsticker，\n"
-            "让咱再试一次吧……\n\n"
+            "奇怪喵……\n\n"
 
-            "お家を帰る——.jpg"
+            "把能查的地方都翻了一圈，"
+            "还是没找到对应的表情包的说……"
+
+            "要不要再试一次 /findsticker？"
         )
         await logAction(
             "System",
@@ -227,6 +246,17 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 开始下载
     stickerSuffix = action
 
+    # ── 内存拦截（先于一切下载准备，避免用户先看到"收到"又被拒绝）──
+    if isMemoryLow():
+        await query.edit_message_text(
+            "「異議あり！」（唐突\n\n"
+            "锌酱本来是想放行的\n"
+            "但现在的内存情况有点危险呢……\n\n"
+            "所以就先等等吧……"
+        )
+        return
+
+
     # GIF 过载检测与告警
     gifQueueNote = ""
     if stickerSuffix == "gif":
@@ -241,7 +271,7 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
             nowAlert = time.monotonic()
             if (nowAlert - _lastGifAlertTime) > GIF_ALERT_COOLDOWN:
                 _lastGifAlertTime = nowAlert
-                alertText = f"⚠️ GIF 转换队列堆积，当前有 {activeJobs} 个任务正在进行"
+                alertText = f"⚠️ 观察到 GIF 转换队列堆积，当前有 {activeJobs} 个任务正在进行"
                 for opID in getOperatorsWithPermission(Permission.NOTIFY):
                     try:
                         await context.bot.send_message(chat_id=int(opID), text=alertText)
@@ -266,12 +296,19 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     zipPath = None
     try:
-        zipPath = await createStickerZip(
-            context.bot,
-            stickerSet,
-            setName,
-            stickerSuffix
+        task = asyncio.create_task(
+            createStickerZip(
+                context.bot,
+                stickerSet,
+                setName,
+                stickerSuffix
+            )
         )
+        registerStickerTask(task)
+        try:
+            zipPath = await task
+        finally:
+            unregisterStickerTask(task)
 
         # 智能发送（自动分卷）
         messages = await sendFileSmart(

@@ -17,8 +17,8 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError(
-        "❌ BOT_TOKEN 环境变量未设置喵！\n"
-        "请创建 .env 文件并添加：BOT_TOKEN=your_token_here\n"
+        "❌ BOT_TOKEN 环境变量未设置\n"
+        "需要创建 .env 文件并添加：BOT_TOKEN=your_token_here\n"
         "参考 .env.example 文件了解配置格式。"
     )
 
@@ -55,6 +55,12 @@ DEFAULT_WRITE_TIMEOUT = 60      # 将请求上传至 Telegram 请求体的超时
 
 # 大文件发送相关常量
 TELEGRAM_FILE_SIZE_LIMIT_MB = 48  # Telegram 文件大小限制（MB，留 2MB 裕度）
+
+# 内存监控
+MEMORY_MONITOR_INTERVAL = 60          # 监测间隔（秒）
+MEMORY_WARNING_THRESHOLD_MB = 300     # 告警阈值（MB）：低于此值通知 OP
+MEMORY_ALERT_COOLDOWN = 300           # 告警冷却（秒）
+MEMORY_GATE_THRESHOLD_MB = 200        # 拦截阈值（MB）：低于此值拒绝新任务
 
 
 
