@@ -6,10 +6,14 @@ ZincNya_bot 测试运行脚本
 
 用法：
     python scripts/test.py                    # 运行所有测试
-    python scripts/test.py -m llm             # 只运行 llm 模块测试
+    python scripts/test.py -m llm             # 只运行 llm 模块测试（tests/utils/llm/）
+    python scripts/test.py -m utils.llm       # 同上（显式指定路径）
+    python scripts/test.py -m handlers.todos  # 运行 todos handler 测试（tests/handlers/）
+    python scripts/test.py -m core            # 运行 core 模块测试（tests/utils/core/）
+    python scripts/test.py -m integration     # 运行集成测试（tests/integration/）
     python scripts/test.py -k tokenizer       # 运行名称包含 tokenizer 的测试
     python scripts/test.py --cov              # 生成覆盖率报告
-    python scripts/test.py --integration      # 只运行集成测试
+    python scripts/test.py --integration      # 只运行带 integration marker 的测试
     python scripts/test.py --unit             # 只运行单元测试
     python scripts/test.py --fast             # 跳过慢速测试
 """
@@ -65,19 +69,22 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例：
-  python scripts/test.py                    # 运行所有测试
-  python scripts/test.py -m llm             # 只运行 llm 模块测试
-  python scripts/test.py -k tokenizer       # 运行名称包含 tokenizer 的测试
-  python scripts/test.py --cov              # 生成覆盖率报告
-  python scripts/test.py --integration      # 只运行集成测试
-  python scripts/test.py --unit             # 只运行单元测试
-  python scripts/test.py --fast             # 跳过慢速测试
+  python scripts/test.py                      # 运行所有测试
+  python scripts/test.py -m llm               # 只运行 llm 模块测试
+  python scripts/test.py -m utils.llm         # 同上（显式路径）
+  python scripts/test.py -m handlers.todos    # 运行 todos handler 测试
+  python scripts/test.py -m core              # 运行 core 模块测试
+  python scripts/test.py -k tokenizer         # 运行名称包含 tokenizer 的测试
+  python scripts/test.py --cov                # 生成覆盖率报告
+  python scripts/test.py --integration        # 只运行集成测试
+  python scripts/test.py --unit               # 只运行单元测试
+  python scripts/test.py --fast               # 跳过慢速测试
         """
     )
 
     parser.add_argument(
         "-m", "--module",
-        help="只运行指定模块的测试（如 llm, todos, nya）"
+        help="只运行指定模块的测试（支持：llm, utils.llm, handlers.todos, core, integration）"
     )
     parser.add_argument(
         "-k", "--keyword",
@@ -116,7 +123,26 @@ def main():
 
     # 模块过滤
     if args.module:
-        cmd.append(f"tests/utils/{args.module}")
+        # 将模块名转换为测试路径
+        # 支持：llm / utils.llm / handlers.nya / core / todos 等
+        module = args.module
+        if '.' in module:
+            # utils.llm → tests/utils/llm
+            # handlers.nya → tests/handlers (handler 测试不按模块分子目录)
+            parts = module.split('.')
+            if parts[0] == 'handlers':
+                cmd.append("tests/handlers")
+            elif parts[0] == 'scripts':
+                cmd.append("tests/scripts")
+            else:
+                cmd.append(f"tests/{'/'.join(parts)}")
+        else:
+            # llm → tests/utils/llm (默认假设在 utils 下)
+            # 特殊处理 integration（独立目录）
+            if module == 'integration':
+                cmd.append("tests/integration")
+            else:
+                cmd.append(f"tests/utils/{module}")
 
     # 关键词过滤
     if args.keyword:

@@ -63,6 +63,7 @@ MODULES = {
             "utils/llm/knowledge/__init__.py",
             "utils/llm/knowledge/database.py",
             "utils/llm/knowledge/loader.py",
+            "utils/llm/knowledge/retriever.py",
             "utils/llm/knowledge/tokenizer.py",
             "utils/fileEditor.py",
             "utils/inputHelper.py",

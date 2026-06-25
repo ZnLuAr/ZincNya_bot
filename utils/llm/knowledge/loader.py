@@ -18,7 +18,8 @@ import yaml
 from config import LLM_KNOWLEDGE_DIR
 from utils.core.logger import logSystemEvent, LogLevel
 
-from .database import upsertKnowledgeEntry, deleteEntriesBySource, rebuildTokenCacheFromDB
+from .database import upsertKnowledgeEntry, deleteEntriesBySource
+from .retriever import rebuildTokenCacheFromDB
 
 
 
