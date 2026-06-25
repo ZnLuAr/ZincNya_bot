@@ -230,7 +230,8 @@ async def test_build_conversation_context_minimal():
 
         assert "<CURRENT_USER_MESSAGE>" in result
         assert "Hello" in result
-        assert "[任务说明]" in result
+        assert "[核心任务]" in result  # Phase 1.1 更新
+        assert "<TASK_SYNTHESIS>" in result  # Phase 1.2 更新
 
 
 @pytest.mark.asyncio
@@ -331,9 +332,10 @@ async def test_build_conversation_context_neutralizes_injection():
             includeContext=False,
         )
 
-        # 只应存在可信代码加的那一对真标记
-        assert result.count("<CURRENT_USER_MESSAGE>") == 1
-        assert result.count("</CURRENT_USER_MESSAGE>") == 1
+        # Phase 1.1: [核心任务] 中提到了 <CURRENT_USER_MESSAGE>（作为说明），
+        # 实际的标签对只有一对（开标签 + 闭标签）
+        assert result.count("<CURRENT_USER_MESSAGE>") == 2  # 1次说明 + 1次标签
+        assert result.count("</CURRENT_USER_MESSAGE>") == 1  # 只有1个闭标签
         # 用户伪造的高信任块被折成全角，失去结构意义
         assert "<TRUSTED_KNOWLEDGE>" not in result
         assert "＜TRUSTED_KNOWLEDGE＞" in result
@@ -357,7 +359,7 @@ def test_format_history_neutralizes_content():
 
 @pytest.mark.asyncio
 async def test_build_conversation_context_block_order():
-    """验证块的顺序：任务说明 → memory → knowledge → history → URL → current message"""
+    """验证块的顺序（Phase 1 结构）：核心任务 → RETRIEVED_CONTEXT(memory/knowledge/history/URL) → CURRENT_USER_MESSAGE → TASK_SYNTHESIS"""
     with patch("utils.llm.contextBuilder.buildKnowledgeContext", new_callable=AsyncMock) as mock_knowledge:
         with patch("utils.llm.contextBuilder.buildStructuredMemoryContext", new_callable=AsyncMock) as mock_memory:
             with patch("utils.llm.contextBuilder.buildHistoryContext", new_callable=AsyncMock) as mock_history:
@@ -374,22 +376,34 @@ async def test_build_conversation_context_block_order():
                         urlContexts=[{}]
                     )
 
-                    # 检查顺序（根据源码：memory → knowledge → history → URL → message）
+                    # Phase 1.2: 新的三层结构顺序
+                    task_pos = result.find("[核心任务]")
+                    retrieved_start_pos = result.find("<RETRIEVED_CONTEXT>")
                     memory_pos = result.find("MEMORY_BLOCK")
                     knowledge_pos = result.find("KNOWLEDGE_BLOCK")
                     history_pos = result.find("HISTORY_BLOCK")
                     url_pos = result.find("URL_BLOCK")
-                    message_pos = result.find("USER_MESSAGE")
+                    retrieved_end_pos = result.find("</RETRIEVED_CONTEXT>")
+                    current_msg_tag_pos = result.find("<CURRENT_USER_MESSAGE>", retrieved_end_pos)  # 跳过说明中的引用
+                    synthesis_pos = result.find("<TASK_SYNTHESIS>")
 
                     # 验证所有块都存在
+                    assert task_pos != -1
+                    assert retrieved_start_pos != -1
                     assert memory_pos != -1
                     assert knowledge_pos != -1
                     assert history_pos != -1
                     assert url_pos != -1
-                    assert message_pos != -1
+                    assert retrieved_end_pos != -1
+                    assert current_msg_tag_pos != -1
+                    assert synthesis_pos != -1
 
-                    # 验证顺序
+                    # 验证顺序：核心任务 → RETRIEVED_CONTEXT(内容块) → </RETRIEVED_CONTEXT> → CURRENT_USER_MESSAGE → TASK_SYNTHESIS
+                    assert task_pos < retrieved_start_pos
+                    assert retrieved_start_pos < memory_pos
                     assert memory_pos < knowledge_pos
                     assert knowledge_pos < history_pos
                     assert history_pos < url_pos
-                    assert url_pos < message_pos
+                    assert url_pos < retrieved_end_pos
+                    assert retrieved_end_pos < current_msg_tag_pos
+                    assert current_msg_tag_pos < synthesis_pos
