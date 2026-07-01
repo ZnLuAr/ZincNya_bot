@@ -9,12 +9,10 @@ LLM 配置管理：
 settable 配置都会通过 _setConfig 加锁串行写盘（read-modify-write 安全）。
 """
 
-
-
-
 import os
 import json
 import threading
+from enum import IntEnum
 from urllib.parse import urlsplit
 
 from config import (
@@ -23,6 +21,23 @@ from config import (
     LLM_DEFAULT_MODEL,
     PROJECT_ROOT,
 )
+
+
+
+
+# ── 上下文层级 ──────────────────────────────────────
+
+class ContextTier(IntEnum):
+    """上下文块层级（数值越小越靠前 = 优先级越高）。
+
+    各模块按"自己是什么内容"认领档位，无需关心其它模块。
+    档位间留 100 的间隔，方便未来插入新档。
+    """
+    CRITICAL      = 100   # 强约束 / 安全指令
+    TOOLS         = 200   # 工具与能力声明（AFC 等）
+    KNOWLEDGE     = 300   # 高信任背景知识（知识库）
+    SUPPLEMENTARY = 400   # 一般补充信息
+    LOW_TRUST     = 500   # 低信任内容（记忆 / 历史 / URL）
 
 
 # 配置 read-modify-write 串行化：避免 Telegram / console 并发改配置时丢更新

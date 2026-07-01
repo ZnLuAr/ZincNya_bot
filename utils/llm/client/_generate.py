@@ -152,6 +152,7 @@ async def generateReply(
     sessionID: str | int | None = None,
     images: list[dict] | None = None,
     urlContexts: list[dict] | None = None,
+    telegramContext = None,
 ) -> str:
     """
     调用 LLM 生成回复
@@ -199,6 +200,7 @@ async def generateReply(
         includeContext=includeContext,
         urlContexts=urlContexts,
         llmConfig=cfg,
+        telegramContext=telegramContext,
     )
 
     # ── 构建 userContent ──
@@ -231,7 +233,7 @@ async def generateReply(
         userContent = textContent
 
     provider = getProvider(model)
-    return await requestWithRetry(
+    llmResponse = await requestWithRetry(
         provider,
         systemMessages=systemMessages,
         userContent=userContent,
@@ -239,3 +241,28 @@ async def generateReply(
         maxTokens=maxTokens,
         temperature=temperature,
     )
+
+    # ========== AFC 执行循环 ==========
+    # AFC 调用链透传：
+    # handlers/llm.py → utils/llm/client/_generate.py (此处) → utils/llm/contextBuilder.py
+    # 目的：将 PTB context 透传到 buildConversationContext，用于读取 bot_data 推送层
+    #
+    # 从 LLM 回复中提取 <AFC_ACTION>，执行工具，携带结果二次调用 LLM，
+    # 直到无工具调用或达到迭代上限。
+    #
+    # 插入点选择：在 LLM client 层处理，对所有调用方（Telegram / console / 未来 API）生效。
+    # 调用链：此处 → utils/llm/afcApi/responseHandler.py:handleAFCInLLMResponse
+    #       → utils/afc/executor.py:execute (工具执行)
+    #       → 二次调用 utils/llm/__init__.py:generateReply (携带工具结果)
+    from utils.llm.afcApi import handleAFCInLLMResponse
+
+    llmResponse = await handleAFCInLLMResponse(
+        llmResponse=llmResponse,
+        userMessage=userMessage,
+        chatID=chatID,
+        userID=userID,
+        sessionID=sessionID,
+        includeContext=includeContext,
+    )
+
+    return llmResponse

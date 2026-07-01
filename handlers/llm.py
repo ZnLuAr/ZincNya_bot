@@ -366,6 +366,7 @@ async def _generateReplyOrNotify(
             userID=userID,
             images=(allImages or None),
             urlContexts=urlContexts,
+            telegramContext=context,
         )
     except Exception as e:
         from utils.llm.client._request import _isRetryable
@@ -833,16 +834,18 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def register():
     return {
         "handlers": [
-            # 主消息处理器注册在 group 1，而非默认的 group 0
-            # 这是因为 shutdown.py 的 _mentionDispatch 也监听 MENTION 消息，
-            # 且注册在 group 0将 LLM 消息处理器置于 group 1 可确保
-            # _mentionDispatch 优先匹配；若关键词命中，_mentionDispatch 会
-            # 抛出 ApplicationHandlerStop 阻止本 handler 运行
+            # 主消息处理器注册在 group 2（而非默认的 0 或之前的 1）
+            # 原因：
+            #   - group 0：命令、mention dispatcher (shutdown)、回调等高优先级处理
+            #   - group 1：afc 意图检测（独占），先于 llm 运行，注入工具上下文到 bot_data
+            #   - group 2：llm 自动回复（本 handler），消费 bot_data 推送层的工具上下文
+            # shutdown 的 mention dispatcher 在 group 0，命中关键词后抛出 ApplicationHandlerStop，
+            # 阻止 group 1 的 afc 和 group 2 的 llm 运行，防止 "@bot 关机" 被误处理为聊天
             {"handler": MessageHandler(
                 (filters.TEXT | filters.PHOTO | filters.Document.IMAGE)
                 & ~filters.COMMAND,
                 handleLLMMessage,
-            ), "group": 1},
+            ), "group": 2},
         ],
         "name": "LLM 聊天",
         "description": "LLM 自动回复",

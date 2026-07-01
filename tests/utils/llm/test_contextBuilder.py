@@ -225,7 +225,8 @@ async def test_build_conversation_context_minimal():
         result = await buildConversationContext(
             userMessage="Hello",
             chatID="test_chat",
-            includeContext=False
+            includeContext=False,
+            telegramContext=None,
         )
 
         assert "<CURRENT_USER_MESSAGE>" in result
@@ -243,7 +244,8 @@ async def test_build_conversation_context_with_knowledge():
         result = await buildConversationContext(
             userMessage="Hello",
             chatID="test_chat",
-            includeContext=False
+            includeContext=False,
+            telegramContext=None,
         )
 
         assert "<TRUSTED_KNOWLEDGE>" in result
@@ -265,7 +267,8 @@ async def test_build_conversation_context_include_context():
                     chatID="test_chat",
                     userID=123,
                     sessionID=456,
-                    includeContext=True
+                    includeContext=True,
+                    telegramContext=None,
                 )
 
                 assert "<UNTRUSTED_MEMORY>" in result
@@ -285,7 +288,8 @@ async def test_build_conversation_context_exclude_context():
                 result = await buildConversationContext(
                     userMessage="Hello",
                     chatID="test_chat",
-                    includeContext=False
+                    includeContext=False,
+                    telegramContext=None,
                 )
 
                 assert "<UNTRUSTED_MEMORY>" not in result
@@ -308,7 +312,8 @@ async def test_build_conversation_context_with_url_contexts():
                 userMessage="Hello",
                 chatID="test_chat",
                 includeContext=False,
-                urlContexts=url_contexts
+                urlContexts=url_contexts,
+                telegramContext=None,
             )
 
             assert "<UNTRUSTED_URL_CONTENT>" in result
@@ -330,9 +335,10 @@ async def test_build_conversation_context_neutralizes_injection():
             userMessage=payload,
             chatID="test_chat",
             includeContext=False,
+            telegramContext=None,
         )
 
-        # Phase 1.1: [核心任务] 中提到了 <CURRENT_USER_MESSAGE>（作为说明），
+        # <CURRENT_USER_MESSAGE>，作为说明，
         # 实际的标签对只有一对（开标签 + 闭标签）
         assert result.count("<CURRENT_USER_MESSAGE>") == 2  # 1次说明 + 1次标签
         assert result.count("</CURRENT_USER_MESSAGE>") == 1  # 只有1个闭标签
@@ -359,7 +365,7 @@ def test_format_history_neutralizes_content():
 
 @pytest.mark.asyncio
 async def test_build_conversation_context_block_order():
-    """验证块的顺序（Phase 1 结构）：核心任务 → RETRIEVED_CONTEXT(memory/knowledge/history/URL) → CURRENT_USER_MESSAGE → TASK_SYNTHESIS"""
+    """验证块的顺序（ContextTier 排序）：核心任务 → RETRIEVED_CONTEXT(knowledge < memory/history/url) → CURRENT_USER_MESSAGE → TASK_SYNTHESIS"""
     with patch("utils.llm.contextBuilder.buildKnowledgeContext", new_callable=AsyncMock) as mock_knowledge:
         with patch("utils.llm.contextBuilder.buildStructuredMemoryContext", new_callable=AsyncMock) as mock_memory:
             with patch("utils.llm.contextBuilder.buildHistoryContext", new_callable=AsyncMock) as mock_history:
@@ -373,14 +379,15 @@ async def test_build_conversation_context_block_order():
                         userMessage="USER_MESSAGE",
                         chatID="test_chat",
                         includeContext=True,
-                        urlContexts=[{}]
+                        urlContexts=[{}],
+                        telegramContext=None,
                     )
 
-                    # Phase 1.2: 新的三层结构顺序
+                    # ContextTier 排序：KNOWLEDGE (300) < LOW_TRUST (500)
                     task_pos = result.find("[核心任务]")
                     retrieved_start_pos = result.find("<RETRIEVED_CONTEXT>")
-                    memory_pos = result.find("MEMORY_BLOCK")
                     knowledge_pos = result.find("KNOWLEDGE_BLOCK")
+                    memory_pos = result.find("MEMORY_BLOCK")
                     history_pos = result.find("HISTORY_BLOCK")
                     url_pos = result.find("URL_BLOCK")
                     retrieved_end_pos = result.find("</RETRIEVED_CONTEXT>")
@@ -390,19 +397,20 @@ async def test_build_conversation_context_block_order():
                     # 验证所有块都存在
                     assert task_pos != -1
                     assert retrieved_start_pos != -1
-                    assert memory_pos != -1
                     assert knowledge_pos != -1
+                    assert memory_pos != -1
                     assert history_pos != -1
                     assert url_pos != -1
                     assert retrieved_end_pos != -1
                     assert current_msg_tag_pos != -1
                     assert synthesis_pos != -1
 
-                    # 验证顺序：核心任务 → RETRIEVED_CONTEXT(内容块) → </RETRIEVED_CONTEXT> → CURRENT_USER_MESSAGE → TASK_SYNTHESIS
+                    # 验证顺序：核心任务 → RETRIEVED_CONTEXT(knowledge → memory → history → url) → </RETRIEVED_CONTEXT> → CURRENT_USER_MESSAGE → TASK_SYNTHESIS
+                    # ContextTier: KNOWLEDGE (300) 在 LOW_TRUST (500) 之前
                     assert task_pos < retrieved_start_pos
-                    assert retrieved_start_pos < memory_pos
-                    assert memory_pos < knowledge_pos
-                    assert knowledge_pos < history_pos
+                    assert retrieved_start_pos < knowledge_pos
+                    assert knowledge_pos < memory_pos
+                    assert memory_pos < history_pos
                     assert history_pos < url_pos
                     assert url_pos < retrieved_end_pos
                     assert retrieved_end_pos < current_msg_tag_pos

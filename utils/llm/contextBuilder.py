@@ -15,7 +15,12 @@ utils/llm/contextBuilder.py
 from config import LLM_MAX_CONTEXT_MESSAGES
 
 from utils.chatHistory import loadHistory
-from utils.llm.config import getKnowledgeEnabled, getKnowledgeMaxResults, getKnowledgeMinScore
+from utils.llm.config import (
+    ContextTier,
+    getKnowledgeEnabled,
+    getKnowledgeMaxResults,
+    getKnowledgeMinScore,
+)
 from utils.llm.memory import (
     buildMemoryContextBlock,
     retrieveMemories,
@@ -142,6 +147,7 @@ async def buildConversationContext(
     includeContext: bool = False,
     urlContexts: list[dict] | None = None,
     llmConfig: dict | None = None,
+    telegramContext = None,
 ) -> str:
     """
     组装最终 user content（Phase 1 优化版：Query Reinforcement + 三层结构）
@@ -149,6 +155,10 @@ async def buildConversationContext(
     参数:
         llmConfig: 请求级配置快照（dict），透传给 buildKnowledgeContext 以
             复用同一次读盘结果。为 None 时下游回退到独立 getter。
+        telegramContext: PTB context（ContextTypes.DEFAULT_TYPE | None）。由
+            handlers/llm.py 经 generateReply 透传而来，用于读取 bot_data 推送层
+            中扩展模块（如 AFC）注入的上下文块。为 None 时（console / 单测）跳过。
+            为避免与 PTB 的循环 import，类型暂不标注。
     """
     # ========== 层 1: 任务说明（Query Reinforcement 开头）==========
     blocks = [
@@ -156,6 +166,16 @@ async def buildConversationContext(
         "你需要回答 <CURRENT_USER_MESSAGE> 块中的用户消息。",
         "该消息将在下方出现。",
     ]
+
+    # 从 bot_data 推送层读取扩展模块注入的块（读取即清除，防止泄漏到下一条消息）。
+    # 推送层结构：bot_data[f"llm_extra_blocks_{chatID}"] = {模块id: (tier, label, content)}
+    # 每个扩展模块占用自己的槽位（以模块 id 为内层 key），互不覆盖。
+    # 详见 docs/bot-data-push-layer.md。
+    extraBlocks: list[tuple[ContextTier, str, str]] = []
+    if telegramContext is not None:
+        pushKey = f"llm_extra_blocks_{chatID}"
+        moduleBlocks = telegramContext.bot_data.pop(pushKey, {})
+        extraBlocks = list(moduleBlocks.values())
 
     # 知识库是开发者编辑的高信任背景知识，可以无条件检索，与 includeContext 解耦。
     # 设计依据：knowledge 语义上是 prompt 的延伸（人设的话题相关部分），不属于"用户上下文"。
@@ -172,31 +192,39 @@ async def buildConversationContext(
         )
         historyBlock = await buildHistoryContext(chatID)
 
-    # ========== 层 2: Context Injection（上下文注入，带来源标注）==========
-    blocks.append("<RETRIEVED_CONTEXT>")
-
-    if memoryBlock:
-        blocks.append("[来源：长期记忆]")
-        blocks.append(memoryBlock)
-
-    if knowledgeBlock:
-        blocks.append("[来源：知识库]")
-        blocks.append(knowledgeBlock)
-
-    if historyBlock:
-        blocks.append("[来源：对话历史]")
-        blocks.append(historyBlock)
-
+    urlBlock = ""
     if urlContexts:
-        # 这里采用函数内 import，避免两个 llm utils 之间的的循环依赖
+        # 这里采用函数内 import，避免两个 llm utils 之间的循环依赖
         # urlReader 在运行时间接依赖本模块的 buildConversationContext（通过
         # generateReply → buildConversationContext），在模块顶层引入 urlReader 会在冷启动时形成导入环。
         from utils.llm.urlReader import buildURLContextBlock
         urlBlock = buildURLContextBlock(urlContexts)
-        if urlBlock:
-            blocks.append("[来源：URL 内容]")
-            blocks.append(urlBlock)
 
+    # ========== 层 2: Context Injection（统一按 ContextTier 排序）==========
+    # 核心块（memory / knowledge / history / url）与扩展模块块纳入同一档位体系，
+    # 统一排序后渲染，不存在"锚点之后"的隐藏限制。
+    allBlocks: list[tuple[ContextTier, str, str]] = []
+
+    if memoryBlock:
+        allBlocks.append((ContextTier.LOW_TRUST, "长期记忆", memoryBlock))
+    if knowledgeBlock:
+        allBlocks.append((ContextTier.KNOWLEDGE, "知识库", knowledgeBlock))
+    if historyBlock:
+        allBlocks.append((ContextTier.LOW_TRUST, "对话历史", historyBlock))
+    if urlBlock:
+        allBlocks.append((ContextTier.LOW_TRUST, "URL 内容", urlBlock))
+
+    # 合并扩展模块注入的块（AFC 工具上下文等）
+    allBlocks.extend(extraBlocks)
+
+    # 稳定排序：数值越小越靠前；同 tier 保持插入顺序
+    allBlocks.sort(key=lambda b: b[0])
+
+    blocks.append("<RETRIEVED_CONTEXT>")
+    for tier, label, content in allBlocks:
+        if content:
+            blocks.append(f"[来源：{label}]")
+            blocks.append(content)
     blocks.append("</RETRIEVED_CONTEXT>")
 
     # userMessage 是最高优先级的不可信叶子，进结构标记前统一中和分隔符，
