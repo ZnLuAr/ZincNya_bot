@@ -21,6 +21,8 @@ _toolsCallable: dict[str, dict[str, callable]] = {}  # {tool_name: {func_name: c
 _schemaBuilt = False
 
 
+
+
 # ── Python 类型 → JSON Schema 映射 ────────────────
 
 def _pythonTypeToJsonType(pyType) -> str:
@@ -170,10 +172,11 @@ def _scanTools():
             continue
 
         toolName = toolDir.name
+        toolPackage = f"utils.afc.tools.{toolName}"
 
         # 导入工具模块
         try:
-            toolModule = importlib.import_module(f"utils.afc.tools.{toolName}")
+            toolModule = importlib.import_module(toolPackage)
         except ImportError:
             continue
 
@@ -183,6 +186,12 @@ def _scanTools():
 
         for name, obj in inspect.getmembers(toolModule, inspect.isfunction):
             if name.startswith("_"):
+                continue
+
+            # 只登记本工具包内定义的函数，排除从外部导入的函数
+            # （如 logSystemEvent 等工具辅助导入），避免被误当作工具函数
+            objModule = getattr(obj, "__module__", "")
+            if objModule != toolPackage and not objModule.startswith(toolPackage + "."):
                 continue
 
             # 生成 schema

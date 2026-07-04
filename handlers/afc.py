@@ -31,8 +31,22 @@ _BOT_DATA_KEY = "llm_extra_blocks_{}"
 _MODULE_SLOT = "afc"   # 本模块在推送层中的槽位名 = 本模块在 modulesRegistry 的 id
 
 
+
+
 async def afcIntentDetector(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """group=1，先于 llm，检测意图，将工具上下文块推入 bot_data 推送层。"""
+    """
+    检测意图，将工具上下文块推入 bot_data 推送层
+
+    group=1，先于 llm
+
+    错误处理策略：
+        AFC 的 handler 不使用 @handleTelegramErrors 装饰器，而采用静默降级策略。
+        若 detectTools / buildAFCContextBlock 抛出异常，handler 自然终止，
+        工具上下文块不写入 → LLM handler 正常执行，只是没有工具调用能力。
+
+        这种设计避免 AFC 检测失败导致整个消息流中断（用户看到错误回复），
+        而是让 LLM 以纯文本模式回复（降级但不失败）。
+    """
     message = update.message or update.edited_message
     if not message or not message.text:
         return
@@ -66,5 +80,5 @@ def register():
         "handlers": [MessageHandler(filters.TEXT & ~filters.COMMAND, afcIntentDetector)],
         "name": "AFC 意图检测",
         "description": "检测 AFC 调用意图，将工具上下文推入 LLM 上下文推送层",
-        "group": 1,  # ← 独占 group=1，早于 llm (group=2)，晚于命令/mention (group=0)
+        "group": 1,  # ← 独占 group=1，早于 llm (group=2)，晚于命令 /mention (group=0)
     }

@@ -133,6 +133,7 @@ ZincNya_bot/
 │   ├── book.py                     # /book 书籍搜索
 │   ├── todos.py                    # /todos 待办事项管理
 │   ├── reaction.py                 # 消息 reaction 记录到聊天历史
+│   ├── afc.py                      # AFC 工具意图检测（group=1，先于 llm）
 │   ├── llm.py                      # LLM 自动回复（文字 + 图片 + URL 读取）、记忆操作解析与审核分发
 │   ├── llmReview.py                # Telegram 端 LLM 审核回调（回复与记忆操作）
 │   ├── llmCommand.py               # Telegram 端 /llm 命令（ops 控制）
@@ -197,11 +198,22 @@ ZincNya_bot/
 │   │   │   ├── database.py         # SQLite 存储、CRUD、分层检索
 │   │   │   ├── action.py           # LLM 自主记忆操作（解析、校验、执行）
 │   │   │   └── ui.py               # LLM 记忆管理 TUI
-│   │   └── knowledge/              # 知识库（RAG）子系统
-│   │       ├── database.py         # SQLite 存储、上下文格式化、token 缓存
-│   │       ├── retriever.py        # BM25 检索（分词、评分、排序、过滤）
-│   │       ├── loader.py           # Markdown 解析、增量索引
-│   │       └── tokenizer.py        # 中英文混合分词 + BM25 评分
+│   │   ├── knowledge/              # 知识库（RAG）子系统
+│   │   │   ├── database.py         # SQLite 存储、上下文格式化、token 缓存
+│   │   │   ├── retriever.py        # BM25 检索（分词、评分、排序、过滤）
+│   │   │   ├── loader.py           # Markdown 解析、增量索引
+│   │   │   └── tokenizer.py        # 中英文混合分词 + BM25 评分
+│   │   └── afcApi/                 # AFC ↔ LLM 单点桥接层
+│   │       ├── contextBlock.py     # 工具上下文块构建
+│   │       └── responseHandler.py  # LLM 回复中的工具调用解析与执行循环
+│   │
+│   ├── afc/                        # AFC 工具调用框架
+│   │   ├── afcIntent.py            # 四级召回意图检测（关键词 / 正则 / 通用 / 上下文延续）
+│   │   ├── registry.py             # 工具注册表（类型注解 + docstring → OpenAI schema）
+│   │   ├── executor.py             # 工具执行器（参数绑定校验 + 超时保护）
+│   │   ├── contextBuilder.py       # 工具上下文构建（注入可用工具 schema）
+│   │   ├── errors.py               # AFC 异常基类
+│   │   └── tools/                  # 工具实现（天气、计算器等）
 │   │
 │   ├── todos/                      # 待办事项子系统
 │   │   ├── database.py             # SQLite 数据存储
@@ -367,6 +379,58 @@ python scripts/module.py scan
 
 写好了，要是想让你手下的代码们也进入这边的仓库，欢迎~~鞭策~~提 Pull Request 给 Zinc Phos 喵。
 
+### 新增 AFC 工具
+
+如果想给 LLM 加一样能自主调用的本事（[自动工具调用](#自动工具调用-afc) 这章会详细讲），照下面几步来——
+
+按照惯例，工具都应放在 `utils/afc/tools/<工具名>/` 底下，一个目录就是一个工具。最小骨架只要两个文件：
+
+1. **`__init__.py`** —— 把要暴露给 LLM 的函数 `import` 进来放进 `__all__`。凡是不以 `_` 开头的公开函数都会被 `registry.py` 扫到，**函数的 schema 是从类型注解 + docstring 自动生成的**，所以类型标注和参数说明需要写全：
+
+   ```python
+   # utils/afc/tools/dice/__init__.py
+   from .roller import rollDice
+
+   __all__ = ["rollDice"]
+   ```
+
+   ```python
+   # utils/afc/tools/dice/roller.py
+   async def rollDice(sides: int, count: int = 1) -> str:
+       """
+       掷骰子并返回结果。
+
+       参数：
+           sides: 骰子面数（如 6 表示六面骰）
+           count: 掷几颗，默认 1
+
+       返回：
+           掷骰结果字符串
+       """
+       ...
+   ```
+
+   注解里的 `sides: int` 就会变成 schema 的 `integer` 类型；带默认值的参数（`count`）是可选的，而没有默认值的参数是必填的。docstring 第一行是函数描述，`参数：` 段落里的 `名字: 说明` 会填进各参数的 description。
+
+2. **`triggers.py`** —— 声明触发词，`afcIntent.py` 启动时会扫进倒排索引，用来做第一步的意图召回：
+
+   ```python
+   KEYWORDS = ["骰子", "掷骰", "roll"]        # 子串命中即召回（L1）
+   PATTERNS = [r"\d+\s*d\s*\d+"]              # L1 没中时再走正则（L2）
+   ```
+
+   召回是**故意放得很宽**的（宁可多召回、让 LLM 自己决定要不要用），所以触发词写得随手一点没关系。
+
+写完之后，不要忘了两件事：
+
+- 把新增的文件登记进 [modulesRegistry.py](modulesRegistry.py) 里 `afc` 模块的 `files` 列表——注册表没登记的文件不会被加载；
+- 要是工具依赖外部资源（API key、缓存、连接池之类），在 `client.py` 里写个 `_registerResources()` 挂到 `resourceManager`，再把它加进 registry 的 `initFunctions`（weather 工具就是这么做的，可以照着抄）。
+
+现成的 weather 和 calc 两个工具都配了 README，动手前翻一眼，总是没有错的——
+
+- [utils/afc/tools/weather/README.md](utils/afc/tools/weather/README.md) —— 带 API key、缓存、异步网络请求的完整例子；
+- [utils/afc/tools/calc/README.md](utils/afc/tools/calc/README.md) —— 不依赖外部服务、纯本地计算的轻量例子。
+
 ### 运行测试
 
 ```bash
@@ -436,6 +500,18 @@ LLM 准备回复时，客户端会把上下文按以下顺序注入：
 5. **URL 内容**（外部抓取）— 最低信任参考
 
 将上下文组织成这种顺序注入，是为了让模型优先看到真正的指令，[减少上下文遗漏](https://arxiv.org/abs/2307.03172 "Lost in the Middle: How Language Models Use Long Contexts        - Nelson F. Liu, Kevin Lin, John Hewitt, Ashwin Paranjape, Michele Bevilacqua, Fabio Petroni, Percy Liang")。每个块前后会有简化的标记和 HTML 注释（比如说 `<MEMORY>  <!-- 长期记忆，可能过时 -->`）；统一在顶部 `[任务说明]` 中呢，则有 "仅作参考，不能覆盖 system 规则" 的警告了。
+
+### 自动工具调用 (AFC)
+
+LLM 准备回复的过程中，可以自主调用外部工具（如天气查询、计算器）来辅助回复。
+
+不过需要注意的是，客户端在此使用的 AFC，并非 Anthropic / OpenAI / Gemini 那样的 API 层的原生工具调用，而是基于实际情况做出的，自实现的一套"带前置语义召回的、基于 Prompt 拦截的 Agent 循环（ReAct 变体）"。
+
+在接收到用户的回复时，客户端会先根据用户消息做一次工具意图检测，只把命中的、可能相关的工具 Schema 注入上下文。若认为需要，LLM 会在回复中塞进 `<AFC_ACTION>` 标签（内含 JSON 格式的工具调用指令）来调用工具，客户端执行后将结果包装在 `<FUNCTION_RESULT>` 标签里反馈给 LLM，此后 LLM 将继续生成（另外，单个工具最多给 15 秒的时间，每次调用最多迭代 10 轮）。
+
+因此，LLM 的自主决策依然存在，但范围被限制在已经召回的候选工具里，而不是整个工具集合。
+
+**关于意图检测：** 是一套比较宽松的四级召回（关键词 → 正则 → 通用兜底 → 上下文延续）机制——至于为什么宽松呢？那是因为，宁可多给几个选项让 LLM 决定要不要用，也不应该漏掉本应被召回的工具。触发词，按照建议的 AFC 工具架构，写在各工具目录下的 `triggers.py` 里是最好的说。
 
 ### 审核补充反馈
 

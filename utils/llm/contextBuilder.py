@@ -150,7 +150,7 @@ async def buildConversationContext(
     telegramContext = None,
 ) -> str:
     """
-    组装最终 user content（Phase 1 优化版：Query Reinforcement + 三层结构）
+    以 Query Reinforcement + 三层结构组装最终 user content
 
     参数:
         llmConfig: 请求级配置快照（dict），透传给 buildKnowledgeContext 以

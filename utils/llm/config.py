@@ -28,7 +28,7 @@ from config import (
 # ── 上下文层级 ──────────────────────────────────────
 
 class ContextTier(IntEnum):
-    """上下文块层级（数值越小越靠前 = 优先级越高）。
+    """上下文块层级（数值越小越靠前，优先级越高）。
 
     各模块按"自己是什么内容"认领档位，无需关心其它模块。
     档位间留 100 的间隔，方便未来插入新档。
@@ -40,7 +40,7 @@ class ContextTier(IntEnum):
     LOW_TRUST     = 500   # 低信任内容（记忆 / 历史 / URL）
 
 
-# 配置 read-modify-write 串行化：避免 Telegram / console 并发改配置时丢更新
+# 配置 read-modify-write 串行化，避免 Telegram / console 并发改配置时丢更新
 _configLock = threading.Lock()
 
 

@@ -181,6 +181,8 @@ LLM_KNOWLEDGE_DB_PATH = os.path.join(DATA_DIR, "llm", "knowledge.db")  # 知识�
 LLM_KNOWLEDGE_DIR = os.path.join(DATA_DIR, "llm", "knowledge")         # 知识库 Markdown 文件目录
 
 
+
+
 def migrateLegacyLLMPaths():
     """
     将旧版 data/ 下的 LLM 相关文件迁移到 data/llm/ 子目录。

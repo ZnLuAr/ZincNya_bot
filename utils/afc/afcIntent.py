@@ -3,7 +3,7 @@ utils/afc/afcIntent.py
 
 AFC 意图判断
 
-扫描 tools/*/triggers.py 并构建倒排索引，提供四级召回策略。
+扫描 tools/*/triggers.py 并构建倒排索引，提供四级召回(L1 ~ L4)策略。
 """
 
 import re
@@ -13,10 +13,10 @@ from pathlib import Path
 
 # ── 索引与缓存 ──────────────────────────────────────
 
-_keywordIndex: dict[str, set[str]] = {}  # {"天气": {"weather"}, "算": {"calc"}}
-_patternIndex: list[tuple[re.Pattern, str]] = []  # [(re.compile(...), "weather"), ...]
-_allToolNames: set[str] = set()  # {"weather", "calc", ...}
-_lastTriggeredTools: dict[str, set[str]] = {}  # {chatID: {"weather"}}
+_keywordIndex: dict[str, set[str]] = {}             # {"天气": {"weather"}, "算": {"calc"}}
+_patternIndex: list[tuple[re.Pattern, str]] = []    # [(re.compile(...), "weather"), ...]
+_allToolNames: set[str] = set()                     # {"weather", "calc", ...}
+_lastTriggeredTools: dict[str, set[str]] = {}       # {chatID: {"weather"}}
 _indexBuilt = False
 
 
@@ -46,6 +46,10 @@ REFERENTIAL_WORDS = [
     "还",
     "也",
 ]
+
+
+# L4 上下文延续：仅当消息不超过此长度且含指代词时，才继承上一轮工具集
+MAX_CONTEXTUAL_MESSAGE_LEN = 10
 
 
 
@@ -133,7 +137,7 @@ def detectTools(message: str, chatID: str) -> set[str]:
         hits = _allToolNames.copy()
 
     # L4: 上下文延续（短消息 + 指代词 → 继承上一轮）
-    if not hits and len(message) <= 10:
+    if not hits and len(message) <= MAX_CONTEXTUAL_MESSAGE_LEN:
         if any(ref in message for ref in REFERENTIAL_WORDS):
             lastTools = _lastTriggeredTools.get(chatID, set())
             if lastTools:
