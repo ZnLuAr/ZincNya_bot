@@ -66,8 +66,8 @@ SAFE_FUNCTIONS = {
     "floor": math.floor,
 
     # 角度转换
-    "deg": math.radians,  # deg(90) → π/2
-    "rad": lambda x: x,   # rad(1.57) → 1.57 (恒等)
+    "deg": math.degrees,  # deg(pi) → 180（弧度→角度）
+    "rad": math.radians,  # rad(90) → π/2（角度→弧度）
 }
 
 

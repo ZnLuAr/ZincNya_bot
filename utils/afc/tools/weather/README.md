@@ -22,7 +22,7 @@ WEATHER_API_KEY=your_api_key_here
 
 用户消息包含以下任一关键词时，LLM 会收到本工具的 Schema：
 
-- **关键词**：`天气`、`气温`、`下雨`、`晴天`、`阴天`、`温度`
+- **关键词**（L1 子串命中）：`天气`、`气温`、`温度`、`下雨`、`晴`、`阴`、`冷不冷`、`热不热`
 - **通用词**：`帮我`、`帮忙`、`查一下`、`查查`、`告诉我` 等
 - **上下文延续**：最近 10 条消息中提到过天气相关词汇
 
@@ -52,9 +52,8 @@ LLM 生成的函数调用格式：
 | 错误类型 | 异常类 | 返回示例 |
 |---------|--------|---------|
 | 未配置密钥 | — | `错误：未配置天气 API 密钥（WEATHER_API_KEY）` |
-| 城市名为空 | `ValueError` | `错误：城市名称不能为空` |
-| 日期格式错误 | `ValueError` | `错误：日期格式不正确` |
-| 日期超出范围 | `ValueError` | `错误：日期超出查询范围（仅支持未来 0-2 天）` |
+| 城市名为空 | `ValueError` | `错误：城市名不能为空` |
+| 日期参数错误 | `ValueError` | `错误：不支持的日期参数（{date}），仅支持 today/明天/后天 或 YYYY-MM-DD 格式（未来 0-2 天）`（合并了格式错误和范围错误两种情况） |
 | API 密钥无效 | `ToolDependencyError` | `错误：API 密钥无效或已过期` |
 | 城市不存在 | `ValueError` | `错误：请求参数错误（可能是城市名称不存在：xxx）` |
 | API 限流 | `ToolDependencyError` | `错误：API 请求频率超限（达到免费档配额）` |
@@ -77,9 +76,11 @@ weather/
 
 ## 依赖
 
+## 依赖
+
 - `aiohttp`：异步 HTTP 请求
 - `utils.core.logger`：日志记录
-- `utils.core.resourceManager`：aiohttp session 生命周期管理
+- `utils.core.resourceManager`：aiohttp session 生命周期管理（`client.py` 在模块导入时自动向 resourceManager 注册 session 清理回调）
 
 ## 安全边界
 

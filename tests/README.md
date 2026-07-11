@@ -212,7 +212,6 @@ pytest --cov=utils --cov=handlers --cov=config --cov=loader --cov=modulesRegistr
 
 ### 已知局限
 
-- `handlers/llm.py`、`handlers/todos.py`、`handlers/book.py` 等 handler 层暂未测试
 - LLM client（anthropic/gemini/openaiCompat）只测试 router 与 guardrails，SDK 调用层 mock 较薄
 - chatUI/terminalUI 的终端绘制逻辑覆盖较低（依赖真实终端）
 - `integration/` 目录预留但暂无集成测试（单元测试已覆盖主要流程）

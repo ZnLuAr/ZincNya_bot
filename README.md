@@ -15,6 +15,7 @@
 - [数据加密](#数据加密) —— 隐私内容怎么落盘、密钥怎么管；
 - [数据合并](#数据合并) —— 本地和服务器的数据怎么对齐；
 - [LLM 功能](#llm-功能) —— 支持的模型、图片、记忆、URL 读取；
+- [文档索引](#文档索引) —— 架构设计、开发规范、测试指南；
 - [出了岔子的话](#出了岔子的话) —— 跑不起来、没反应时翻这里。
 
 ---
@@ -632,6 +633,36 @@ python scripts/merge_data.py --source /path/to/other/data --apply
 > **`todos.db` 的两条路径**：上面说的"只 report"指的是这个 `--source` 离线合并。脚本另有一条 SSH 同步路径（`_merge_todos`），那条**会把 source-only 待办解密、按 target key 重新加密后写入**——这两条入口行为不同，不应该混淆的说。
 
 > **`knowledge.db` 不参与合并**：知识库索引由 Git 管理的 `data/llm/knowledge/*.md` 在启动时自动重建（reindex），不用跨环境同步数据库。
+
+---
+
+## 文档索引
+
+想深入了解架构或开发新功能？这些文档能帮到你——
+
+### 核心架构
+
+- [**模块管理系统**](docs/module-management.md) — 声明式模块注册、启用/禁用、安装/卸载机制
+- [**Telegram Handler 分组**](docs/telegram-handlers-group.md) — Handler 注册与 group 优先级规则
+- [**Bot_data 推送层**](docs/bot-data-push-layer.md) — 扩展模块向 LLM 注入上下文的机制
+
+### LLM 功能
+
+- [**LLM Handler 架构**](docs/llm-handler.md) — 从消息接收到回复生成的完整流水线
+- [**上下文组装**](docs/llm-context-assembly.md) — Query Reinforcement + 三层结构设计
+- [**长期记忆**](docs/llm-memory.md) — Structured Memory 子系统设计
+- [**知识库（RAG）**](docs/llm-knowledge.md) — BM25 检索、分词、评分机制
+- [**知识库内容编写**](docs/llm-knowledge-authoring.md) — 分类规范、frontmatter 字段说明
+
+### 工具调用（AFC）
+
+- [**AFC 架构**](docs/afc.md) — 自实现工具调用系统、意图检测、执行流程
+- [**AFC 错误处理**](docs/afc-error-handling.md) — 错误传递、日志记录规范
+
+### 开发工具
+
+- [**chatScreen 聊天界面**](docs/chatScreen.md) — 控制台全屏交互式聊天界面技术文档
+- [**测试体系**](tests/README.md) — pytest 配置、fixture 使用、测试命令
 
 ---
 

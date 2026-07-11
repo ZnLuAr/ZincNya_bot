@@ -77,8 +77,10 @@ async def afcIntentDetector(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def register():
     return {
-        "handlers": [MessageHandler(filters.TEXT & ~filters.COMMAND, afcIntentDetector)],
+        "handlers": [
+            {"handler": MessageHandler(filters.TEXT & ~filters.COMMAND, afcIntentDetector), "group": 1}
+        ],
         "name": "AFC 意图检测",
         "description": "检测 AFC 调用意图，将工具上下文推入 LLM 上下文推送层",
-        "group": 1,  # ← 独占 group=1，早于 llm (group=2)，晚于命令 /mention (group=0)
+        # group=1：独占，早于 llm (group=2)，晚于命令 /mention (group=0)
     }

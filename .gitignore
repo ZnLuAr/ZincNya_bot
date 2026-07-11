@@ -53,7 +53,8 @@ CLAUDE.md
 log/
 *.log
 *.log.*
-docs/
+docs/archive
+docs/internal
 
 
 # ============================================================

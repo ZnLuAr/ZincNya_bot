@@ -34,7 +34,7 @@ def _preprocessExpression(expression: str) -> str:
     预处理表达式，支持特殊格式。
 
     - `20%` → `(20/100)`
-    - `90°` → `deg(90)`
+    - `90°` → `rad(90)`
 
     参数：
         expression: 原始表达式
@@ -53,7 +53,7 @@ def _preprocessExpression(expression: str) -> str:
     # 处理角度符号
     expression = re.sub(
         r'(\d+(?:\.\d+)?)\s*°',
-        r'deg(\1)',
+        r'rad(\1)',
         expression
     )
 
@@ -214,8 +214,8 @@ async def calculate(expression: str) -> str:
         "2 + 3 = 5"
         >>> await calculate("sqrt(16)")
         "sqrt(16) = 4"
-        >>> await calculate("sin(deg(90))")
-        "sin(deg(90)) = 1"
+        >>> await calculate("sin(rad(90))")
+        "sin(rad(90)) = 1"
     """
     try:
         # 输入校验
@@ -241,9 +241,25 @@ async def calculate(expression: str) -> str:
         return f"{expression} = {formattedResult}"
 
     except CalculationError as e:
-        return f"计算错误：{e}"
+        await logSystemEvent(
+            "计算错误（用户输入）",
+            f"表达式：{expression}，错误：{e}",
+            LogLevel.INFO,
+        )
+        return f"错误：{e}"
     except OverflowError as e:
-        return f"计算错误：{e}"
-    except Exception:
-        return f"计算错误：{ERROR_MESSAGES['invalid_expression']}"
+        await logSystemEvent(
+            "计算错误（溢出）",
+            f"表达式：{expression}，错误：{e}",
+            LogLevel.INFO,
+        )
+        return f"错误：{e}"
+    except Exception as e:
+        await logSystemEvent(
+            "计算错误（预期外）",
+            f"表达式：{expression}，错误：{e}",
+            LogLevel.ERROR,
+            exception=e,
+        )
+        return f"错误：{ERROR_MESSAGES['invalid_expression']}"
     

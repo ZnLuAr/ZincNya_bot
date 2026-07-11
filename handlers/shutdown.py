@@ -48,7 +48,7 @@ async def shutdown(update: Update , _: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("现在就关机喵——\n\n……瞼を閉じました……=  =")
 
-    # 通知 bot.py ，高雅不堪地关机
+    # 通过状态管理器请求优雅关机
     getStateManager().requestShutdown()
 
 
@@ -71,7 +71,7 @@ async def restart(update: Update , _: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("现在就重启喵——\n\n……瞼を閉じました……=  =")
 
-    # 通知 bot.py 进行高雅不堪的关机后重启
+    # 通过状态管理器请求优雅重启
     getStateManager().requestRestart()
 
 
