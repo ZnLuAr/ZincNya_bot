@@ -79,6 +79,7 @@ MODULES = {
             "tests/utils/llm/knowledge/test_tokenizer.py",
             "tests/utils/llm/memory/test_action_parsing.py",
             "tests/utils/llm/memory/test_database_crypto.py",
+            "tests/utils/llm/memory/test_retrieval.py",
             "tests/handlers/test_llmCommand.py",
         ],
         "handlers": ["handlers/llm.py", "handlers/llmCommand.py", "handlers/llmReview.py"],

@@ -61,7 +61,7 @@ async def buildStructuredMemoryContext(
     chatID: str,
     userID: str | int | None = None,
     sessionID: str | int | None = None,
-    perScopeLimit: int = 3,
+    perScopeLimit: int = 20,
     totalLimit: int = 10,
 ) -> str:
     """构建 structured memory 低信任上下文块。"""

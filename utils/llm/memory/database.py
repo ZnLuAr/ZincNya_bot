@@ -39,6 +39,14 @@ VALID_SCOPE_TYPES = {
     MEMORY_SCOPE_SESSION,
 }
 VALID_SOURCES = {"manual", "inferred"}
+# scope 专属度：session（最贴当前对话）> user > chat > global（最泛）。
+# 仅作 priority 打平时的兜底排序键，不构成硬名额。
+_SCOPE_RANK = {
+    MEMORY_SCOPE_SESSION: 3,
+    MEMORY_SCOPE_USER: 2,
+    MEMORY_SCOPE_CHAT: 1,
+    MEMORY_SCOPE_GLOBAL: 0,
+}
 
 
 memoryDB = Database(LLM_MEMORY_DB_PATH, "LLMMemory")
@@ -126,6 +134,8 @@ def _rowToMemoryDict(row) -> dict[str, Any]:
         "created_at": datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
         "updated_at": datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None,
     }
+
+
 
 
 async def addMemory(
@@ -255,7 +265,7 @@ async def updateMemory(
     source: Optional[str] = None,
 ) -> bool:
     """
-    更新 memory。
+    更新 memory
 
     各字段语义：
         None 表示不修改；非 None 表示替换为新值。
@@ -314,7 +324,7 @@ async def updateMemory(
 
 
 async def deleteMemory(memoryID: int) -> bool:
-    """删除 memory。"""
+    """删除 memory"""
     try:
         def _query(conn):
             cursor = conn.cursor()
@@ -333,14 +343,16 @@ async def deleteMemory(memoryID: int) -> bool:
         return False
 
 
+
+
 async def retrieveMemories(
     chatID: str | int | None = None,
     userID: str | int | None = None,
     sessionID: str | int | None = None,
-    perScopeLimit: int = 3,
+    perScopeLimit: int = 20,   # 单 scope 候选上限（防止过多地召回某 scope），非硬性名额
     totalLimit: int = 10,
 ) -> list[dict[str, Any]]:
-    """按分层顺序检索 memory。"""
+    """汇集各 scope 的启用记忆到统一候选池，按 priority 排序后取 totalLimit"""
     try:
         scopes = [(MEMORY_SCOPE_GLOBAL, "global")]
         if chatID is not None:
@@ -350,25 +362,36 @@ async def retrieveMemories(
         if sessionID is not None:
             scopes.append((MEMORY_SCOPE_SESSION, str(sessionID)))
 
-        memories = []
+        pool: list[dict[str, Any]] = []
         for scopeType, scopeID in scopes:
-            if len(memories) >= totalLimit:
-                break
-
-            remaining = totalLimit - len(memories)
-            scopeLimit = min(max(perScopeLimit, 0), remaining)
-            if scopeLimit <= 0:
-                break
-
             items = await getMemories(
                 scopeType=scopeType,
                 scopeID=scopeID,
                 enabledOnly=True,
-                limit=scopeLimit,
+                limit=max(perScopeLimit, 0),
             )
-            memories.extend(items)
+            pool.extend(items)
 
-        return memories
+        # 排序键（全部 DESC）：priority > scope 专属度 > updated_at > id。
+        # priority 是显式赋的强权重排第一；scope 专属度仅在 priority 打平时
+        # 当兜底裁判（session>user>chat>global）；
+        # updated_at / id 再兜底，确保同键顺序确定、可测。
+        #
+        # 每个排序字段都必须带默认（.get(..., 0) / or datetime.min），绝不裸取 m["updated_at"]
+        # 这是因为单条脏数据（字段缺失/为 None）会让整个 sort 抛 TypeError，
+        # 这会让把"少一条记忆"放大成"整次检索归零"。
+        # 以防「个别历史明文行别拖垮整次查询」的坑。
+        # scope_type 缺失时 _SCOPE_RANK.get 兜底 0（等同 global，最泛），不抛出错误。
+        pool.sort(
+            key=lambda m: (
+                m.get("priority", 0),
+                _SCOPE_RANK.get(m.get("scope_type"), 0),
+                m.get("updated_at") or datetime.min,
+                m.get("id", 0),
+            ),
+            reverse=True,
+        )
+        return pool[:totalLimit]
 
     except Exception as e:
         await logSystemEvent(
@@ -380,12 +403,20 @@ async def retrieveMemories(
         return []
 
 
+
+
 def buildMemoryContextBlock(memories: list[dict[str, Any]]) -> str:
-    """将检索到的 memories 格式化为上下文块。"""
+    """将检索到的 memories 格式化为上下文块"""
     if not memories:
         return ""
 
-    lines = ["[以下是长期记忆，仅作参考]"]
+    # 块头明确相关性门控 + priority 语义纠偏，切断"高 priority = 必须提及"的误读。
+    lines = [
+        "[以下是长期记忆。仅在与当前对话直接相关时才引用；"
+        "不相关的条目请忽略，不要为了提及而提及。"
+        "w= 是内部召回权重，仅供你判断是否调整记忆（调整时用 update 的 priority 字段），"
+        "不代表与当前对话的相关性，不要因 w 高就强行提及。]"
+    ]
     for item in memories:
         scopeType = item.get("scope_type", "?")
         scopeID = item.get("scope_id", "?")
@@ -396,7 +427,9 @@ def buildMemoryContextBlock(memories: list[dict[str, Any]]) -> str:
         tags = [neutralizePromptDelimiters(t) for t in (item.get("tags") or [])]
 
         source = item.get("source", "manual")
-        header = f"- ({scopeType}:{scopeID}, p={priority}, id={item['id']}, src={source}) {content}"
+        # w= 是语义中性的内部权重（避免"优先级/重要性"暗示 LLM 必须提及）；
+        # id/src 保留，LLM 识别可操作 inferred 记忆所必需。
+        header = f"- ({scopeType}:{scopeID}, w={priority}, id={item['id']}, src={source}) {content}"
         if tags:
             header += f" [tags: {', '.join(tags)}]"
         lines.append(header)
@@ -404,8 +437,10 @@ def buildMemoryContextBlock(memories: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+
+
 def summarizeRetrievedMemories(memories: list[dict[str, Any]]) -> str:
-    """生成检索摘要，用于日志和可观测性。"""
+    """生成检索摘要，用于日志和可观测性"""
     if not memories:
         return "命中 0 条"
 

@@ -252,7 +252,7 @@ allBlocks.sort(key=lambda b: b[0])
 | 块名 | 来源 | Tier | 召回条件 | 用途 |
 |------|------|------|----------|------|
 | **扩展模块块** | 各扩展模块通过 bot_data 推送层注入 | 模块自定（AFC 用 `TOOLS=200`） | 模块自定 | 工具上下文 / 日程数据 / 其他动态注入内容 |
-| **Knowledge** | `utils/llm/knowledge/` 读 `data/llm/knowledge/*.md` | `KNOWLEDGE=300` | 无条件检索 | 开发者编辑的背景知识（锌酱人设、兴趣、风格） |
+| **Knowledge** | `utils/llm/knowledge/` 读 `data/llm/knowledge/*.md` | `KNOWLEDGE=300` | 无条件检索 | 开发者编辑的背景知识（人设、兴趣、风格等） |
 | **Memory** | `utils/llm/memory/` 读 `llmMemory.db` | `LOW_TRUST=500` | `includeContext=True` | 结构化长期记忆（用户偏好、长期事实） |
 | **History** | `utils/chatHistory.py` 读 `chatHistory.db` | `LOW_TRUST=500` | `includeContext=True` | 近期聊天历史（最近 N 条消息） |
 | **URL** | `utils/llm/urlReader.py` 抓取 URL | `LOW_TRUST=500` | 用户消息中有 URL | 用户显式要求读取的网页内容 |
@@ -276,13 +276,13 @@ allBlocks.sort(key=lambda b: b[0])
 
 ### Knowledge（知识库）
 
-**职责**：提供锌酱的人设、兴趣、说话风格等开发者维护的背景知识。
+**职责**：提供 LLM 的人设、兴趣、说话风格等开发者维护的背景知识。
 
 **示例**：
 ```
 <TRUSTED_KNOWLEDGE>
-[style] 默认风格：锌酱说话时会用"喵"、"的说"等口癖……
-[interests] 猫科动物：锌酱对猫科动物很感兴趣，尤其是大型猫科……
+[style] 默认风格：你会平铺直叙地把话都说出来……
+[interests] 建筑：你对巴洛克时期的建筑非常感兴趣……
 </TRUSTED_KNOWLEDGE>
 ```
 
@@ -398,7 +398,7 @@ if includeContext:
 
 knowledge 是开发者维护的"人设背景知识"，语义上是 system prompt 的延伸，不属于"用户上下文"。
 
-设计依据：即使关闭 `memoryEnabled`（对应 `includeContext=False`），锌酱依然应该知道自己的人设、兴趣、说话风格。
+设计依据：即使关闭 `memoryEnabled`（对应 `includeContext=False`），LLM 依然应该知道自己的人设、兴趣、说话风格。
 
 ### 召回条件总结
 
