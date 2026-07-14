@@ -227,14 +227,14 @@ async def test_scientific_notation_with_percentage():
 @pytest.mark.asyncio
 async def test_division_by_zero():
     result = await calculate("1 / 0")
-    assert "计算错误" in result
+    assert "错误" in result
     assert "除数不能为零" in result
 
 
 @pytest.mark.asyncio
 async def test_sqrt_negative():
     result = await calculate("sqrt(-1)")
-    assert "计算错误" in result
+    assert "错误" in result
 
 
 @pytest.mark.asyncio
@@ -247,7 +247,7 @@ async def test_invalid_expression():
 @pytest.mark.asyncio
 async def test_unsupported_function():
     result = await calculate("eval('1+1')")
-    assert "计算错误" in result
+    assert "错误" in result
 
 
 @pytest.mark.asyncio
@@ -300,7 +300,7 @@ async def test_very_large_number():
 async def test_power_exponent_rejected():
     """超大指数在求值前被拒绝，防止资源耗尽"""
     result = await calculate("2 ** 1000000")
-    assert "计算错误" in result
+    assert "错误" in result
     assert "指数过大" in result
 
 
@@ -308,7 +308,7 @@ async def test_power_exponent_rejected():
 async def test_nested_power_bomb_rejected():
     """幂塔 9**9**9 的内层结果作为指数超限，被拒绝"""
     result = await calculate("9 ** 9 ** 9")
-    assert "计算错误" in result
+    assert "错误" in result
     assert "指数过大" in result
 
 

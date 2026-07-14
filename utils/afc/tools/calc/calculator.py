@@ -8,6 +8,8 @@ import ast
 import re
 from typing import Any
 
+from utils.core.logger import logSystemEvent, LogLevel
+
 from .config import (
     RESULT_PRECISION,
     ERROR_MESSAGES,
@@ -83,10 +85,6 @@ def _evalNode(node: ast.AST, constants: dict[str, Any]) -> Any:
     # 常量
     if isinstance(node, ast.Constant):
         return node.value
-
-    # Python 3.7 兼容（虽然生产环境是 3.11，但保持兼容性）
-    if isinstance(node, ast.Num):
-        return node.n
 
     # 变量（常量查找）
     if isinstance(node, ast.Name):

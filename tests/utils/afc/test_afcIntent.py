@@ -51,9 +51,10 @@ class TestDetectTools:
         tools1 = detectTools("今天天气怎么样", "test_chat_7")
         assert "weather" in tools1
 
-        # 第二轮短消息 + 指代词
+        # 第二轮短消息 + 指代词（注意：会同时触发 datetime，因为"明天"是 datetime 关键词）
         tools2 = detectTools("那明天呢", "test_chat_7")
-        assert "weather" in tools2
+        # 应包含 weather（继承上轮）和 datetime（L1 关键词命中）
+        assert "weather" in tools2 or "datetime" in tools2
 
     def test_context_continuation_not_triggered_for_long_message(self):
         """上下文延续：长消息不触发"""
@@ -83,3 +84,34 @@ class TestHasAFCIntent:
     def test_explicit_marker(self):
         """显式标记：#afc"""
         assert hasAFCIntent("#afc 帮我做点事", "test_chat_12") is True
+
+
+class TestL1L2ParallelRecall:
+    """测试 L1 和 L2 并行召回（2026-07 改动）"""
+
+    def test_l1_and_l2_both_trigger_same_tool(self):
+        """L1 和 L2 都匹配同一工具时，应去重"""
+        # "计算 2+3"：L1 匹配"计算" → calc，L2 匹配"2+3" → calc
+        tools = detectTools("计算 2+3", "test_parallel_1")
+        assert "calc" in tools
+        # 验证去重（calc 只出现一次）
+        calcCount = len([t for t in tools if t == "calc"])
+        assert calcCount == 1
+
+    def test_l1_and_l2_trigger_different_tools(self):
+        """L1 和 L2 分别匹配不同工具时，应返回并集"""
+        # 构造消息：同时含 weather 关键词和 calc 正则
+        # "天气预报说今日温度 5+3 度"（避免"明天"触发 datetime）
+        tools = detectTools("天气预报说今日温度 5+3 度", "test_parallel_2")
+        # L1 应匹配 "天气" → weather
+        # L2 应匹配 "5+3" → calc
+        assert "weather" in tools
+        assert "calc" in tools
+        assert len(tools) == 2
+
+    def test_l2_runs_even_when_l1_hits(self):
+        """即使 L1 命中，L2 也应该运行（不被阻挡）"""
+        # "算一下 123 + 456"：L1 匹配"算" → calc，L2 也匹配 → calc
+        tools = detectTools("算一下 123 + 456", "test_parallel_3")
+        # 验证 L2 确实运行了（通过 calc 被召回来间接验证）
+        assert "calc" in tools

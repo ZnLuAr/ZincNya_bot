@@ -102,9 +102,12 @@ def detectTools(message: str, chatID: str) -> set[str]:
 
     四级召回策略（宽松，高召回率）：
     1. 工具关键词匹配（倒排索引）
-    2. 工具正则模式匹配（L1 未命中时）
+    2. 工具正则模式匹配（与 L1 并行执行）
     3. 通用兜底：命中预设词但无工具匹配 → 返回所有工具名
     4. 上下文延续：短消息 + 指代词 → 继承上一轮工具集
+
+    L1 和 L2 并行执行，结果取并集（自动去重）。这样即使 L1 已命中，
+    L2 的正则也有机会补充遗漏的工具。
 
     参数:
         message: 用户消息文本
@@ -126,11 +129,10 @@ def detectTools(message: str, chatID: str) -> set[str]:
         if kw.lower() in messageLower:
             hits |= tools
 
-    # L2: 工具正则匹配（L1 未命中时）
-    if not hits:
-        for pat, toolName in _patternIndex:
-            if pat.search(messageLower):
-                hits.add(toolName)
+    # L2: 工具正则匹配（独立召回，与 L1 并行）
+    for pat, toolName in _patternIndex:
+        if pat.search(messageLower):
+            hits.add(toolName)
 
     # L3: 通用兜底（命中预设词但无工具匹配 → 返回所有工具）
     if not hits and any(trigger.lower() in messageLower for trigger in GENERIC_TRIGGERS):

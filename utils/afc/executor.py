@@ -111,7 +111,7 @@ async def execute(actionJSON: str) -> str:
         return f"<FUNCTION_ERROR>工具 {toolName}.{funcName} 执行超时</FUNCTION_ERROR>"
     except Exception as e:
         await logSystemEvent("AFC 执行异常", f"{toolName}.{funcName}：{e}")
-        return f"<FUNCTION_ERROR>工具执行出错</FUNCTION_ERROR>"
+        return f"<FUNCTION_ERROR>{e}</FUNCTION_ERROR>"
 
     await logSystemEvent("AFC 执行成功", f"{toolName}.{funcName}")
     return f"<FUNCTION_RESULT>{result}</FUNCTION_RESULT>"
