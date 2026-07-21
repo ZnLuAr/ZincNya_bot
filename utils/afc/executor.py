@@ -11,7 +11,7 @@ import json
 import asyncio
 import inspect
 
-from utils.core.logger import logSystemEvent
+from utils.core.logger import logSystemEvent, LogLevel
 
 from utils.afc.registry import getToolsSchema, getToolCallable, getAllToolNames
 
@@ -107,10 +107,10 @@ async def execute(actionJSON: str) -> str:
                 timeout=_TOOL_TIMEOUT_SECONDS,
             )
     except asyncio.TimeoutError:
-        await logSystemEvent("AFC 执行超时", f"{toolName}.{funcName}")
+        await logSystemEvent("AFC 执行超时", f"{toolName}.{funcName}", LogLevel.WARNING)
         return f"<FUNCTION_ERROR>工具 {toolName}.{funcName} 执行超时</FUNCTION_ERROR>"
     except Exception as e:
-        await logSystemEvent("AFC 执行异常", f"{toolName}.{funcName}：{e}")
+        await logSystemEvent("AFC 执行异常", f"{toolName}.{funcName}：{e}", LogLevel.ERROR)
         return f"<FUNCTION_ERROR>{e}</FUNCTION_ERROR>"
 
     await logSystemEvent("AFC 执行成功", f"{toolName}.{funcName}")

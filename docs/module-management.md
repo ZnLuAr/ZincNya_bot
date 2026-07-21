@@ -75,7 +75,7 @@ MODULES = {
 | 文件 | 作用 | 格式 |
 | --- | --- | --- |
 | `data/modules.json` | 每个模块的 `enabled` 状态（用户的 enable/disable 偏好） | `{"llm": {"enabled": true}, ...}` |
-| `data/modulesCustom.json` | 用户从 GitHub 安装的第三方模块的完整元数据 | `{"weather": {"id": "weather", "enabled": true, ...}, ...}` |
+| `data/modulesCustom.json` | 用户从 GitHub 安装的第三方模块的完整元数据 | `{"weather": {"enabled": true, "metadata": {"id": "weather", ...}, "source": "github:<url>@main", "installedAt": "..."}, ...}` |
 | `data/modulesUninstalled.json` | 用户用 `uninstall -f` 强制删除的内置模块 id 列表（让 `getAllModules()` 跳过它们） | `["todos", "stickers"]` （数组） |
 
 三个文件都加入了 `.gitignore`。这是因为它们记下来的，其实都只是每个部署实例自己的状态——哪些模块被打开了、后来装了哪些扩展、哪些内置模块被删掉了……这些跟仓库本身是没有关系的，放进 git 只会制造一些无意义的合并冲突的说……
@@ -120,7 +120,7 @@ enable <name>        # 启用模块
 disable <name>       # 禁用模块
 install <url>        # 从 GitHub URL 安装模块
 uninstall <name>     # 卸载模块（详见下文）
-validate             # 检查所有模块的文件是否完整
+validate             # 检查所有模块的文件是否完整（data/*.json 属运行时本地状态，允许初始不存在，跳过检查）
 scan                 # 找出未被任何模块管理的 handler / utils 文件
 ```
 
@@ -129,6 +129,8 @@ scan                 # 找出未被任何模块管理的 handler / utils 文件
 - **默认**：如果待卸文件中有被其他启用模块共享的文件，会直接触发警告并退出，提示选用 `-s` 或 `-f`
 - **`-s/--soft`**：只删除独占文件，共享文件会保留下来……算是最安全的方式
 - **`-f/--force`**：不管是不是共享文件，全部直接删除
+
+另外，不管用哪种模式，删除前都会对 metadata 里登记的每个路径重新跑一遍和 install 同款的安全校验（`_assertSafeModulePath`）；校验不过的会打印 `[SKIP]` 并跳过不删——就算 `modulesCustom.json` 被人手工篡改过，也不会误删项目或系统文件。
 
 对于内置模块，默认不会直接允许卸载，而是提示优先使用 `disable` 的说——
 
@@ -168,7 +170,7 @@ scan                 # 找出未被任何模块管理的 handler / utils 文件
 安装的时候会做一些基本的安全检查：
 
 - `id` 必须匹配 `^[a-z0-9_]+$`
-- `所有 `files` 都必须以 `handlers/` 或 `utils/` 开头，并且不能包含 `..`，避免路径遍历
+- 所有 `files` 都必须以 `handlers/` 或 `utils/` 开头、不能包含 `..` 路径段、不能是绝对路径，而且 realpath 解析后的真实路径必须仍在项目根目录内（realpath + commonpath 校验，见 `scripts/module.py` 的 `_assertSafeModulePath`），避免路径遍历和逃逸
 - `handlers` 中列出的每个文件，都必须真的实现 `def register()`
 - 分支会自动尝试 `main` → `master`，当然也可以用 `--branch` 手动指定
 

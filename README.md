@@ -114,6 +114,9 @@ ZincNya_bot/
 │   ├── chatHistory.db              # 聊天记录数据库（content 字段加密，不会被提交）
 │   ├── .chatKey                    # 字段级加密共用密钥（三库共用，不会被提交）
 │   ├── todos.db                    # 待办事项数据库（content 字段加密，不会被提交）
+│   ├── afcToolsBuiltin.json        # 内置 AFC 工具清单（manifest）
+│   ├── afcTools.json               # AFC 工具启用开关（不会被提交）
+│   ├── afcToolsCustom.json         # 第三方 AFC 工具清单（不会被提交）
 │   ├── llm/                        # LLM 相关数据（不会被提交）
 │   │   ├── llmConfig.json          # LLM 功能配置
 │   │   ├── llmMemory.db            # Structured memory 数据库（content 字段加密）
@@ -214,7 +217,8 @@ ZincNya_bot/
 │   │   ├── executor.py             # 工具执行器（参数绑定校验 + 超时保护）
 │   │   ├── contextBuilder.py       # 工具上下文构建（注入可用工具 schema）
 │   │   ├── errors.py               # AFC 异常基类
-│   │   └── tools/                  # 工具实现（天气、计算器等）
+│   │   ├── toolManager.py          # AFC 工具状态管理（启用开关 / manifest 读写）
+│   │   └── tools/                  # 工具实现（weather/calc/datetime，可用 scripts/afc_tools.py 管理）
 │   │
 │   ├── todos/                      # 待办事项子系统
 │   │   ├── database.py             # SQLite 数据存储
@@ -256,7 +260,8 @@ ZincNya_bot/
 │   └── inputHelper.py              # 统一异步输入工具（含多行输入）
 │
 ├── scripts/                        # 辅助脚本
-│   ├── module.py                   # 模块管理 CLI（list/show/enable/disable/validate/scan）
+│   ├── module.py                   # 模块管理 CLI（list/show/enable/disable/install/uninstall/validate/scan）
+│   ├── afc_tools.py                # AFC 工具管理 CLI（list/show/check/enable/disable/new/install/update/uninstall）
 │   ├── test.py                     # 测试运行器（pytest 封装）
 │   ├── update_from_main.sh         # Linux 下自动与 main 分支同步
 │   ├── sync-data.ps1               # 远程服务器同步工具（文件级覆盖）
@@ -382,21 +387,17 @@ python scripts/module.py scan
 
 ### 新增 AFC 工具
 
-如果想给 LLM 加一样能自主调用的本事（[自动工具调用](#自动工具调用-afc) 这章会详细讲），照下面几步来——
+如果想给 LLM 加一样能自主调用的本事（[自动工具调用](#自动工具调用-afc) 这章会详细讲），最省事的是先叫脚手架出来——`python scripts/afc_tools.py new dice` 会把整套骨架（含触发词、配置、测试、manifest 模板）一次搭好。
 
-按照惯例，工具都应放在 `utils/afc/tools/<工具名>/` 底下，一个目录就是一个工具。最小骨架只要两个文件：
+按照惯例，工具都应放在 `utils/afc/tools/<工具名>/` 底下，一个目录就是一个工具。核心是两个文件：
 
-1. **`__init__.py`** —— 把要暴露给 LLM 的函数 `import` 进来放进 `__all__`。凡是不以 `_` 开头的公开函数都会被 `registry.py` 扫到，**函数的 schema 是从类型注解 + docstring 自动生成的**，所以类型标注和参数说明需要写全：
+1. **`__init__.py`** —— 薄壳：async 入口函数定义在它的顶层，函数体转调实现模块（脚手架默认生成 `core.py`；calc 里叫 `calculator.py`，叫什么随你）。凡是不以 `_` 开头、又定义在本工具包内的公开函数都会被 `registry.py` 扫到，**函数的 schema 是从类型注解 + docstring 自动生成的**，所以类型标注和参数说明需要写全：
 
    ```python
    # utils/afc/tools/dice/__init__.py
-   from .roller import rollDice
+   from . import core
 
-   __all__ = ["rollDice"]
-   ```
 
-   ```python
-   # utils/afc/tools/dice/roller.py
    async def rollDice(sides: int, count: int = 1) -> str:
        """
        掷骰子并返回结果。
@@ -408,24 +409,31 @@ python scripts/module.py scan
        返回：
            掷骰结果字符串
        """
-       ...
+       return await core.rollDice(sides, count)
+
+
+   __all__ = ["rollDice"]
    ```
 
    注解里的 `sides: int` 就会变成 schema 的 `integer` 类型；带默认值的参数（`count`）是可选的，而没有默认值的参数是必填的。docstring 第一行是函数描述，`参数：` 段落里的 `名字: 说明` 会填进各参数的 description。
+
+   注意别图省事写成 `from .core import rollDice` 纯转发，也别在 `__init__.py` 顶层写裸帮助函数——前者会让 `check` 看不到入口（它只做 AST 静态分析），后者会被 registry 误登记成工具 schema。实现的正主住在实现模块里（脚手架叫它 `core.py`）。
 
 2. **`triggers.py`** —— 声明触发词，`afcIntent.py` 启动时会扫进倒排索引，用来做第一步的意图召回：
 
    ```python
    KEYWORDS = ["骰子", "掷骰", "roll"]        # 子串命中即召回（L1）
-   PATTERNS = [r"\d+\s*d\s*\d+"]              # L1 没中时再走正则（L2）
+   PATTERNS = [r"\d+\s*d\s*\d+"]              # 与 L1 并行的正则召回（L2）
    ```
 
    召回是**故意放得很宽**的（宁可多召回、让 LLM 自己决定要不要用），所以触发词写得随手一点没关系。
 
-写完之后，不要忘了两件事：
+写完之后，还有两件事：
 
-- 把新增的文件登记进 [modulesRegistry.py](modulesRegistry.py) 里 `afc` 模块的 `files` 列表——注册表没登记的文件不会被加载；
-- 要是工具依赖外部资源（API key、缓存、连接池之类），在 `client.py` 里写个 `_registerResources()` 挂到 `resourceManager`，再把它加进 registry 的 `initFunctions`（weather 工具就是这么做的，可以照着抄）。
+- 选择工具归属：内置工具把 manifest 加进 `data/afcToolsBuiltin.json`，第三方工具带上 `afcTool.json` 发布到 GitHub 供 `install`——工具文件本身不用登记进 [modulesRegistry.py](modulesRegistry.py)，加载走目录扫描。什么都不登记也能跑（local-draft），`check` 会提醒补户口；
+- 要是工具依赖外部资源（API key、缓存、连接池之类），在 `client.py` 里写个 `_registerResources()` 挂到 `resourceManager`，再把它加进 [modulesRegistry.py](modulesRegistry.py) `afc` 模块的 `initFunctions`（weather 工具就是这么做的，可以照着抄）。
+
+管理工具的日常（开关、体检、装卸、更新）都归 `python scripts/afc_tools.py` 管，细则写在 [docs/afc-tool-management.md](docs/afc-tool-management.md) 里。
 
 现成的 weather 和 calc 两个工具都配了 README，动手前翻一眼，总是没有错的——
 
@@ -657,6 +665,7 @@ python scripts/merge_data.py --source /path/to/other/data --apply
 ### 工具调用（AFC）
 
 - [**AFC 架构**](docs/afc.md) — 自实现工具调用系统、意图检测、执行流程
+- [**AFC 工具管理**](docs/afc-tool-management.md) — 工具装卸、开关、清单规范与安全校验
 - [**AFC 错误处理**](docs/afc-error-handling.md) — 错误传递、日志记录规范
 
 ### 开发工具

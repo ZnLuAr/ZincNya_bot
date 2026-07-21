@@ -7,6 +7,7 @@ AFC 意图判断
 """
 
 import re
+import asyncio
 import importlib
 from pathlib import Path
 
@@ -54,6 +55,39 @@ MAX_CONTEXTUAL_MESSAGE_LEN = 10
 
 
 
+def _logBadPattern(toolName: str, pattern: str):
+    """
+    记录触发词正则编译失败（同步上下文安全）
+
+    _scanTriggers 在 handler 的 async 上下文中被调，但本身是同步函数，
+    不能直接 await logSystemEvent。这里用 create_task 后台记，若当前没有
+    运行中的事件循环则退化为 loop.run_until_complete 同步写完。
+    
+    任何日志失败都不应拖垮扫描。
+    """
+    async def _write():
+        try:
+            from utils.core.logger import logSystemEvent, LogLevel
+            await logSystemEvent(
+                "AFC 触发词编译失败",
+                f"{toolName}: {pattern}",
+                LogLevel.WARNING,
+            )
+        except Exception:
+            pass  # create_task 分支的异常无人收，自行兜底——日志失败不拖垮扫描
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(_write())
+        else:
+            loop.run_until_complete(_write())
+    except Exception:
+        pass
+
+
+
+
 def _scanTriggers():
     """启动时扫描 tools/*/triggers.py，构建倒排索引"""
     global _indexBuilt
@@ -66,10 +100,15 @@ def _scanTriggers():
         return
 
     for toolDir in toolsPath.iterdir():
-        if not toolDir.is_dir() or toolDir.name.startswith("_"):
+        if not toolDir.is_dir() or toolDir.name.startswith(("_", ".")):
             continue
 
         toolName = toolDir.name
+
+        # 跳过被禁用的工具（不注册触发词）
+        from utils.afc.toolManager import isAfcToolEnabled
+        if not isAfcToolEnabled(toolName):
+            continue
 
         # 尝试导入 triggers 模块
         try:
@@ -84,10 +123,15 @@ def _scanTriggers():
         for kw in keywords:
             _keywordIndex.setdefault(kw, set()).add(toolName)
 
-        # 构建正则倒排索引
+        # 构建正则倒排索引（单个坏 pattern 不拖垮整个扫描）
         patterns = getattr(triggersModule, "PATTERNS", [])
         for pat in patterns:
-            _patternIndex.append((re.compile(pat, re.IGNORECASE), toolName))
+            try:
+                compiled = re.compile(pat, re.IGNORECASE)
+            except re.error:
+                _logBadPattern(toolName, pat)
+                continue
+            _patternIndex.append((compiled, toolName))
 
         _allToolNames.add(toolName)
 

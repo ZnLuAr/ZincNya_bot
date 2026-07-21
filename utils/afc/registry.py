@@ -168,10 +168,16 @@ def _scanTools():
         return
 
     for toolDir in toolsPath.iterdir():
-        if not toolDir.is_dir() or toolDir.name.startswith("_"):
+        if not toolDir.is_dir() or toolDir.name.startswith(("_", ".")):
             continue
 
         toolName = toolDir.name
+
+        # 跳过被禁用的工具（不注册 schema / callable）
+        from utils.afc.toolManager import isAfcToolEnabled
+        if not isAfcToolEnabled(toolName):
+            continue
+
         toolPackage = f"utils.afc.tools.{toolName}"
 
         # 导入工具模块

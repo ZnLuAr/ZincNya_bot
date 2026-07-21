@@ -195,7 +195,8 @@ def test_register_structure():
     """register() 返回结构正确"""
     result = register()
 
-    assert result["group"] == 1
+    # group 在每个 handler 项里（loader 契约：handlers 列表项可为 {"handler", "group"}）
+    assert result["handlers"][0]["group"] == 1
     assert result["name"] == "AFC 意图检测"
     assert "description" in result
     assert len(result["handlers"]) == 1

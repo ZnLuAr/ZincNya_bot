@@ -106,6 +106,12 @@ data/llm/*.db-journal
 data/modules.json
 data/modulesCustom.json
 data/modulesUninstalled.json
+# AFC 工具管理的运行时状态（启用开关、第三方工具清单），每个部署实例独有。
+# 注意：data/afcToolsBuiltin.json 是仓库提供的内置工具清单，不忽略。
+data/afcTools.json
+data/afcToolsCustom.json
+# install/update 的暂存与回滚备份目录（失败时残留用于人工抢救），运行时生成。
+data/.afc_install/
 # 但保留 .gitkeep 占位文件
 !data/.gitkeep
 

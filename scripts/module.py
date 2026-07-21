@@ -76,6 +76,23 @@ def printColor(color, text):
         print(f"{color}{text}{Color.RESET}")
 
 
+def _assertSafeModulePath(filePath):
+    """校验模块文件路径安全性（防路径遍历 / 绝对路径吞并 / 逃逸项目根），非法时抛 ValueError"""
+    norm = filePath.replace("\\", "/")
+
+    if ".." in norm.split("/") or os.path.isabs(norm):
+        raise ValueError(f"非法文件路径：{filePath}")
+
+    if not (norm.startswith("handlers/") or norm.startswith("utils/")):
+        raise ValueError(f"文件路径必须以 handlers/ 或 utils/ 开头：{filePath}")
+
+    dest = os.path.realpath(os.path.join(PROJECT_ROOT, filePath))
+    root = os.path.realpath(PROJECT_ROOT)
+
+    if os.path.commonpath([dest, root]) != root:
+        raise ValueError(f"路径逃逸出项目根：{filePath}")
+
+
 def cmdList(args):
     """列出所有模块"""
     from utils.moduleManager import getAllModules
@@ -242,6 +259,13 @@ def cmdValidate():
         missingFiles = []
 
         for filePath in allFiles:
+            # data/*.json 一律跳过存在性检查：afcTools.json / afcToolsCustom.json 是运行时
+            # 生成的本地状态，初始可不存在；afcToolsBuiltin.json 虽随仓库提供（.gitignore
+            # 不忽略），缺失时由 git 追踪与 toolManager 空 manifest 兜底，故同样不视为缺失
+            normalized = filePath.replace("\\", "/")
+            if normalized.startswith("data/") and normalized.endswith(".json"):
+                continue
+
             fullPath = os.path.join(PROJECT_ROOT, filePath)
             if not os.path.exists(fullPath):
                 missingFiles.append(filePath)
@@ -335,7 +359,7 @@ def installFromGitHub(repoUrl, branch=None):
 
         try:
             metadataUrl = f"{rawUrl}/module.json"
-            with urllib.request.urlopen(metadataUrl) as response:
+            with urllib.request.urlopen(metadataUrl, timeout=15) as response:
                 metadata = json.loads(response.read().decode('utf-8'))
                 selectedBranch = tryBranch
                 break
@@ -355,13 +379,10 @@ def installFromGitHub(repoUrl, branch=None):
     # 3. 校验文件路径（安全检查）
     allFiles = metadata.get("files", [])
     for filePath in allFiles:
-        # 拒绝包含 .. 的路径（路径遍历攻击）
-        if ".." in filePath:
-            printColor(Color.RED, f"[X] 非法文件路径：{filePath}")
-            return False
-        # 只允许 handlers/ 和 utils/ 开头的路径
-        if not (filePath.startswith("handlers/") or filePath.startswith("utils/")):
-            printColor(Color.RED, f"[X] 文件路径必须以 handlers/ 或 utils/ 开头：{filePath}")
+        try:
+            _assertSafeModulePath(filePath)
+        except ValueError as e:
+            printColor(Color.RED, f"[X] {e}")
             return False
 
     # 4. 提取模块名（从 metadata.id 字段）
@@ -516,6 +537,13 @@ def cmdUninstall(moduleName, force=False, soft=False):
     skippedCount = 0
 
     for filePath in allFiles:
+        # 存储的 metadata 可能被篡改，删除前必须重新校验路径，防止误删项目/系统文件
+        try:
+            _assertSafeModulePath(filePath)
+        except ValueError as e:
+            printColor(Color.YELLOW, f"  [SKIP] 跳过非法路径 {filePath}：{e}")
+            continue
+
         fullPath = os.path.join(PROJECT_ROOT, filePath)
         if not os.path.exists(fullPath):
             continue

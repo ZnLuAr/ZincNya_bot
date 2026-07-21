@@ -1,0 +1,55 @@
+{
+  "weather": {
+    "id": "weather",
+    "name": "天气查询",
+    "version": "1.0.0",
+    "author": "ZincPhos",
+    "description": "查询指定城市的天气信息（当天/明天/后天）",
+    "files": [
+      "utils/afc/tools/weather/__init__.py",
+      "utils/afc/tools/weather/triggers.py",
+      "utils/afc/tools/weather/config.py",
+      "utils/afc/tools/weather/cache.py",
+      "utils/afc/tools/weather/client.py",
+      "utils/afc/tools/weather/dateParser.py",
+      "utils/afc/tools/weather/formatter.py",
+      "utils/afc/tools/weather/README.md"
+    ],
+    "testFile": "tests/utils/afc/tools/test_weather.py",
+    "source": "builtin"
+  },
+  "calc": {
+    "id": "calc",
+    "name": "计算器",
+    "version": "1.0.0",
+    "author": "ZincPhos",
+    "description": "安全的数学表达式计算（AST 白名单求值，支持函数与常量）",
+    "files": [
+      "utils/afc/tools/calc/__init__.py",
+      "utils/afc/tools/calc/triggers.py",
+      "utils/afc/tools/calc/config.py",
+      "utils/afc/tools/calc/calculator.py",
+      "utils/afc/tools/calc/operators.py",
+      "utils/afc/tools/calc/errors.py",
+      "utils/afc/tools/calc/README.md"
+    ],
+    "testFile": "tests/utils/afc/tools/test_calc.py",
+    "source": "builtin"
+  },
+  "datetime": {
+    "id": "datetime",
+    "name": "日期时间",
+    "version": "1.0.0",
+    "author": "ZincPhos",
+    "description": "获取当前时间、计算日期差、计算未来/过去日期",
+    "files": [
+      "utils/afc/tools/datetime/__init__.py",
+      "utils/afc/tools/datetime/triggers.py",
+      "utils/afc/tools/datetime/config.py",
+      "utils/afc/tools/datetime/core.py",
+      "utils/afc/tools/datetime/README.md"
+    ],
+    "testFile": "tests/utils/afc/tools/test_datetime.py",
+    "source": "builtin"
+  }
+}
