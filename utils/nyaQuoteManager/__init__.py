@@ -7,7 +7,6 @@ from .data import (
 )
 from .ui import (
     collectQuoteViewModel,
-    quoteUIRenderer,
     editQuoteViaEditor,
     QuoteTUIController,
     quoteMenuController,

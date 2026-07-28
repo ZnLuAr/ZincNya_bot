@@ -172,7 +172,14 @@ ZincNya_bot/
 │   │   ├── resourceManager.py      # 资源清理管理器（退出时回调）
 │   │   ├── stateManager.py         # 全局状态管理器
 │   │   ├── terminalUI.py           # 终端 UI 工具（备用屏幕、ANSI）
-│   │   ├── tuiBase.py              # TUI 控制器基类
+│   │   ├── tui/                    # TUI 框架：会话契约 + 开放范式库
+│   │   │   ├── __init__.py         # 统一出口（TUISession + 各范式 + editFile）
+│   │   │   ├── session.py          # TUISession 会话契约（横切关注点）
+│   │   │   └── paradigms/          # 开放范式库（每种交互范式一个文件）
+│   │   │       ├── __init__.py
+│   │   │       ├── listMenu.py     # 列表 + 方向键范式
+│   │   │       ├── fullScreen.py   # 全屏 pt 接管范式
+│   │   │       └── textEditor.py   # 全屏文本编辑器（editFile 薄壳）
 │   │   └── schema/                 # 数据库 schema 集中管理
 │   │       ├── __init__.py         # loadSchema(name) 统一加载器
 │   │       ├── chatHistory.sql     # messages 表结构
@@ -256,7 +263,6 @@ ZincNya_bot/
 │   ├── markdownToHtml.py           # Markdown → Telegram HTML 转换工具
 │   ├── operators.py                # Operators 权限管理
 │   ├── telegramHelpers.py          # Telegram 消息操作工具
-│   ├── fileEditor.py               # TUI 文本编辑器
 │   └── inputHelper.py              # 统一异步输入工具（含多行输入）
 │
 ├── scripts/                        # 辅助脚本
@@ -670,7 +676,8 @@ python scripts/merge_data.py --source /path/to/other/data --apply
 
 ### 开发工具
 
-- [**chatScreen 聊天界面**](docs/chatScreen.md) — 控制台全屏交互式聊天界面技术文档
+- [**TUI 框架**](docs/tui.md) — 会话契约 `TUISession` + 开放范式库（listMenu/fullScreen/textEditor）总纲
+- [**chatScreen 聊天界面**](docs/chatScreen.md) — 控制台全屏交互式聊天界面技术文档（fullScreen 范式实例）
 - [**测试体系**](tests/README.md) — pytest 配置、fixture 使用、测试命令
 
 ---

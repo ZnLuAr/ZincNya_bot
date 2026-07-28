@@ -468,7 +468,7 @@ async def deleteLater(context, chatId, messageId, filePath, deleteDelay):
     await asyncio.sleep(deleteDelay)
     try:
        await context.bot.delete_message(chatId, message_id=messageId)
-    except:
+    except Exception:
         pass
 
     if filePath:  # 添加 None 检查

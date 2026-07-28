@@ -9,7 +9,6 @@ from .data import (
 from .ui import (
     checkChatAvailable,
     collectWhitelistViewModel,
-    whitelistUIRenderer,
     WhitelistTUIController,
     whitelistMenuController,
 )

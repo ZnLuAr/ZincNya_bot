@@ -1,22 +1,18 @@
 """
 utils/chatScreen/session.py
 
-chatScreen 入口与生命周期管理。
+chatScreen 入口与生命周期编排。
 
-业务编排层：管理 interactiveMode、初始化 UI、启动/清理 receiverLoop、
-委托主循环处理用户输入。目标聊天的选择（含 "-c" 未指定 ID 时弹列表）
-由调用方（command/send.py）负责，本函数只接受有效的 chatID。
+业务编排层：构造 ChatScreenApp（灌入历史记录）→ 跑 runSession（onEnter/mainLoop/收尾接管
+console 回调 + receiver + interactiveMode flag）→ 处理 reviewEditItem 三态（放回队列 / switch 透传）。
+console 回调注册、receiver 启动/清理、flag 管理已下沉到 ChatScreenApp.onEnter/onExit + TUISession.runSession，
+本文件不再手工管理。目标聊天的选择（含 "-c" 未指定 ID 时弹列表）由调用方（command/send.py）负责。
 """
 
-import asyncio
-
-from utils.core.stateManager import getStateManager
 from utils.llm.state import getReviewQueue
 
 from .ui import ChatScreenApp
 from .history import buildHistoryLines
-from .receiver import startReceiver
-from .mainLoop import runMainLoop
 
 
 
@@ -29,24 +25,15 @@ async def chatScreen(app, bot, targetChatID: str):
         targetChatID: 有效的 Telegram chat ID（不接受 "NoValue"，
                       调用方需先处理列表选择）。
 
-    业务编排入口，负责：
-        - interactiveMode 管理
-        - 后台 receiverLoop 启动与清理
-        - 将 UI 交互委托给 ChatScreenApp
+    返回:
+        - None：正常退出（Esc / Ctrl+C）
+        - {"action": "switch", "direction": "next"/"prev"}：切换聊天对象信号，透传给 send.py
     """
     # 参数校验（确保调用方已处理 "NoValue"）
     if not targetChatID or targetChatID == "NoValue":
         raise ValueError("targetChatID 必须是有效的 chat ID，不能是 'NoValue'")
 
-    state = getStateManager()
-
-    # 设置交互模式，暂停外层 CLI 的输入读取
-    state.setInteractiveMode(True)
-    queue: asyncio.Queue = state.getMessageQueue()
-    shutdownEvent = state.getShutdownEvent()
-
-    # ── 初始化 UI ──
-    # 先构建初始内容（历史记录 + 欢迎信息）
+    # 历史记录构建仍由 session 负责（构造前 buildHistoryLines + 欢迎行 → initialLines 传构造器）
     initialLines = await buildHistoryLines(targetChatID)
     initialLines.extend([
         "",
@@ -54,42 +41,21 @@ async def chatScreen(app, bot, targetChatID: str):
         f"与 {targetChatID} 的实时聊天已连接",
         "=" * 64,
     ])
-    ui = ChatScreenApp(targetChatID, initialLines=initialLines)
 
-    # 注册控制台输出回调，让 logger 输出路由到 UI transcript
-    def _consoleOutputHandler(text: str):
-        lines = text.rstrip('\n').split('\n')
-        ui.appendLines(lines)
+    ui = ChatScreenApp(targetChatID, bot=bot, shutdownEvent=None, initialLines=initialLines)
 
-    state.setConsoleOutputCallback(_consoleOutputHandler)
+    # runSession：onEnter（注册 console 回调 + 启动 receiver + 初次刷新）→ mainLoop（= runMainLoop）
+    # → 收尾（onExit 注销回调 + 恢复 flag + cancel/await receiver）。
+    # reviewEditItem 三态由 runMainLoop 返回（None / 审核项 dict / switch dict）。
+    reviewEditItem = await ui.runSession()
 
-    # ── 启动 receiverLoop ──
-    receiverTask = await startReceiver(state, targetChatID, ui, queue, shutdownEvent)
-    await asyncio.sleep(0.1)
+    # 非 switch 的审核项：编辑模式中退出 → 放回审核队列（session 编排自有，不进基类）
+    if reviewEditItem is not None and not (
+        isinstance(reviewEditItem, dict) and reviewEditItem.get("action") == "switch"
+    ):
+        getReviewQueue().put_nowait(reviewEditItem)
 
-    # ── 主循环 ──
-    reviewEditItem = None
-    try:
-        reviewEditItem = await runMainLoop(bot, targetChatID, ui, shutdownEvent)
-    finally:
-        # 编辑模式中退出 → 放回队列
-        # 切换信号 ({"action": "switch", ...}) 不是审核项,不放回队列
-        if reviewEditItem is not None:
-            if not (isinstance(reviewEditItem, dict) and reviewEditItem.get("action") == "switch"):
-                getReviewQueue().put_nowait(reviewEditItem)
-
-        # 注销控制台输出回调
-        state.setConsoleOutputCallback(None)
-        state.setInteractiveMode(False)
-        receiverTask.cancel()
-        try:
-            await receiverTask
-        except asyncio.CancelledError:
-            pass
-
-    # ── 透传切换信号给调用方 (send.py) ──
-    # 返回 {"action": "switch", "direction": "next"/"prev"} 时,
-    # send.py 的 while 循环会获取下一个 chatID 并再次调用 chatScreen
+    # 切换信号透传给调用方（send.py 的 while 循环据此获取下一个 chatID 再调 chatScreen）
     if isinstance(reviewEditItem, dict) and reviewEditItem.get("action") == "switch":
         return reviewEditItem
 

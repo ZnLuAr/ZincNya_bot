@@ -317,3 +317,60 @@ async def test_collect_whitelist_view_model_mixed():
             list_statuses = [e['listStatus'] for e in entries]
             assert list_statuses.count("Allowed") == 2
             assert list_statuses.count("Suspended") == 1
+
+
+# ============================================================================
+# buildTable 渲染钉扎（renderer 自由函数 → buildTable 方法迁移的回归网）
+# 内容级断言（strip ANSI 后比对关键串），不钉字节——抗 rich 样式/列宽微调。
+# ============================================================================
+
+import re as _re
+
+_ANSI_ESCAPE = _re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\x1b[=>]")
+
+
+def _stripAnsi(text):
+    return _ANSI_ESCAPE.sub("", text)
+
+
+def _makeWhitelistController(entries, mode="manage", selected=0):
+    from utils.whitelistManager.ui import WhitelistTUIController
+    controller = WhitelistTUIController(mode=mode)
+    controller.entries = entries
+    controller.selected = selected
+    return controller
+
+
+def test_buildTable_whitelist_manage_renders_rows_and_help(capsys):
+    """manage 模式：(+) 行 + 数据行 + 备注 + 帮助行都渲染出来"""
+    entries = [
+        {"uid": "(+)", "listStatus": None, "displayStatus": "添加新用户", "colour": "cyan", "comment": "", "isAddRow": True},
+        {"uid": "12345", "listStatus": "Allowed", "displayStatus": "Allowed", "colour": "wheat1", "comment": "alpha", "available": True, "isAddRow": False},
+        {"uid": "67890", "listStatus": "Suspended", "displayStatus": "Suspended", "colour": "grey70", "comment": "", "available": False, "isAddRow": False},
+    ]
+    controller = _makeWhitelistController(entries, mode="manage", selected=1)
+
+    rowCount = controller.renderUI(entries, selectedIndex=1)
+    out = _stripAnsi(capsys.readouterr().out)
+
+    assert rowCount > 0
+    assert "白名单" in out                          # 标题
+    assert "添加新用户" in out                      # (+) 行
+    assert "12345" in out and "alpha" in out        # 第一条数据行 + 备注预览
+    assert "67890" in out and "Suspended" in out    # 第二条
+    assert "切换状态" in out and "Esc 退出" in out   # manage 帮助行
+
+
+def test_buildTable_whitelist_select_no_help_no_addrow(capsys):
+    """select 模式：无 (+) 行、无帮助行"""
+    entries = [
+        {"uid": "111", "listStatus": "Allowed", "displayStatus": "Allowed", "colour": "wheat1", "comment": "", "available": True, "isAddRow": False},
+    ]
+    controller = _makeWhitelistController(entries, mode="select", selected=0)
+
+    controller.renderUI(entries, selectedIndex=0)
+    out = _stripAnsi(capsys.readouterr().out)
+
+    assert "111" in out
+    assert "添加新用户" not in out    # select 无 (+) 行
+    assert "切换状态" not in out      # select 无帮助行

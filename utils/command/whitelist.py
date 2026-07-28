@@ -4,11 +4,7 @@ from handlers.cli import parseArgsTokens
 
 from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.whitelistManager.data import userOperation
-from utils.whitelistManager.ui import (
-    whitelistUIRenderer,
-    collectWhitelistViewModel,
-    whitelistMenuController
-)
+from utils.whitelistManager.ui import whitelistMenuController
 
 
 
@@ -161,14 +157,8 @@ async def execute(app , args):
         elif susUID and susUID != "NoValue":
             operation = "suspendUser"
             action = f"暂停 {susUID} 的权限……"
-            result = ["OK喵" , f"{susUID} 已经是暂停状态了喵……"]
+            result = ["OK喵" , f"{susUID} 已经是暂停状态了喵——"]
 
-        elif listFlag:
-            # 当操作为 --list 时，不进入汇总操作，而是调用渲染函数后返回
-            whitelistData: dict = userOperation("listUsers")
-            whitelistUIRenderer(whitelistData)
-            return
-        
         # 汇总操作
         userID = addUID or delUID or susUID
         ok = userOperation(operation , userID)

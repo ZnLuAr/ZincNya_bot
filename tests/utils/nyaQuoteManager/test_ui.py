@@ -331,3 +331,43 @@ async def test_edit_quote_via_editor_tempfile_cleanup():
 
                     # 应该清理临时文件
                     mock_unlink.assert_called_once()
+
+
+# ============================================================================
+# buildTable 渲染钉扎（renderer 自由函数 → buildTable 方法迁移的回归网）
+# 内容级断言（strip ANSI 后比对关键串），不钉字节——抗 rich 样式/列宽微调。
+# ============================================================================
+
+import re as _re
+
+_ANSI_ESCAPE = _re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\x1b[=>]")
+
+
+def _stripAnsi(text):
+    return _ANSI_ESCAPE.sub("", text)
+
+
+def test_buildTable_quote_renders_rows_weight_and_addrow(capsys):
+    """quote manage：(+) 行 + 数据行 + weight 列 + 选中标记；无帮助行"""
+    from utils.nyaQuoteManager.ui import QuoteTUIController
+    entries = [
+        {"text": "(+)", "preview": "添加新语录", "weight": None, "raw": None, "isAddRow": True},
+        {"text": "hello world", "preview": "hello world", "weight": 2.5, "raw": {}, "isAddRow": False},
+        {"text": "short", "preview": "short", "weight": 1.0, "raw": {}, "isAddRow": False},
+    ]
+    controller = QuoteTUIController(mode="manage")
+    controller.entries = entries
+    controller.selected = 1
+
+    rowCount = controller.renderUI(entries, selectedIndex=1)
+    out = _stripAnsi(capsys.readouterr().out)
+
+    assert rowCount > 0
+    assert "ZincNya Quotes" in out      # 标题
+    assert "Weight" in out              # 列名
+    assert "添加新语录" in out          # (+) 行
+    assert "hello world" in out         # 第一条 preview
+    assert "short" in out               # 第二条 preview
+    assert "2.5" in out                 # 第一条 weight 渲染
+    # quote 无帮助行（base getHelpLine 默认 None）
+    assert "Esc 退出" not in out

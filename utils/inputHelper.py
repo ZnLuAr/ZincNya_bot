@@ -14,7 +14,6 @@ utils/inputHelper.py
 
 
 import sys
-import shutil
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -23,7 +22,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
 
-from utils.core.terminalUI import countDisplayLines
+from utils.core.terminalUI import countDisplayLines, getTerminalSize
 
 
 session: PromptSession = None
@@ -237,10 +236,7 @@ async def asyncMultilineInput(
         # 不依赖 getCursorPosition()（xterm.js / SSH 等终端的 CPR 行号不可靠），
         # 改为根据输入内容 + 终端宽度自行计算实际占用行数。
         if erase_after_submit:
-            try:
-                termWidth = shutil.get_terminal_size().columns or 80
-            except Exception:
-                termWidth = 80
+            termWidth = getTerminalSize()[0] or 80
 
             inputLines = result.split('\n') if result else ['']
             inputDisplayRows = sum(

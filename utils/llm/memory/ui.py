@@ -9,22 +9,15 @@ Memory TUI 管理界面。
     - memoryMenuController: 工厂函数
 """
 
-
-
-
 import os
-import sys
 import asyncio
 import tempfile
 from typing import Optional
 
-from rich.console import Console
 from rich.table import Table
 
-from utils.core.tuiBase import BaseTUIController
-from utils.fileEditor import editFile
+from utils.core.tui import ListMenuController, editFile
 from utils.inputHelper import asyncInput
-from utils.core.terminalUI import cls, smcup, rmcup
 
 from .database import (
     addMemory, getMemories, updateMemory, deleteMemory,
@@ -117,11 +110,11 @@ async def editMemoryViaEditor(
 
 
 
-class MemoryTUIController(BaseTUIController):
+class MemoryTUIController(ListMenuController):
     """
     Structured memory 的交互式 TUI 管理控制器。
 
-    继承 BaseTUIController，支持：
+    继承 ListMenuController，支持：
         - 浏览全部 memory 条目（含已禁用）
         - Enter 添加/编辑（通过 editMemoryViaEditor 在编辑器中填写内容和元数据）
         - ←/→ 快速切换 enabled 状态
@@ -185,15 +178,7 @@ class MemoryTUIController(BaseTUIController):
         return entries, meta
 
 
-    def renderUI(self, entries, selectedIndex):
-        """渲染 Memory 管理表格到终端（清屏后重绘）。返回渲染行数供下次清屏使用。"""
-        console = Console()
-        termHeight = self.getTerminalHeight()
-
-        visibleEntries, windowStart, hasMore = self.calculateVisibleWindow(
-            entries, selectedIndex, termHeight
-        )
-
+    def buildTable(self, visibleEntries, selectedIndex, windowStart):
         table = Table(title="Memory 管理")
         table.add_column("No.", justify="right")
         table.add_column("ID", justify="right")
@@ -248,27 +233,11 @@ class MemoryTUIController(BaseTUIController):
                         preview,
                     )
 
-        with console.capture() as capture:
-            console.print(table)
-        lines = capture.get().splitlines()
+        return table
 
-        if hasMore["up"] or hasMore["down"]:
-            moreLines = self.renderMoreIndicators(
-                console, hasMore, windowStart,
-                len(entries), len(visibleEntries)
-            )
-            lines.extend(moreLines)
 
-        with console.capture() as capture:
-            console.print("\n[dim]Enter 编辑 | Del 删除 | ←→ 启用/停用 | Esc 退出[/dim]")
-        lines.extend(capture.get().splitlines())
-
-        cls()
-        for ln in lines:
-            print(ln)
-        sys.stdout.flush()
-
-        return len(lines)
+    def getHelpLine(self):
+        return "\n[dim]Enter 编辑 | Del 删除 | ←→ 启用/停用 | Esc 退出[/dim]"
 
 
     def getEmptyMessage(self):
@@ -324,90 +293,69 @@ class MemoryTUIController(BaseTUIController):
         elif actionType == "delete":
             entry = self.entries[self.selected]
 
-            rmcup()
-            sys.stdout.flush()
-
-            try:
-                confirm = await asyncInput(f"真的要删除 memory #{entry['id']} 吗？(y/N): ")
-                if confirm.strip().lower() == "y":
-                    ok = await deleteMemory(entry["id"])
-                    print("✅ 已删除喵\n" if ok else "❌ 删除失败喵\n")
-                    await asyncio.sleep(0.5)
-                    await self.refreshEntries()
-                    self.selected = min(self.selected, len(self.entries) - 1)
-            finally:
-                smcup()
-                sys.stdout.flush()
-
-        elif actionType == "add":
-            rmcup()
-            sys.stdout.flush()
-
-            try:
-                scopeInput = await asyncInput("Scope (global/chat/user/session) [global]: ")
-                scopeType = scopeInput.strip().lower() or "global"
-
-                if scopeType not in VALID_SCOPE_TYPES:
-                    print(f"❌ 这个 scope 是无效的: {scopeType}\n")
-                    await asyncio.sleep(0.5)
-                    return True
-
-                scopeID = None
-                if scopeType != "global":
-                    scopeID = (await asyncInput(f"Scope ID ({scopeType}): ")).strip()
-                    if not scopeID:
-                        print("❌ scope ID 是不能为空的喵\n")
-                        await asyncio.sleep(0.5)
-                        return True
-
-                result = await editMemoryViaEditor()
-                if result is None:
-                    return True
-
-                content, tags, priority = result
-                memoryID = await addMemory(scopeType, scopeID, content, tags=tags, priority=priority)
-
-                print(f"✅ memory #{memoryID} 成功添加喵\n" if memoryID else "❌ 添加失败喵\n")
+            confirm = await asyncInput(f"真的要删除 memory #{entry['id']} 吗？(y/N): ")
+            if confirm.strip().lower() == "y":
+                ok = await deleteMemory(entry["id"])
+                print("✅ 已删除喵\n" if ok else "❌ 删除失败喵\n")
                 await asyncio.sleep(0.5)
                 await self.refreshEntries()
-            finally:
-                smcup()
-                sys.stdout.flush()
+                self.selected = min(self.selected, len(self.entries) - 1)
+
+        elif actionType == "add":
+            scopeInput = await asyncInput("Scope (global/chat/user/session) [global]: ")
+            scopeType = scopeInput.strip().lower() or "global"
+
+            if scopeType not in VALID_SCOPE_TYPES:
+                print(f"❌ 这个 scope 是无效的: {scopeType}\n")
+                await asyncio.sleep(0.5)
+                return True
+
+            scopeID = None
+            if scopeType != "global":
+                scopeID = (await asyncInput(f"Scope ID ({scopeType}): ")).strip()
+                if not scopeID:
+                    print("❌ scope ID 是不能为空的喵\n")
+                    await asyncio.sleep(0.5)
+                    return True
+
+            result = await editMemoryViaEditor()
+            if result is None:
+                return True
+
+            content, tags, priority = result
+            memoryID = await addMemory(scopeType, scopeID, content, tags=tags, priority=priority)
+
+            print(f"✅ memory #{memoryID} 成功添加喵\n" if memoryID else "❌ 添加失败喵\n")
+            await asyncio.sleep(0.5)
+            await self.refreshEntries()
 
         elif actionType == "edit":
             entry = self.entries[self.selected]
 
-            rmcup()
-            sys.stdout.flush()
+            result = await editMemoryViaEditor(
+                entry["content"],
+                entry["tags"],
+                entry["priority"],
+            )
+            if result is None:
+                return True
 
-            try:
-                result = await editMemoryViaEditor(
-                    entry["content"],
-                    entry["tags"],
-                    entry["priority"],
-                )
-                if result is None:
-                    return True
+            newContent, newTags, newPriority = result
 
-                newContent, newTags, newPriority = result
+            updateKwargs = {}
+            if newContent != entry["content"]:
+                updateKwargs["content"] = newContent
+            if sorted(newTags) != sorted(entry["tags"] or []):
+                updateKwargs["tags"] = newTags
+            if newPriority != entry["priority"]:
+                updateKwargs["priority"] = newPriority
 
-                updateKwargs = {}
-                if newContent != entry["content"]:
-                    updateKwargs["content"] = newContent
-                if sorted(newTags) != sorted(entry["tags"] or []):
-                    updateKwargs["tags"] = newTags
-                if newPriority != entry["priority"]:
-                    updateKwargs["priority"] = newPriority
+            if updateKwargs:
+                ok = await updateMemory(entry["id"], **updateKwargs)
+                print("✅ 更新成功喵\n" if ok else "❌ 更新失败喵\n")
+                await asyncio.sleep(0.5)
 
-                if updateKwargs:
-                    ok = await updateMemory(entry["id"], **updateKwargs)
-                    print("✅ 更新成功喵\n" if ok else "❌ 更新失败喵\n")
-                    await asyncio.sleep(0.5)
-
-                await self.refreshEntries()
-            finally:
-                smcup()
-                sys.stdout.flush()
+            await self.refreshEntries()
 
         return True
 
@@ -416,4 +364,4 @@ class MemoryTUIController(BaseTUIController):
 
 async def memoryMenuController(app=None):
     controller = MemoryTUIController(app=app, mode="manage")
-    await controller.run()
+    await controller.runSession()

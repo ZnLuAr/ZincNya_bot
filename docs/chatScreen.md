@@ -1,6 +1,8 @@
-# chatScreen 聊天界面技术文档
+# ChatScreen 聊天界面技术文档
 
-> 最后更新：2026-07-09
+> 最后更新：2026-07-26
+>
+> ChatScreen 是 TUI 框架 `FullScreenTUIApp` 范式的复杂实例——会话契约、范式分层、横切关注点的总规则写在 [docs/tui.md](tui.md)，本文专注聊天界面自身的实现细节。
 >
 > Written by ZincNya~ ❤
 
@@ -37,195 +39,102 @@
 
 ## 架构
 
-chatScreen 功能由两层协作实现——业务编排层管生命周期和输入处理，UI 控制层管渲染和键盘事件，两者通过 `await ui.run()` 解耦。
+chatScreen 功能由两层协作实现——业务编排层（`session.py`）负责管理构造与三态收尾，UI 控制层（`ChatScreenApp`）管渲染、键盘事件，以及 receiver/回调的自管生命周期。重构后两者通过 `await ui.runSession()`（全生命周期）连起来，里面再套 `runOnce`（单轮事件）。
 
-为什么要分成两层？因为聊天界面要同时做两件事：一边要响应用户的按键、滚动、发送消息（这是 UI 的活），一边要处理 LLM 审核命令、管理后台协程、清理资源（这是业务逻辑的活）。把它们拆开来，UI 层就只管"界面长什么样、键盘按下去发生什么"，业务层管"进来了要做什么、退出时要清理什么"——
+为什么要分成两层？这是因为聊天界面在运转时要同时做两件事：一边要响应用户的按键、滚动、发送消息（这是 UI 的活），一边要处理 LLM 审核命令、管理后台协程、清理资源（即业务逻辑）。把它们拆开来，UI 层就只管"界面长什么样、键盘按下去发生什么"，业务层则负责"进来了要做什么、退出时要清理什么"，两边各干各的。
 
-两边各干各的，通过 `await ui.run()` 这个阻塞调用连起来。举个例子：UI 正常渲染，若用户按了发送键，`run()` 就返回输入框内容，内容传到业务层，业务逻辑后调用 Telegram API 发出去；如果按下的是 Esc，`run()` 返回 `None`，这时候，业务层知道该退出了。
+详细来说，就是通过 `runSession` 这个全生命周期入口连起来：`session` 调一次 `await ui.runSession()`，里面 `onEnter` 起receiver、`mainLoop` 跑业务主循环（每轮 `await ui.runOnce()` 等一次按键）、`onExit` 收尾。举个例子：UI 正常渲染，若用户按了发送键，`runOnce()` 就返回输入框内容，内容传到业务主循环，调用 Telegram API 发出去；如果按下的是 Esc，`runOnce()` 返回 `None`，这时候，业务层知道该退出了。
 
-### 1. 业务编排层 
+### 1. 业务编排层
 
-这一层，可以算是整个聊天界面的总调度官。它负责把各个组件组织起来、让它们按正确的顺序启动和清理，并且在整个过程中维护全局状态 `interactiveMode`，来确保外层的 CLI 不与聊天界面的输入框冲突。
+入口在 `utils/chatScreen/session.py` 的 `chatScreen(app, bot, targetChatID)`。重构后这一层很薄——只做三件事：构造 UI、跑 `runSession`、按主循环返回值的三种情况收尾。
 
-入口在 `utils/chatScreen/session.py` 的 `chatscreen()`，业务编排层**主要负责**：
+主循环 `runMainLoop` 的返回值 `reviewEditItem` 有三种可能——下文统称**三态**：① 正常退出（`None`，Esc/Ctrl+C）；② Alt+←/→ 切换聊天对象（switch 信号 dict）；③ 审核编辑模式中退出（审核项 dict）。session 对这三种各有一种收尾动作，紧跟着的表格逐条列。
 
-- 管理 `interactiveMode` 状态，这个状态用于控制是否暂停聊天界面外层 CLI 的输入循环
-- 选择聊天对象。如果用户未指定，则调用 `chatIDList()` 弹出白名单选择器
-- 启动和清理后台 `receiverLoop()` 协程
-- 处理用户输入:发送消息、LLM 审核命令、编辑模式
-- 退出时恢复状态、取消后台任务、清理消息队列
+早时手工管的 `interactiveMode` 旗标、`consoleOutputCallback`、receiver 协程的启动和 cancel，现在全下沉到 `ChatScreenApp.onEnter`/`onExit` 和 `TUISession.runSession` 的 finally 里了——这些是所有 TUI 范式共用的横切规则，总纲写在 [docs/tui.md](tui.md)。session 层只剩 chatScreen 自己的编排：
 
-这个过程中，有以下**关键变量**:
-- `targetChatID`:当前聊天对象的 Telegram chat ID
-- `receiverTask`:后台协程任务,监听消息队列
-- `_reviewEditItem`:LLM 审核编辑模式的状态(局部变量)
+- 校验 `targetChatID`（必须是有效 ID，不接受 `NoValue`——目标选择由调用方 `send.py` 负责）
+- 构造历史记录 + 欢迎行，灌进 `ChatScreenApp` 的 `initialLines`
+- `await ui.runSession()` 跑完整生命周期，拿回 `reviewEditItem`
+- 按 `reviewEditItem` 三态收尾
 
-……从用户输入 `/send -c` 并按下回车开始，业务层的**生命周期**如下表所示——
+**关键变量**：
+- `targetChatID` — 当前聊天对象的 Telegram chat ID
+- `reviewEditItem` — `runSession` 的返回值（= `runMainLoop` 的返回值），三态语义如下
+
+**reviewEditItem 三态**（`runMainLoop` → `session.chatScreen`）：
+
+| 返回值 | 含义 | session 怎么处理 |
+|--------|------|-----------------|
+| `None` | 正常退出（Esc / Ctrl+C） | 什么都不做，返回 `None` |
+| `{"action":"switch","direction":...}` | Alt+←/→ 切换聊天对象 | 不放回队列，透传给 `send.py` |
+| 审核项 `dict` | 编辑模式中退出 | `getReviewQueue().put_nowait()` 放回审核队列 |
+
+……从用户输入 `/send -c` 并按下回车开始，整个生命周期的走向是这样的——
 
 ```
-进入 chatScreen
+chatScreen(app, bot, targetChatID)
     ↓
-设置 interactiveMode = True
+buildHistoryLines + 欢迎行 → initialLines
     ↓
-选择 targetChatID (如未指定)
+构造 ChatScreenApp(targetChatID, bot, shutdownEvent=None, initialLines)
     ↓
-加载历史记录                # 初始化 ChatScreenApp
+await ui.runSession()
+    ├─ onEnter：注册 console 回调 + 启动 receiver + 初次刷新
+    ├─ mainLoop → runMainLoop（每轮 await ui.runOnce() 处理输入）
+    └─ finally：onExit 注销回调 → 恢复 interactiveMode → cancel+await receiver
     ↓
-启动 receiverLoop() 后台任务
-    ↓
-主循环: await ui.run()      # 处理用户输入
-    ↓
-用户按 Esc 退出
-    ↓
-finally 块:
-  - 取消 receiverTask
-  - 恢复 interactiveMode = False
-  - 清理 consoleOutputCallback
-  - 非目标消息放回队列
+reviewEditItem 三态处理（放回队列 / switch 透传 / None）
 ```
 
 <details>
-    <summary>被折叠起来的启动流程</summary>
+<summary>折叠起来的 session.py 现在的样子与控制台输出路由——</summary>
 
-**以下就是启动流程了**：
-
-**1. 接管控制台**
+重构后 `chatScreen()` 的实际代码很薄——构造 UI、跑 `runSession`、处理三态：
 
 ```python
-state = getStateManager()
-state.setInteractiveMode(True)
-queue: asyncio.Queue = state.getMessageQueue()
-shutdownEvent = state.getShutdownEvent()
+async def chatScreen(app, bot, targetChatID: str):
+    if not targetChatID or targetChatID == "NoValue":
+        raise ValueError("targetChatID 必须是有效的 chat ID，不能是 'NoValue'")
+
+    initialLines = await buildHistoryLines(targetChatID)
+    initialLines.extend(["", f"已进入聊天界面喵", f"与 {targetChatID} 的实时聊天已连接", "=" * 64])
+
+    ui = ChatScreenApp(targetChatID, bot=bot, shutdownEvent=None, initialLines=initialLines)
+    reviewEditItem = await ui.runSession()
+
+    # 非 switch 的审核项放回队列
+    if reviewEditItem is not None and not (
+        isinstance(reviewEditItem, dict) and reviewEditItem.get("action") == "switch"
+    ):
+        getReviewQueue().put_nowait(reviewEditItem)
+
+    if isinstance(reviewEditItem, dict) and reviewEditItem.get("action") == "switch":
+        return reviewEditItem
+    return None
 ```
 
-> `setInteractiveMode(True)` 调整客户端 `InteractiveMode` 为 `True`。这个操作会让外层 CLI 的 `asyncInput()` 跳过读取，以此来防止 CLI 和 `prompt_toolkit` 同时抢键盘输入。并且在这个过程中拿到全局消息队列和关机事件的引用，准备传给后面的 receiver。
+`buildHistoryLines()` 从加密数据库 `chatHistory.db` 加载历史记录、格式化成带时间戳的字符串列表，追加欢迎信息后作为 `initialLines` 传给构造器，灌进 `_allLines`。
 
-**2. 初始化 UI**
+早年写在这一层的 `setInteractiveMode` / `setConsoleOutputCallback` / `startReceiver` / `receiverTask.cancel()` 全挪走了——前三个进 `ChatScreenApp.onEnter`，注销和 cancel 进 `onExit` 与 `runSession` 的 finally。`runSession` 的收尾顺序、嵌套旗标恢复这些横切规则见 [docs/tui.md](tui.md)。
 
-```python
-initialLines = await buildHistoryLines(targetChatID)
-initialLines.extend([
-    "",
-    f"已进入聊天界面喵",
-    f"与 {targetChatID} 的实时聊天已连接",
-    "=" * 64,
-])
-ui = ChatScreenApp(targetChatID, initialLines=initialLines)
-```
+**控制台输出为什么路由到 UI**：`ChatScreenApp.onEnter` 注册 `stateManager.setConsoleOutputCallback(self._appendConsoleOutput)`，handler 把文本拆行追加到 transcript。这样后台日志（审核队列处理、错误提示）能在界面里看到——不然直接打印日志会冲掉下方的输入框和状态栏，整个 TUI 布局就乱了。`onExit` 注销回调（置 `None`）交还。
 
-`buildHistoryLines()` 从加密数据库 `chatHistory.db` 加载历史记录，格式化成带时间戳的字符串列表，然后追加欢迎信息，一起传给 `ChatScreenApp` 构造器。UI 初始化时会把这些行存入 `_allLines` 并刷新显示。
-
-**3. 注册控制台输出回调**
-
-```python
-def _consoleOutputHandler(text: str):
-    lines = text.rstrip('\n').split('\n')
-    ui.appendLines(lines)
-
-state.setConsoleOutputCallback(_consoleOutputHandler)
-```
-
-设置后，`utils/core/logger.py` 的输出会路由到这个回调，最终显示在 UI 的聊天记录区——这样后台日志（审核队列处理、错误提示等）就能在界面里看到。
-——至于为什么要专门做个路由呢？这是因为如果按照平常的方式直接打印日志输出，下方的聊天框和状态栏就会被冲掉，这样整个 TUI 布局就乱了。于是我们在 logger 使用了自实现的专用函数 `safePrint()` (`utils/core/stateManager.py`)，专门把后台日志输出回调路由到 UI。
-
-**4. 启动 receiverLoop**
-
-```python
-receiverTask = await startReceiver(state, targetChatID, ui, queue, shutdownEvent)
-await asyncio.sleep(0.1)
-```
-
-由 `startReceiver()` 返回 `asyncio.create_task(receiverLoop())`（`receiver.py`），这个后台协程会持续从 `queue` 里读消息：
-
-- `await asyncio.wait_for(queue.get(), timeout=0.5)`（receiver.py）每 0.5 秒超时一次
-- 超时时检查 `shutdownEvent.is_set()`，如果关机信号触发就调 `ui.requestExit()` 强制退出界面
-- 超时时还会检查审核队列，有待审核项就更新状态栏提示
-- 收到消息后过滤：`if str(msg.chat.id) != str(targetChatID)`不匹配的暂存到 `nonTargetMessages`
-- 匹配的消息，在进行解析后，客户端会调用 `await saveMessage(...)` 将消息存入加密数据库，然后调用 `ui.appendIncomingMessage(...)`，将新接收的消息，最终显示在 UI 的聊天记录区
-
-`receiverTask` 保存这个 task 引用，退出时会顺带着把它 `cancel()` 掉。
-
-**5. 进入主循环**
-
-```python
-reviewEditItem = await runMainLoop(bot, targetChatID, ui, shutdownEvent)
-```
-
-`runMainLoop()` 在 `mainLoop.py` 中，其核心是 `while not shutdownEvent.is_set()` 循环：
-
-```python
-userInput = await ui.run()  # 阻塞，等用户按键
-
-if userInput is None:  # Esc / Ctrl+C
-    if _reviewEditItem is not None:
-        # 编辑模式中 Esc 取消编辑，放回队列，不退出
-        getReviewQueue().put_nowait(_reviewEditItem)
-        _reviewEditItem = None
-        ui.resetExitFlag()
-        ui.clearComposer()
-        continue
-    
-    # 检测切换信号
-    if ui._switchDirection:
-        return {"action": "switch", "direction": ui._switchDirection}
-    
-    break  # 正常退出
-```
-
-在拿到 `userInput` 后，会进行以下匹配，执行相应动作——
-- 接收到审核命令（`:ra` / `:re` 等），调用 `handleChatScreenReviewCommand()`
-- 在编辑模式（`:re` 模式下）中提交时，调用 `handleChatScreenEditSubmit()`
-- 发送普通消息时，调用 `bot.send_message()` 发送，然后将消息存库
-
-`_reviewEditItem` 是局部变量，记住当前正在编辑的审核项。在 `:re` 时赋值，提交或取消后清空。
-
-**6. 清理**
-
-```python
-finally:
-    # 编辑模式中退出，则将待审核信息放回队列
-    if reviewEditItem is not None:
-        if not (isinstance(reviewEditItem, dict) and reviewEditItem.get("action") == "switch"):
-            getReviewQueue().put_nowait(reviewEditItem)
-    
-    state.setConsoleOutputCallback(None)  # 注销回调
-    state.setInteractiveMode(False)       # 交还控制台
-    receiverTask.cancel()                 # 取消后台协程
-    try:
-        await receiverTask
-    except asyncio.CancelledError:
-        pass
-```
-
-`finally` 块确保无论正常退出还是异常，都清理干净。`receiverLoop` 的 `finally` 块会把暂存的 `nonTargetMessages` 放回队列，供外层 handler 处理。
-
-**7. 透传切换信号**
-
-```python
-if isinstance(reviewEditItem, dict) and reviewEditItem.get("action") == "switch":
-    return reviewEditItem
-```
-
-如果用户使用 `Alt + ←/→`，`runMainLoop` 就会返回切换信号 `action="switch"`。之后，`chatScreen` 会把它原样返回给调用方 `send.py`，后者会循环调用 `chatScreen`，实现聊天对象在聊天屏幕内的热切换。
-
-此间使用到关键变量：
-- `targetChatID` — 当前聊天对象的 Telegram chat ID（函数参数，贯穿整个流程）
-- `receiverTask` — 后台协程任务引用，退出时用来 `cancel()`
-- `reviewEditItem` — 主循环返回值，编辑模式中退出时放回队列
-- `_reviewEditItem` — mainLoop.py 的局部变量，记住当前正在编辑的审核项
+> receiver 协程的超时机制、消息过滤、非目标消息放回队列的实现，都在下面 [receiverLoop 后台协程](#receiverloop-后台协程) 一节。
 
 </details>
 
 ---
 
-### 2. UI 控制层 
+### 2. UI 控制层
 
-而 UI 控制层，其入口位于 `utils/chatScreen/ui.py` 的 `ChatScreenApp`。它主司：
+而 UI 控制层，其入口位于 `utils/chatScreen/ui.py` 的 `ChatScreenApp`——它现在继承自 TUI 框架的 `FullScreenTUIApp`（全屏接管范式基类，总纲见 [docs/tui.md](tui.md)）。它主司：
 
 - 管理 `prompt_toolkit` 全屏 `Application` 的布局和事件循环
 - 维护聊天记录的缓冲区（`_allLines`）和滚动状态（`_scrollOffset`）
 - 处理用户的键盘快捷键，如发送、退出、滚动、清空等
 - 更新状态栏提示（审核队列、滚动位置、聊天对象）
+- 通过 `onEnter`/`onExit` 自管 chatScreen 专属资源（console 输出回调、receiver 协程）
 
 又有以下的 **关键组件**:
 - `_transcriptArea`：作为只读 `TextArea`，显示聊天记录
@@ -236,7 +145,7 @@ if isinstance(reviewEditItem, dict) and reviewEditItem.get("action") == "switch"
 
 UI 控制层在主循环中，由**事件驱动**：
 ```
-await ui.run()
+await ui.runOnce()
     ↓
 prompt_toolkit 事件循环阻塞
     ↓
@@ -246,25 +155,26 @@ prompt_toolkit 事件循环阻塞
   - Esc → self._exitRequested=True; event.app.exit(result=None)
   - Alt+↑↓ / PgUp/PgDn → _scrollUp() / _scrollDown()
     ↓
-返回到 send.py 主循环,根据 result 处理
+返回到聊天主循环,根据 result 处理
 ```
 
 <details>
     <summary>被折叠起来的初始化二三事</summary>
 
-> 
-> 
-> 在往下看之前，应该先认识到，整个 `ui.py`，其实是一个大 `ChatScreenApp` 类。
-> 
+>
+>
+> 在往下看之前，应该先认识到，整个 `ui.py`，其实是一个 `ChatScreenApp` 类——而且它现在继承自 TUI 框架的 `FullScreenTUIApp`（全屏接管范式基类，总纲见 [docs/tui.md](tui.md)）。
+>
 > 有必要先把 `ChatScreenApp` 这个 class 讲清楚——不然流程看了，也形成了自己的认识，切到 `ui.py` 看到几百行的大类，很容易就发懵了——这是常会出现的情况……
-> 
-> 整个 class 大致分成三块：
-> 
-> - **`__init__`**：一次性把界面搭起来。创建三块区域（聊天记录区 / 输入区 / 状态栏）、绑定快捷键、拼装 `prompt_toolkit` 的 `Application`、初始化滚动状态并加载初始历史。下面「初始化二三事」讲的就是这一段。
-> - **对外 API**：业务层能调的方法，都在这一块。`appendLines` / `appendIncomingMessage` / `appendSelfMessage` 往界面追加消息，`showStatus` 更新状态栏，`clearComposer` 清空输入框，`requestExit` / `resetExitFlag` 管退出标记，`run` 跑事件循环——业务层只碰这些，不碰下面的内部方法。
+>
+> 整个 class 大致分成四块：
+>
+> - **`__init__`**：把界面搭起来。先存构造参数、创建三块布局区域（聊天记录区 / 输入区 / 状态栏）、灌入 `initialLines`，再调 `super().__init__()`——基类构造时回调 `createApplication()` 把 `_app` 建好（此时组件已就位）。
+> - **范式覆写**（继承自 `FullScreenTUIApp`）：`buildLayout` 返回 HSplit 布局根，`setupKeyBindings` 注册全部键，`createApplication` 装配 pt `Application`（覆写留本文件，保测试 patch 目标 `utils.chatScreen.ui.Application`），`mainLoop` 委托聊天主循环 `runMainLoop`，`runOnce` 跑一轮 pt 事件循环（保留 `_exitRequested` 守卫），`onEnter`/`onExit` 自管 console 回调与 receiver。
+> - **对外 API**：业务层能调的方法。`appendLines` / `appendIncomingMessage` / `appendSelfMessage` 往界面追加消息，`showStatus` 更新状态栏，`clearComposer` 清空输入框，`requestExit` / `resetExitFlag` 管退出标记——业务层只碰这些。
 > - **内部方法**：带前导下划线的私有方法，外部不该直接调。`_refreshTranscript` 按 `_scrollOffset` 切窗口刷新显示，`_scrollUp` / `_scrollDown` / `_clampOffset` 管滚动，`_updateStatus` / `_defaultStatus` 管状态栏文本，`_getWindowHeight` / `_getTermWidth` 拿终端尺寸。
-> 
-> 了解清楚这三块的分工，下面的代码片段就知道各自落在哪一格了。
+>
+> 了解清楚这四块的分工，下面的代码片段就知道各自落在哪一格了。
 
 **1. 创建三块区域**
 
@@ -298,9 +208,10 @@ self._statusBar = Window(
 
 **2. 绑定快捷键**
 
-```python
-kb = KeyBindings()
+键绑定注册在 `setupKeyBindings(self, kb)` 方法里（由 `createApplication` 调用，`kb` 作为参数传入）：
 
+```python
+# setupKeyBindings 内
 @kb.add("c-s")
 @kb.add("escape", "enter")  # Alt+Enter
 def _submit(event):
@@ -322,7 +233,7 @@ def _switchPrev(event):
 
 ```
 
-上面的每个按键回调只做 UI 状态更新或 `event.app.exit()`，不涉及业务逻辑——`exit()` 会让 `await ui.run()` 返回，业务层拿到返回值再决定怎么处理。
+上面的每个按键回调只做 UI 状态更新或 `event.app.exit()`，不涉及业务逻辑——`exit()` 会让 `await ui.runOnce()` 返回，业务主循环拿到返回值再决定怎么处理。
 
 **3. 初始化滚动状态**
 
@@ -414,7 +325,9 @@ if initialLines:
 > **事件循环**
 > 
 > ```python
-> async def run(self) -> str | None:
+> async def runOnce(self):  
+> # 覆写 FullScreenTUIApp.runOnce，保留 _exitRequested 守卫
+> 
 >     result = await self._app.run_async()
 >     # 退出全屏后重置终端状态，清除残留的状态栏
 >     self._app.output.reset_attributes()
@@ -543,7 +456,7 @@ UI 更新显示，自动滚动到底部（如未在浏览历史）
 ```
 用户在输入框输入文字，按 Ctrl+S
         ↓
-ui.run() 返回输入框内容
+ui.runOnce() 返回输入框内容
         ↓
 chatScreen 主循环调用 bot.send_message(chat_id=targetChatID, text=...)
         ↓
@@ -625,7 +538,7 @@ mainLoop.py
   ↓ 返回 {"action": "switch", "direction": "prev"/"next"}
   ↓
 session.py
-  ↓ finally 块检测切换信号，不放回审核队列
+  ↓ runSession 返回 switch dict，不放回审核队列
   ↓ 透传信号给调用方
   ↓
 send.py (while 循环)
@@ -657,10 +570,10 @@ send.py (while 循环)
 
 假设要添加 `Ctrl+L` 清屏功能——
 
-#### 1. 在 `utils/chatScreen/ui.py` 的 `__init__` 中添加键绑定
+#### 1. 在 `utils/chatScreen/ui.py` 的 `setupKeyBindings` 方法中添加键绑定
 
 ```python
-# 在 kb = KeyBindings() 之后添加
+# setupKeyBindings(kb) 内
 @kb.add("c-l")
 def _clearScreen(event):
     self._allLines.clear()
@@ -788,18 +701,25 @@ if stripped == ":help":
 
 这一般是因为 `interactiveMode` 没有正确恢复为 `False`。
 
-**排查**：
-1. 检查 chatScreen 的 finally 块是否执行
-2. 确认没有在 finally 之前 `return` 或抛出未捕获异常
+重构后旗标恢复由 `TUISession.runSession` 的 finally 统一负责（恢复进入前的旧值，不是硬置 `False`）——正常路径下 chatScreen 不用手工管。如果还是卡死，往这几个方向排查：
 
-**修复**：
-```python
-try:
-    # chatScreen 主循环
-    ...
-finally:
-    state.setInteractiveMode(False)  # 必须在 finally 中
-```
+1. 是不是绕过了 `runSession`——直接调 `mainLoop` 或 `runOnce` 而没走全生命周期入口，finally 就不会跑
+2. `onExit` 抛了异常：session 会吞掉并记一条 DEBUG 日志，**不影响**旗标恢复；但若在子类自己的 finally 里又改了旗标，可能踩掉 session 的恢复
+3. 嵌套唤起：`runSession` 恢复的是"进入前旧值"，外层会话的旗标不会被内层踩掉——除非内层没走 `runSession`
+
+`runSession` 的收尾顺序（`onExit` → 恢复旗标 → cancel+await 后台任务）见 [docs/tui.md](tui.md)。
+
+---
+
+### 问题 5：老 PowerShell 里滚动历史时整屏错位
+
+在 Windows 10 及以下的传统 PowerShell / conhost 窗口里，滚动聊天记录会看到整屏上移或下移一行、而原来的画面没有重绘。
+
+**原因**：`utils/chatScreen/ui.py` 的 `createApplication` 硬传了 `output=Vt100_Output.from_pty(sys.stdout)`，绕过 prompt_toolkit 自己的平台探测——pt 的 `create_output` 在 Windows 上本会按 VT 是否开启依次选 `Windows10_Output` / `ConEmuOutput` / `Win32Output`，最后那个用 Win32 API 直接操作屏幕缓冲、不发 ANSI。老 conhost 读不懂被硬塞过来的 ANSI 转义序列，画面就错位了。
+
+**解决**：换用 Windows Terminal，或任何开启了 VT 处理的现代终端。列表菜单（`/whitelist -l`、`/nya`、`/llm memory`）和编辑器不受影响——它们走 pt 自动探测，只有聊天界面这一处硬编码了 output。
+
+这条属于**刻意不修**的已知局限（见 [docs/tui.md](tui.md)「已知局限」）：为一个已被 Windows Terminal 取代的终端改动生产路径上的渲染装配不划算。真要修，最小改法是去掉 `createApplication` 里的 `output=` 参数，交还给 pt 探测。
 
 ---
 
@@ -807,14 +727,16 @@ finally:
 
 | 文件 | 职责 |
 |------|------|
-| `utils/chatScreen/session.py` | chatScreen 主函数与生命周期管理 |
+| `utils/chatScreen/session.py` | chatScreen 编排入口（构造 UI + 跑 `runSession` + reviewEditItem 三态处理） |
+| `utils/chatScreen/ui.py` | `ChatScreenApp(FullScreenTUIApp)`——UI 控制层、键绑定、滚动、onEnter/onExit 自管 receiver/回调 |
 | `utils/chatScreen/receiver.py` | 消息接收后台协程 |
-| `utils/chatScreen/mainLoop.py` | 主循环输入处理，切换信号检测 |
+| `utils/chatScreen/mainLoop.py` | 主循环输入处理，切换信号检测（每轮调 `ui.runOnce()`） |
 | `utils/chatScreen/formatter.py` | 消息格式化工具 |
 | `utils/chatScreen/history.py` | 历史加载与显示 |
 | `utils/chatScreen/statusBar.py` | 状态栏文本常量 |
 | `utils/chatScreen/helpers.py` | 辅助函数 (getNextChatID 导航逻辑) |
-| `utils/chatScreen/ui.py` | ChatScreenApp UI 控制层、键绑定、滚动逻辑 |
+| `utils/core/tui/session.py` | `TUISession` 会话契约（`runSession` 生命周期 + 横切关注点，详见 [tui.md](tui.md)） |
+| `utils/core/tui/paradigms/fullScreen.py` | `FullScreenTUIApp` 基类（chatScreen 继承它） |
 | `utils/command/send.py` | 命令入口、普通消息发送、目标选择、切换循环 |
 | `utils/whitelistManager/data.py` | getAllowedUserIDs 提供切换列表 |
 | `utils/chatHistory.py` | 聊天记录加密存储与读取 |
@@ -837,7 +759,7 @@ finally:
 - 方案 B：receiverLoop 后台协程 + `wait_for(timeout=0.5)`，UI 和接收解耦
 
 权衡后，我们选择 B，这是因为：
-- UI 事件循环（`await ui.run()`）可以立即响应用户输入
+- UI 事件循环（`await ui.runOnce()`）可以立即响应用户输入
 - receiverLoop 独立运行，不干扰 UI
 - 超时机制确保定期检查状态（审核队列/关机信号）
 

@@ -5,17 +5,12 @@ ViewModel、渲染、编辑器、TUI 控制器
 """
 
 import os
-import sys
-import shutil
 import tempfile
 from typing import List , Tuple , Optional
 
 from rich.table import Table
-from rich.console import Console
 
-from utils.core.tuiBase import BaseTUIController
-from utils.fileEditor import editFile
-from utils.core.terminalUI import cls, smcup, rmcup
+from utils.core.tui import ListMenuController, editFile
 
 from .data import loadQuoteFile, userOperation
 
@@ -31,7 +26,7 @@ def _extractBaseWeight(w) -> float:
 
 
 
-def collectQuoteViewModel(selectedIndex: int=-1) -> Tuple[List[dict] , int]:
+def collectQuoteViewModel(selectedIndex: int=-1) -> Tuple[List[dict] , dict]:
 
     limitPreviewChars: int = 15
 
@@ -47,6 +42,7 @@ def collectQuoteViewModel(selectedIndex: int=-1) -> Tuple[List[dict] , int]:
         "preview": "添加新语录",
         "weight": None,
         "raw": None,
+        "isAddRow": True,
     })
 
     for q in sortedQuotes:
@@ -57,6 +53,7 @@ def collectQuoteViewModel(selectedIndex: int=-1) -> Tuple[List[dict] , int]:
             "preview": preview,
             "weight": _extractBaseWeight(q.get("weight" , 1.0)),
             "raw": q,
+            "isAddRow": False,
         })
 
     meta = {
@@ -65,73 +62,6 @@ def collectQuoteViewModel(selectedIndex: int=-1) -> Tuple[List[dict] , int]:
     }
 
     return entries , meta
-
-
-
-
-def quoteUIRenderer(entries: List[dict] , selectedIndex: int = -1 , addRowOffset: int = 1) -> int:
-    console = Console()
-
-    try:
-        terminalHeight = shutil.get_terminal_size().lines
-    except:
-        terminalHeight = 24
-
-    visibleEntries , windowStart , hasMore = BaseTUIController.calculateVisibleWindow(entries , selectedIndex , terminalHeight)
-
-    table = Table(title="ZincNya Quotes")
-    table.add_column("No." , justify="right")
-    table.add_column("Weight" , justify="right")
-    table.add_column("Preview" , justify="left")
-
-    for localIdx , e in enumerate(visibleEntries):
-        globalIdx = windowStart + localIdx
-        isSelected = (globalIdx == selectedIndex)
-        preview = e.get("preview" , "")
-
-        weight = e.get("weight" , None)
-        weightStr = "-" if weight is None else f"{weight:.3g}"
-        isAddRow = (weight is None)  # (+) 行的 weight 为 None，以此区分
-
-        # 序号显示规则：普通条目从 1 开始连续编号，(+) 行不占序号
-        # displayNo = globalIdx - addRowOffset + 1
-        # addRowOffset=1（默认）：index 1 → 显示 1，index 2 → 显示 2
-        displayNo = globalIdx - addRowOffset + 1
-
-        if isSelected:
-            table.add_row(
-                "[bold yellow](+)[/]" if isAddRow else f"[bold yellow]> {displayNo}[/]",
-                f"[bold yellow]{weightStr}[/]",
-                f"[bold yellow]{preview}[/]"
-            )
-        elif isAddRow:
-            table.add_row("[cyan](+)[/]" , f"[dim]{weightStr}[/]" , f"[dim]{preview}[/]")
-        else:
-            table.add_row(str(displayNo) , weightStr , preview)
-
-    with console.capture() as capture:
-        console.print(table)
-    lines = capture.get().splitlines()
-
-    if hasMore["up"] or hasMore["down"]:
-        extraLines = []
-        if hasMore["up"]:
-            extraLines.append(f"[dim]↑ 更多 {windowStart} 项[/dim]")
-        if hasMore["down"]:
-            remainingDown = len(entries) - (windowStart + len(visibleEntries))
-            extraLines.append(f"[dim]↓ 更多 {remainingDown} 项[/dim]")
-        with console.capture() as capture:
-            for line in extraLines:
-                console.print(line)
-        lines.extend(capture.get().splitlines())
-
-    cls()
-
-    for ln in lines:
-        print(ln)
-    sys.stdout.flush()
-
-    return len(lines)
 
 
 
@@ -188,7 +118,7 @@ async def editQuoteViaEditor(initialTextEscaped: str , initialWeight = 1.0) -> O
 
 
 
-class QuoteTUIController(BaseTUIController):
+class QuoteTUIController(ListMenuController):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -198,8 +128,33 @@ class QuoteTUIController(BaseTUIController):
     async def collectViewModel(self, selectedIndex: int):
         return collectQuoteViewModel(selectedIndex=selectedIndex)
 
-    def renderUI(self, entries, selectedIndex):
-        return quoteUIRenderer(entries , selectedIndex=selectedIndex , addRowOffset=self.addRowOffset)
+    def buildTable(self, visibleEntries, selectedIndex, windowStart):
+        table = Table(title="ZincNya Quotes")
+        table.add_column("No." , justify="right")
+        table.add_column("Weight" , justify="right")
+        table.add_column("Preview" , justify="left")
+
+        for localIdx , e in enumerate(visibleEntries):
+            globalIdx = windowStart + localIdx
+            isSelected = (globalIdx == selectedIndex)
+            preview = e.get("preview" , "")
+            weight = e.get("weight" , None)
+            weightStr = "-" if weight is None else f"{weight:.3g}"
+            isAddRow = e.get("isAddRow", False)
+            displayNo = globalIdx - self.addRowOffset + 1
+
+            if isSelected:
+                table.add_row(
+                    "[bold yellow](+)[/]" if isAddRow else f"[bold yellow]> {displayNo}[/]",
+                    f"[bold yellow]{weightStr}[/]",
+                    f"[bold yellow]{preview}[/]",
+                )
+            elif isAddRow:
+                table.add_row("[cyan](+)[/]" , f"[dim]{weightStr}[/]" , f"[dim]{preview}[/]")
+            else:
+                table.add_row(str(displayNo) , weightStr , preview)
+
+        return table
 
     def getEmptyMessage(self):
         return "语录列表为空喵……"
@@ -271,4 +226,4 @@ class QuoteTUIController(BaseTUIController):
 
 async def quoteMenuController(app=None):
     controller = QuoteTUIController(app=app , mode="manage")
-    await controller.run()
+    await controller.runSession()

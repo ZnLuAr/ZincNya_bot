@@ -24,8 +24,8 @@ execute() 为统一的命令入口：
 
 chatIDList() 用于在 "-c" 未指定 ID 时展示 whitelist 的用户列表，
 并允许用户通过编号或直接输入 ID 来选择目标聊天对象。
-    注意：whitelistMenuController() 退出时会将 interactiveMode 设为 False，
-    因此 chatScreen() 在调用后需要重新设置为 True。
+    注意：TUISession.runSession 退出时恢复的是进入前的 interactiveMode 旧值
+    （嵌套安全），调用方无需手工重设。
 
 
 ================================================================================
@@ -65,20 +65,20 @@ chatScreen(app , bot: Bot , targetChatID: str)
 详细技术文档请参阅: docs/chatScreen.md
 
 内部结构：
-    - 设置 interactiveMode = True，暂停外层 CLI
-    - ChatScreenApp (utils/chatUI.py) 管理 prompt_toolkit 全屏布局
+    - ChatScreenApp (utils/chatScreen/ui.py) 继承 TUI 框架的 FullScreenTUIApp，
+      管理 prompt_toolkit 全屏布局
     - receiverLoop() 后台协程，持续监听 messageQueue 中的消息
         · 使用 asyncio.wait_for() 带超时读取，避免阻塞
         · 筛选属于当前 chatID 的消息并更新 UI
         · 检测 shutdownEvent 时主动触发 UI 退出
-    - 主循环每轮调用 ui.run() 事件驱动，提交后处理发送逻辑
+    - 主循环每轮调用 ui.runOnce() 事件驱动，提交后处理发送逻辑
+      （注意不是 ui.run()——该方法按反递归契约已移除）
 
     正常情况下，用户按 Esc 或 Ctrl+C 退出函数
 
-退出时的清理工作（finally 块）：
-    1. 恢复 interactiveMode 为 False
-    2. 取消 receiverTask 协程
-    3. 将非目标消息放回队列
+退出清理由 TUISession.runSession 的 finally 统一负责（onExit 注销 console 回调
+→ 恢复 interactiveMode 至进入前旧值 → cancel+await receiver 协程），
+send.py 与 chatScreen/session.py 均不再手工管理。框架总纲见 docs/tui.md。
 
 
 ================================================================================

@@ -30,7 +30,7 @@ async def runMainLoop(bot, targetChatID: str, ui, shutdownEvent) -> dict | None:
     _reviewEditItem: dict | None = None
 
     while not shutdownEvent.is_set():
-        userInput = await ui.run()
+        userInput = await ui.runOnce()
 
         # 用户 Ctrl+C / Esc 退出
         if userInput is None:

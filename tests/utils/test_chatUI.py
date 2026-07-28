@@ -534,3 +534,74 @@ def test_init_with_initial_lines():
     assert "line1" in app._allLines
     assert "line2" in app._allLines
     assert "line3" in app._allLines
+
+
+# ============================================================================
+# mainLoop 委托 / runOnce 守卫 / 结构守护（fullScreen 范式接入后补的回归网）
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_mainLoop_delegates_to_runMainLoop():
+    """mainLoop 委托 runMainLoop：透传参数 + 返回值 + 恰好一次 + shutdownEvent 非空兜底"""
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
+            app = ChatScreenApp("test_chat", bot="BOT")
+
+    sentinel = {"sentinel": True}
+    with patch('utils.chatScreen.mainLoop.runMainLoop', new_callable=AsyncMock, return_value=sentinel) as mockRun:
+        result = await app.mainLoop()
+
+    assert result is sentinel
+    assert mockRun.call_count == 1
+    args = mockRun.call_args.args
+    assert args[0] == "BOT"            # bot 透传
+    assert args[1] == "test_chat"      # targetChatID 透传
+    assert args[2] is app              # ui = self
+    assert args[3] is not None         # 构造未传 shutdownEvent → 兜底 getStateManager().getShutdownEvent()
+
+
+@pytest.mark.asyncio
+async def test_runOnce_returns_result_when_not_exiting():
+    """_exitRequested=False → 返回 run_async 的结果"""
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
+            app = ChatScreenApp("test_chat")
+
+    mockApp = MagicMock()
+    mockApp.run_async = AsyncMock(return_value="user input")
+    app._app = mockApp
+    app._exitRequested = False
+
+    result = await app.runOnce()
+    assert result == "user input"
+    mockApp.output.reset_attributes.assert_called_once()
+    mockApp.output.flush.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_runOnce_returns_none_when_exiting():
+    """_exitRequested=True → 返回 None（即使 run_async 有结果）——exit 信号守卫"""
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
+            app = ChatScreenApp("test_chat")
+
+    mockApp = MagicMock()
+    mockApp.run_async = AsyncMock(return_value="ignored")
+    app._app = mockApp
+    app._exitRequested = True
+
+    result = await app.runOnce()
+    assert result is None
+
+
+def test_no_run_attribute_runOnce_present_switchDirection_frozen():
+    """结构守护：ChatScreenApp 无 run（漏改 ui.run() 会 AttributeError）、有 runOnce、_switchDirection 在"""
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
+            app = ChatScreenApp("test_chat")
+
+    assert not hasattr(app, "run"), "ChatScreenApp must NOT have run() (anti-recursion contract)"
+    assert hasattr(app, "runOnce"), "runOnce must exist"
+    assert hasattr(app, "runSession"), "runSession (from TUISession) must exist"
+    assert hasattr(app, "_switchDirection"), "_switchDirection must be frozen on ChatScreenApp"
+    assert hasattr(app, "_app"), "_app must be frozen (patch target)"

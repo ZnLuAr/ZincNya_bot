@@ -6,17 +6,15 @@ ViewModel、渲染、TUI 控制器
 
 import sys
 import asyncio
-import shutil
 from typing import List, Tuple, Optional
 
-from rich.console import Console
 from rich.table import Table
 from telegram import Bot
 from telegram.error import BadRequest, Forbidden
 
-from utils.core.tuiBase import BaseTUIController
+from utils.core.tui import ListMenuController
+from utils.core.terminalUI import smcup, rmcup
 from utils.inputHelper import asyncInput
-from utils.core.terminalUI import cls, smcup, rmcup
 
 from .data import loadWhitelistFile, userOperation
 
@@ -105,84 +103,7 @@ async def collectWhitelistViewModel(bot: Bot , selectedIndex: int = -1 , include
 
 
 
-def whitelistUIRenderer(entries: list , selectedIndex: int = -1 , prevHeight: int = 0 , showHelpLine: bool = False , addRowOffset: int = 0) -> int:
-    console = Console()
-
-    try:
-        terminalHeight = shutil.get_terminal_size().lines
-    except:
-        terminalHeight = 24
-
-    visibleEntries , windowStart , hasMore = BaseTUIController.calculateVisibleWindow(entries , selectedIndex , terminalHeight)
-
-    table = Table(title="\n正在查看白名单喵——\n")
-    table.add_column("No." , justify="right")
-    table.add_column("UID" , justify="left")
-    table.add_column("状态" , justify="left")
-    table.add_column("备注" , justify="left")
-
-    for localIdx , e in enumerate(visibleEntries):
-        globalIdx = windowStart + localIdx
-        isSelected = (globalIdx == selectedIndex)
-        uid = e["uid"]
-        colour = e["colour"]
-        displayStatus = e["displayStatus"]
-        comment = e["comment"] or ""
-        isAddRow = e.get("isAddRow", False)
-
-        if isAddRow:
-            if isSelected:
-                table.add_row("[bold yellow]>[/]" , "[bold yellow](+)[/]" , "[bold yellow]添加新用户[/]" , "")
-            else:
-                table.add_row("" , "[cyan](+)[/]" , "[dim]添加新用户[/]" , "")
-        else:
-            commentPreview = "" if comment.strip() == "" else comment[:15] + ("..." if len(comment) > 15 else "")
-            # 序号显示规则：普通条目从 1 开始连续编号，(+) 行不占序号
-            # displayNo = globalIdx - addRowOffset + 1
-            #   manage 模式（addRowOffset=1）：index 1 → 显示 1，index 2 → 显示 2
-            #   select 模式（addRowOffset=0）：index 0 → 显示 1，index 1 → 显示 2
-            displayNo = globalIdx - addRowOffset + 1
-            if isSelected:
-                table.add_row(f"[bold yellow]> {displayNo}[/]" , f"[bold yellow]{uid}[/]" , f"[bold yellow]{displayStatus}[/]" , f"[bold yellow]{commentPreview}[/]")
-            else:
-                uidRendered = f"[{colour}]{uid}[/]"
-                table.add_row(str(displayNo) , uidRendered , displayStatus , commentPreview)
-
-    with console.capture() as capture:
-        console.print(table)
-
-    rendered = capture.get()
-    lines = rendered.splitlines()
-
-    if hasMore["up"] or hasMore["down"]:
-        extraLines = []
-        if hasMore["up"]:
-            extraLines.append(f"[dim]↑ 更多 {windowStart} 项[/dim]")
-        if hasMore["down"]:
-            remainingDown = len(entries) - (windowStart + len(visibleEntries))
-            extraLines.append(f"[dim]↓ 更多 {remainingDown} 项[/dim]")
-        with console.capture() as capture:
-            for line in extraLines:
-                console.print(line)
-        lines.extend(capture.get().splitlines())
-
-    if showHelpLine:
-        with console.capture() as capture:
-            console.print("\n[dim]←→ 切换状态 | Enter 编辑备注 | Del 删除 | Esc 退出[/dim]")
-        lines.extend(capture.get().splitlines())
-
-    cls()
-
-    for ln in lines:
-        print(ln)
-    sys.stdout.flush()
-
-    return len(lines)
-
-
-
-
-class WhitelistTUIController(BaseTUIController):
+class WhitelistTUIController(ListMenuController):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -195,9 +116,43 @@ class WhitelistTUIController(BaseTUIController):
         return await collectWhitelistViewModel(self.bot , selectedIndex=selectedIndex , includeAddRow=isManageMode)
 
 
-    def renderUI(self, entries, selectedIndex):
-        isManageMode = (self.mode == "manage")
-        return whitelistUIRenderer(entries , selectedIndex=selectedIndex , showHelpLine=isManageMode , addRowOffset=self.addRowOffset)
+    def buildTable(self, visibleEntries, selectedIndex, windowStart):
+        table = Table(title="\n正在查看白名单喵——\n")
+        table.add_column("No." , justify="right")
+        table.add_column("UID" , justify="left")
+        table.add_column("状态" , justify="left")
+        table.add_column("备注" , justify="left")
+
+        for localIdx , e in enumerate(visibleEntries):
+            globalIdx = windowStart + localIdx
+            isSelected = (globalIdx == selectedIndex)
+            uid = e["uid"]
+            colour = e["colour"]
+            displayStatus = e["displayStatus"]
+            comment = e["comment"] or ""
+            isAddRow = e.get("isAddRow", False)
+
+            if isAddRow:
+                if isSelected:
+                    table.add_row("[bold yellow]>[/]" , "[bold yellow](+)[/]" , "[bold yellow]添加新用户[/]" , "")
+                else:
+                    table.add_row("" , "[cyan](+)[/]" , "[dim]添加新用户[/]" , "")
+            else:
+                commentPreview = "" if comment.strip() == "" else comment[:15] + ("..." if len(comment) > 15 else "")
+                displayNo = globalIdx - self.addRowOffset + 1
+                if isSelected:
+                    table.add_row(f"[bold yellow]> {displayNo}[/]" , f"[bold yellow]{uid}[/]" , f"[bold yellow]{displayStatus}[/]" , f"[bold yellow]{commentPreview}[/]")
+                else:
+                    uidRendered = f"[{colour}]{uid}[/]"
+                    table.add_row(str(displayNo) , uidRendered , displayStatus , commentPreview)
+
+        return table
+
+
+    def getHelpLine(self):
+        if self.mode != "manage":
+            return None
+        return "\n[dim]←→ 切换状态 | Enter 编辑备注 | Del 删除 | Esc 退出[/dim]"
 
 
     def getEmptyMessage(self):
@@ -213,7 +168,7 @@ class WhitelistTUIController(BaseTUIController):
         if entry:
             return entry["uid"]
         return None
-    
+
 
     def setupExtraKeyBindings(self, kb):
         if self.mode != "manage":
@@ -325,4 +280,4 @@ class WhitelistTUIController(BaseTUIController):
 
 async def whitelistMenuController(bot: Bot , app=None , mode: str = "select") -> Optional[str]:
     controller = WhitelistTUIController(bot=bot , app=app , mode=mode)
-    return await controller.run()
+    return await controller.runSession()
