@@ -52,12 +52,18 @@ class TestModuleRegistry(unittest.TestCase):
                 # 验证 handlers 是列表
                 self.assertIsInstance(metadata["handlers"], list, f"模块 {moduleId} 的 handlers 不是列表")
 
+                # testFiles 可选，但若存在必须是列表
+                if "testFiles" in metadata:
+                    self.assertIsInstance(metadata["testFiles"], list, f"模块 {moduleId} 的 testFiles 不是列表")
+
     def test_module_files_exist(self):
-        """测试模块文件是否存在"""
+        """测试模块文件是否存在（files + testFiles）"""
         from modulesRegistry import MODULES
 
         for moduleId, metadata in MODULES.items():
-            for filePath in metadata.get("files", []):
+            # files（运行必需）+ testFiles（可选测试）一并校验存在性
+            allFiles = metadata.get("files", []) + metadata.get("testFiles", [])
+            for filePath in allFiles:
                 fullPath = os.path.join(PROJECT_ROOT, filePath)
                 with self.subTest(module=moduleId, file=filePath):
                     self.assertTrue(
@@ -307,22 +313,50 @@ class TestPathInjectionPrevention(unittest.TestCase):
                 self.assertIn("..", path, f"路径 {path} 应该被检测为恶意")
 
     def test_valid_paths(self):
-        """测试合法路径"""
+        """测试合法路径（handlers/ / utils/ / tests/ 前缀均合法）"""
         validPaths = [
             "handlers/llm.py",
             "utils/moduleManager.py",
-            "utils/llm/config.py"
+            "utils/llm/config.py",
+            "tests/utils/llm/test_config.py",
+            "tests/conftest.py",
         ]
 
         for path in validPaths:
             with self.subTest(path=path):
-                # 检查是否以 handlers/ 或 utils/ 开头
+                # 检查是否以 handlers/ / utils/ / tests/ 开头
                 self.assertTrue(
-                    path.startswith("handlers/") or path.startswith("utils/"),
+                    path.startswith("handlers/") or path.startswith("utils/") or path.startswith("tests/"),
                     f"路径 {path} 应该是合法的"
                 )
                 # 检查不包含 ..
                 self.assertNotIn("..", path)
+
+    def test_assertSafeModulePath_accepts_tests_prefix(self):
+        """测试 _assertSafeModulePath 真正放行了 tests/ 前缀（调用实际函数）"""
+        import importlib.util
+
+        # 按文件路径加载 scripts/module.py，避免命名空间冲突
+        spec = importlib.util.spec_from_file_location(
+            "scripts_module", os.path.join(PROJECT_ROOT, "scripts", "module.py")
+        )
+        moduleMod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(moduleMod)
+
+        # tests/ 前缀的合法路径不应抛异常
+        try:
+            moduleMod._assertSafeModulePath("tests/utils/llm/test_config.py")
+            moduleMod._assertSafeModulePath("tests/conftest.py")
+        except ValueError as e:
+            self.fail(f"tests/ 前缀的合法路径不应被拒绝：{e}")
+
+        # 非法前缀仍应被拒绝
+        with self.assertRaises(ValueError):
+            moduleMod._assertSafeModulePath("data/secret.json")
+
+        # 路径遍历仍应被拒绝
+        with self.assertRaises(ValueError):
+            moduleMod._assertSafeModulePath("tests/../../../etc/passwd")
 
 
 def runTests():

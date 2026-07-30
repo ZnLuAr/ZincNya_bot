@@ -15,7 +15,9 @@ ZincNya Bot 模块注册表。
     - description: 模块功能描述
     - version: 版本号（语义化版本）
     - author: 作者（可选）
-    - files: 模块包含的所有文件（相对项目根目录）
+    - files: 模块运行所必需的文件（相对项目根目录，handlers/ utils/ data/ 等）
+    - testFiles: 模块的可选测试文件（相对项目根目录，通常以 tests/ 开头）。运行不依赖，
+      install 默认不拉取（--with-tests 开启），uninstall 默认随模块删除。可缺省（视为空列表）
     - handlers: 需要调用 register() 的 handler 文件列表
     - initFunctions: 启动时调用的初始化函数（格式："module.path:function_name"）
     - backgroundTasks: 后台任务函数（格式同上）
@@ -73,6 +75,8 @@ MODULES = {
             "utils/command/llm/review/__init__.py",
             "utils/command/llm/review/consoleReview.py",
             "utils/command/llm/review/chatScreenReview.py",
+        ],
+        "testFiles": [
             "tests/utils/llm/test_config.py",
             "tests/utils/llm/test_contextBuilder.py",
             "tests/utils/llm/test_promptSafety.py",
@@ -88,6 +92,7 @@ MODULES = {
             "tests/utils/llm/memory/test_ui.py",
             "tests/utils/command/llm/test_smoke.py",
             "tests/handlers/test_llmCommand.py",
+            "tests/utils/test_markdownToHtml.py",
         ],
         "handlers": ["handlers/llm.py", "handlers/llmCommand.py", "handlers/llmReview.py"],
         "initFunctions": [
@@ -121,19 +126,24 @@ MODULES = {
             "utils/llm/afcApi/__init__.py",
             "utils/llm/afcApi/contextBlock.py",
             "utils/llm/afcApi/responseHandler.py",
+            "data/afcTools.json",
+            "data/afcToolsBuiltin.json",
+            "data/afcToolsCustom.json",
+        ],
+        "testFiles": [
             "tests/handlers/test_afc.py",
             "tests/utils/afc/test_afcIntent.py",
             "tests/utils/afc/test_registry.py",
             "tests/utils/afc/test_executor.py",
             "tests/utils/afc/test_contextBuilder.py",
             "tests/utils/afc/test_toolManager.py",
+            "tests/utils/afc/tools/test_weather.py",
+            "tests/utils/afc/tools/test_calc.py",
+            "tests/utils/afc/tools/test_datetime.py",
             "tests/scripts/test_afc_tools_paths.py",
             "tests/scripts/test_afc_tools_uninstall.py",
             "tests/scripts/test_afc_tools_install.py",
             "tests/scripts/test_afc_tools_update.py",
-            "data/afcTools.json",
-            "data/afcToolsBuiltin.json",
-            "data/afcToolsCustom.json",
         ],
         "handlers": ["handlers/afc.py"],
         "initFunctions": [
@@ -160,6 +170,8 @@ MODULES = {
             "utils/todos/cliRender.py",
             "utils/todos/utils.py",
             "utils/command/todos.py",
+        ],
+        "testFiles": [
             "tests/utils/todos/test_database.py",
             "tests/utils/todos/test_reminder.py",
             "tests/utils/todos/test_tgRender.py",
@@ -189,6 +201,8 @@ MODULES = {
             "utils/nyaQuoteManager/data.py",
             "utils/nyaQuoteManager/ui.py",
             "utils/command/nya.py",
+        ],
+        "testFiles": [
             "tests/utils/nyaQuoteManager/test_data.py",
             "tests/utils/nyaQuoteManager/test_ui.py",
             "tests/handlers/test_nya.py",
@@ -213,6 +227,8 @@ MODULES = {
             "utils/whitelistManager/ui.py",
             "utils/inputHelper.py",
             "utils/command/whitelist.py",
+        ],
+        "testFiles": [
             "tests/utils/whitelistManager/test_data.py",
             "tests/utils/whitelistManager/test_ui.py",
             "tests/handlers/test_start.py",
@@ -234,6 +250,8 @@ MODULES = {
             "handlers/book.py",
             "utils/bookSearchAPI.py",
             "utils/telegramHelpers.py",
+        ],
+        "testFiles": [
             "tests/utils/test_bookSearchAPI.py",
             "tests/handlers/test_book.py",
         ],
@@ -260,6 +278,8 @@ MODULES = {
             "utils/memoryMonitor.py",
             "utils/operators.py",
             "utils/command/killsticker.py",
+        ],
+        "testFiles": [
             "tests/utils/test_stickerDownloader.py",
             "tests/utils/test_archiver.py",
             "tests/utils/test_fileSender.py",
@@ -284,6 +304,8 @@ MODULES = {
         "files": [
             "handlers/reaction.py",
             "utils/chatHistory.py",
+        ],
+        "testFiles": [
             "tests/handlers/test_reaction.py",
         ],
         "handlers": ["handlers/reaction.py"],
@@ -305,6 +327,8 @@ MODULES = {
             "handlers/shutdown.py",
             "utils/operators.py",
             "utils/command/shutdown.py",
+        ],
+        "testFiles": [
             "tests/handlers/test_shutdown.py",
         ],
         "handlers": ["handlers/shutdown.py"],
@@ -332,6 +356,8 @@ MODULES = {
             "utils/chatScreen/statusBar.py",
             "utils/chatScreen/helpers.py",
             "utils/chatScreen/ui.py",
+        ],
+        "testFiles": [
             "tests/utils/test_chatUI.py",
             "tests/utils/chatScreen/test_helpers.py",
             "tests/utils/chatScreen/test_session.py",
@@ -354,6 +380,8 @@ MODULES = {
         "files": [
             "utils/newsAPI.py",
             "utils/command/news.py",
+        ],
+        "testFiles": [
             "tests/utils/test_newsAPI.py",
         ],
         "handlers": [],
@@ -391,6 +419,8 @@ MODULES = {
             "utils/core/tui/paradigms/fullScreen.py",
             "utils/core/tui/paradigms/textEditor.py",
             "utils/core/schema/__init__.py",
+        ],
+        "testFiles": [
             "tests/utils/core/test_crypto.py",
             "tests/utils/core/test_database.py",
             "tests/utils/core/test_errorHandler.py",
@@ -414,10 +444,12 @@ MODULES = {
         "version": "1.0.0",
         "author": "ZincPhos",
         "files": [
+            "utils/moduleManager.py",
+        ],
+        "testFiles": [
             "tests/conftest.py",
             "tests/test_module_system.py",
             "tests/scripts/test_edit_data.py",
-            "utils/moduleManager.py",
         ],
         "handlers": [],
         "initFunctions": [],

@@ -83,8 +83,8 @@ def _assertSafeModulePath(filePath):
     if ".." in norm.split("/") or os.path.isabs(norm):
         raise ValueError(f"非法文件路径：{filePath}")
 
-    if not (norm.startswith("handlers/") or norm.startswith("utils/")):
-        raise ValueError(f"文件路径必须以 handlers/ 或 utils/ 开头：{filePath}")
+    if not (norm.startswith("handlers/") or norm.startswith("utils/") or norm.startswith("tests/")):
+        raise ValueError(f"文件路径必须以 handlers/ / utils/ / tests/ 开头：{filePath}")
 
     dest = os.path.realpath(os.path.join(PROJECT_ROOT, filePath))
     root = os.path.realpath(PROJECT_ROOT)
@@ -224,6 +224,12 @@ def cmdShow(moduleName):
         marker = f"{Color.CYAN}[handler]{Color.RESET}" if isHandler else ""
         print(f"  - {f} {marker}")
 
+    testFiles = meta.get("testFiles", [])
+    if testFiles:
+        print(f"\n测试文件（{len(testFiles)} 个，install 默认不拉取）：")
+        for f in testFiles:
+            print(f"  - {f}")
+
     if meta.get("initFunctions"):
         print(f"\n初始化函数：")
         for func in meta["initFunctions"]:
@@ -254,7 +260,8 @@ def cmdValidate():
 
     for moduleName, cfg in allModules.items():
         meta = cfg["metadata"]
-        allFiles = meta.get("files", [])
+        # files（运行必需）+ testFiles（可选测试）一并校验存在性
+        allFiles = meta.get("files", []) + meta.get("testFiles", [])
 
         missingFiles = []
 
@@ -283,15 +290,18 @@ def cmdValidate():
 
 
 def cmdScan():
-    """扫描 handlers/ 和 utils/ 目录，查找未被管理的文件"""
+    """扫描 handlers/ / utils/ / tests/ 目录，查找未被管理的文件"""
     from utils.moduleManager import getAllModules
 
     allModules = getAllModules()
 
-    # 收集所有被管理的文件
+    # 收集所有被管理的文件（files + testFiles）
     managedFiles = set()
     for cfg in allModules.values():
-        for f in cfg["metadata"].get("files", []):
+        meta = cfg["metadata"]
+        for f in meta.get("files", []):
+            managedFiles.add(f)
+        for f in meta.get("testFiles", []):
             managedFiles.add(f)
 
     # 扫描 handlers/ 目录
@@ -314,8 +324,27 @@ def cmdScan():
             if filePath not in managedFiles:
                 unmanagedUtils.append(filePath)
 
+    # 扫描 tests/ 目录（递归：测试是树形目录结构，必须递归才能覆盖子包）
+    testsDir = os.path.join(PROJECT_ROOT, "tests")
+    unmanagedTests = []
+
+    for dirpath, dirnames, filenames in os.walk(testsDir):
+        for filename in filenames:
+            if not filename.endswith(".py"):
+                continue
+            if filename == "__init__.py":
+                continue  # 包标记，非测试文件
+            # 收集 test_*.py 和 conftest.py（pytest 约定的测试文件与共享 fixture）
+            if not (filename.startswith("test_") or filename == "conftest.py"):
+                continue
+
+            absPath = os.path.join(dirpath, filename)
+            relPath = os.path.relpath(absPath, PROJECT_ROOT).replace("\\", "/")
+            if relPath not in managedFiles:
+                unmanagedTests.append(relPath)
+
     # 输出结果
-    if unmanagedHandlers or unmanagedUtils:
+    if unmanagedHandlers or unmanagedUtils or unmanagedTests:
         printColor(Color.YELLOW, "\n发现未被管理的文件：\n")
 
         if unmanagedHandlers:
@@ -328,13 +357,18 @@ def cmdScan():
             for f in unmanagedUtils:
                 print(f"  - {f}")
 
+        if unmanagedTests:
+            print("\ntests/:")
+            for f in unmanagedTests:
+                print(f"  - {f}")
+
         printColor(Color.YELLOW, "\n提示：这些文件未在 modulesRegistry.py 中注册\n")
     else:
         printColor(Color.GREEN, "[OK] 所有文件都已被管理\n")
 
 
-def installFromGitHub(repoUrl, branch=None):
-    """从 GitHub 下载并安装模块"""
+def installFromGitHub(repoUrl, branch=None, withTests=False):
+    """从 GitHub 下载并安装模块（默认不含 testFiles，withTests=True 一并下载测试）"""
     from utils.moduleManager import loadCustomModules, saveCustomModules
 
     # 1. 解析 GitHub URL
@@ -377,7 +411,14 @@ def installFromGitHub(repoUrl, branch=None):
     rawUrl = f"https://raw.githubusercontent.com/{user}/{repo}/{selectedBranch}"
 
     # 3. 校验文件路径（安全检查）
+    # 默认只装 files；--with-tests 时一并装 testFiles（测试文件对运行非必需，多数用户不需要）
+    testFiles = metadata.get("testFiles", [])
     allFiles = metadata.get("files", [])
+    if withTests:
+        allFiles = allFiles + testFiles
+    elif testFiles:
+        printColor(Color.DIM, f"  跳过 {len(testFiles)} 个测试文件（--with-tests 可一并安装）")
+
     for filePath in allFiles:
         try:
             _assertSafeModulePath(filePath)
@@ -458,18 +499,24 @@ def installFromGitHub(repoUrl, branch=None):
     return True
 
 
-def cmdInstall(nameOrUrl, branch=None):
+def cmdInstall(nameOrUrl, branch=None, withTests=False):
     """安装模块"""
     if nameOrUrl.startswith("http"):
         # GitHub URL
-        installFromGitHub(nameOrUrl, branch)
+        installFromGitHub(nameOrUrl, branch, withTests)
     else:
         # 本地路径（暂不实现）
         printColor(Color.RED, "[X] 暂不支持从本地路径安装")
 
 
-def cmdUninstall(moduleName, force=False, soft=False):
-    """卸载模块"""
+def cmdUninstall(moduleName, force=False, soft=False, testsOnly=False):
+    """卸载模块
+
+    - 默认：删除 files + testFiles（完整卸载）
+    - --tests-only：只删除 testFiles，保留运行代码（模块仍在）
+    - --soft/-s：跳过被其他模块共享的文件
+    - --force/-f：内置模块卸载必须显式确认；同时忽略共享文件冲突
+    """
     from utils.moduleManager import (
         getAllModules,
         loadCustomModules,
@@ -488,15 +535,24 @@ def cmdUninstall(moduleName, force=False, soft=False):
     meta = cfg["metadata"]
     isBuiltin = cfg.get("source") == "builtin"
 
-    # 内置模块：必须使用 --force 才能卸载
+    # 内置模块：必须使用 --force 才能卸载（--tests-only 同样要求 -f，保持无例外门槛）
     if isBuiltin and not force:
         printColor(Color.YELLOW, f"\n[!] {moduleName} 是内置模块\n")
-        print("  disable      只禁用，不删除文件（推荐）")
-        print("  uninstall -f 强制删除文件（不可逆，需重新拉取代码才能恢复）\n")
+        print("  disable             只禁用，不删除文件（推荐）")
+        print("  uninstall -f        强制删除运行文件 + 测试（不可逆，需重新拉取代码恢复）")
+        print("  uninstall --tests-only -f  只删除测试文件，保留运行代码\n")
         return
 
+    # 决定删除候选：--tests-only 只删 testFiles；否则 files + testFiles 全删
+    if testsOnly:
+        allFiles = meta.get("testFiles", [])
+        if not allFiles:
+            printColor(Color.YELLOW, f"\n[!] 模块 {moduleName} 没有测试文件\n")
+            return
+    else:
+        allFiles = meta.get("files", []) + meta.get("testFiles", [])
+
     # 检查共享文件冲突
-    allFiles = meta.get("files", [])
     sharedFiles = []  # 被其他启用模块使用的文件
     exclusiveFiles = []  # 只被当前模块使用的文件
 
@@ -509,7 +565,9 @@ def cmdUninstall(moduleName, force=False, soft=False):
                 continue
             if not otherCfg.get("enabled", True):
                 continue  # 跳过已禁用的模块
-            if filePath in otherCfg["metadata"].get("files", []):
+            # 共享检测要同时看 files 和 testFiles，避免误删别模块的测试
+            otherOwned = otherCfg["metadata"].get("files", []) + otherCfg["metadata"].get("testFiles", [])
+            if filePath in otherOwned:
                 isShared = True
                 sharedWith.append(otherName)
 
@@ -531,7 +589,10 @@ def cmdUninstall(moduleName, force=False, soft=False):
         return
 
     # 删除文件
-    print(f"正在卸载模块 {moduleName}...")
+    if testsOnly:
+        print(f"正在清理模块 {moduleName} 的测试文件...")
+    else:
+        print(f"正在卸载模块 {moduleName}...")
 
     deletedCount = 0
     skippedCount = 0
@@ -569,28 +630,38 @@ def cmdUninstall(moduleName, force=False, soft=False):
         except Exception as e:
             print(f"  {Color.YELLOW}!{Color.RESET} 删除 {filePath} 失败：{e}")
 
-    # 从 modulesCustom.json 移除（自定义模块）
-    # 或加入 modulesUninstalled.json（内置模块）
-    if isBuiltin:
-        uninstalledList = loadUninstalledBuiltins()
-        if moduleName not in uninstalledList:
-            uninstalledList.append(moduleName)
-            saveUninstalledBuiltins(uninstalledList)
-    else:
-        customModules = loadCustomModules()
-        if moduleName in customModules:
-            del customModules[moduleName]
-            saveCustomModules(customModules)
+    # --tests-only 只清理测试文件，模块运行代码仍在，不更新卸载/自定义名单
+    if not testsOnly:
+        # 从 modulesCustom.json 移除（自定义模块）
+        # 或加入 modulesUninstalled.json（内置模块）
+        if isBuiltin:
+            uninstalledList = loadUninstalledBuiltins()
+            if moduleName not in uninstalledList:
+                uninstalledList.append(moduleName)
+                saveUninstalledBuiltins(uninstalledList)
+        else:
+            customModules = loadCustomModules()
+            if moduleName in customModules:
+                del customModules[moduleName]
+                saveCustomModules(customModules)
 
-    printColor(Color.GREEN, f"\n[OK] 模块 {moduleName} 已卸载")
-    print(f"  删除 {deletedCount} 个文件", end="")
-    if skippedCount > 0:
-        print(f"，跳过 {skippedCount} 个共享文件")
+    if testsOnly:
+        printColor(Color.GREEN, f"\n[OK] 已清理模块 {moduleName} 的测试文件")
+        print(f"  删除 {deletedCount} 个文件", end="")
+        if skippedCount > 0:
+            print(f"，跳过 {skippedCount} 个共享文件")
+        else:
+            print()
     else:
-        print()
-    if isBuiltin:
-        printColor(Color.YELLOW, "注意：内置模块已加入卸载名单（data/modulesUninstalled.json），重新拉取代码并删除该条目即可恢复")
-    printColor(Color.YELLOW, "注意：数据库文件未删除，如需清理请手动删除")
+        printColor(Color.GREEN, f"\n[OK] 模块 {moduleName} 已卸载")
+        print(f"  删除 {deletedCount} 个文件", end="")
+        if skippedCount > 0:
+            print(f"，跳过 {skippedCount} 个共享文件")
+        else:
+            print()
+        if isBuiltin:
+            printColor(Color.YELLOW, "注意：内置模块已加入卸载名单（data/modulesUninstalled.json），重新拉取代码并删除该条目即可恢复")
+        printColor(Color.YELLOW, "注意：数据库文件未删除，如需清理请手动删除")
 
 
 def main():
@@ -612,12 +683,16 @@ def main():
     installParser = subparsers.add_parser("install", help="安装模块")
     installParser.add_argument("name_or_url", help="模块名或 GitHub URL")
     installParser.add_argument("--branch", help="指定 GitHub 分支")
+    installParser.add_argument("--with-tests", dest="with_tests", action="store_true",
+                               help="一并安装测试文件（默认不安装）")
 
     # uninstall 命令
     uninstallParser = subparsers.add_parser("uninstall", help="卸载模块")
     uninstallParser.add_argument("name", help="模块名")
     uninstallParser.add_argument("-f", "--force", action="store_true", help="强制删除所有文件（包括共享文件）")
     uninstallParser.add_argument("-s", "--soft", action="store_true", help="只删除独占文件，跳过共享文件")
+    uninstallParser.add_argument("--tests-only", dest="tests_only", action="store_true",
+                                 help="只删除测试文件，保留运行代码（内置模块仍需 -f）")
 
     # enable 命令
     enableParser = subparsers.add_parser("enable", help="启用模块")
@@ -647,9 +722,9 @@ def main():
     if args.command == "list":
         cmdList(args)
     elif args.command == "install":
-        cmdInstall(args.name_or_url, args.branch)
+        cmdInstall(args.name_or_url, args.branch, args.with_tests)
     elif args.command == "uninstall":
-        cmdUninstall(args.name, args.force, args.soft)
+        cmdUninstall(args.name, args.force, args.soft, args.tests_only)
     elif args.command == "enable":
         cmdEnable(args.name)
     elif args.command == "disable":

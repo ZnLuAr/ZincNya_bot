@@ -57,7 +57,8 @@ MODULES = {
         "description": "...",
         "version": "1.0.0",
         "author": "ZincPhos",
-        "files": [...],            # 该模块拥有的所有文件
+        "files": [...],            # 该模块运行所必需的文件（handlers/ utils/ data/ 等）
+        "testFiles": [...],        # 可选测试文件（tests/ 下），运行不依赖；install 默认不拉取，uninstall 默认随模块删除。可缺省
         "handlers": [...],         # 其中需要调用 register() 的 handler 文件
         "initFunctions": [...],    # 启动时调用的初始化函数 "module.path:funcName"
         "backgroundTasks": [...],  # 后台任务函数（格式同上）
@@ -118,30 +119,32 @@ list [-a|-e|-d]      # 列出模块（全部 / 仅启用 / 仅禁用）
 show <name>          # 查看模块详情（文件、initFunctions、backgroundTasks、依赖）
 enable <name>        # 启用模块
 disable <name>       # 禁用模块
-install <url>        # 从 GitHub URL 安装模块
+install <url> [--with-tests]  # 从 GitHub URL 安装模块（默认不装测试文件，--with-tests 一并装）
 uninstall <name>     # 卸载模块（详见下文）
-validate             # 检查所有模块的文件是否完整（data/*.json 属运行时本地状态，允许初始不存在，跳过检查）
-scan                 # 找出未被任何模块管理的 handler / utils 文件
+validate             # 检查所有模块的文件是否完整（files + testFiles；data/*.json 属运行时本地状态，允许初始不存在，跳过检查）
+scan                 # 找出未被任何模块管理的 handler / utils / tests 文件
 ```
 
-### uninstall 的三种模式
+### uninstall 的几种模式
 
-- **默认**：如果待卸文件中有被其他启用模块共享的文件，会直接触发警告并退出，提示选用 `-s` 或 `-f`
+- **默认**：删除 `files` + `testFiles`（完整卸载）。如果待删文件中有被其他启用模块共享的文件，会直接触发警告并退出，提示选用 `-s` 或 `-f`
 - **`-s/--soft`**：只删除独占文件，共享文件会保留下来……算是最安全的方式
 - **`-f/--force`**：不管是不是共享文件，全部直接删除
+- **`--tests-only`**：只删除 `testFiles`，保留运行代码（模块仍在，因此**不会**写入 `modulesUninstalled.json` / 也不会从 `modulesCustom.json` 移除）
 
 另外，不管用哪种模式，删除前都会对 metadata 里登记的每个路径重新跑一遍和 install 同款的安全校验（`_assertSafeModulePath`）；校验不过的会打印 `[SKIP]` 并跳过不删——就算 `modulesCustom.json` 被人手工篡改过，也不会误删项目或系统文件。
 
-对于内置模块，默认不会直接允许卸载，而是提示优先使用 `disable` 的说——
+对于内置模块，默认不会直接允许卸载（`--tests-only` 也一样，统一要求 `-f`），而是提示优先使用 `disable` 的说——
 
 ```bash
 > python scripts/module.py uninstall news
 [!] news 是内置模块
-  disable       # 只禁用，不删除文件（推荐）
-  uninstall -f  # 强制删除文件（不可逆，需重新拉取代码才能恢复）
+  disable             # 只禁用，不删除文件（推荐）
+  uninstall -f        # 强制删除运行文件 + 测试（不可逆，需重新拉取代码恢复）
+  uninstall --tests-only -f  # 只删除测试文件，保留运行代码
 ```
 
-如果真的执行 `-f`，除了删除文件之外，还会把模块 id 写进 `modulesUninstalled.json`——这样下次启动的时候，注册表就会主动跳过它，不至于因为文件已经不存在，又在 `validate` 或加载阶段报错。
+如果真的执行 `-f`（完整卸载），除了删除文件之外，还会把模块 id 写进 `modulesUninstalled.json`——这样下次启动的时候，注册表就会主动跳过它，不至于因为文件已经不存在，又在 `validate` 或加载阶段报错。`--tests-only` 不在此列：它只清理测试文件、运行代码仍在，模块本身没被卸载，所以不写名单、也不动 `modulesCustom.json`。
 
 如果之后想恢复，也很简单：把那个 json 里的记录删掉，再 `git restore` 对应文件就可以了。
 
@@ -166,11 +169,12 @@ scan                 # 找出未被任何模块管理的 handler / utils 文件
 - `initFunctions`
 - `backgroundTasks`
 - `dependencies`
+- `testFiles`（可选测试文件，`tests/` 下）
 
 安装的时候会做一些基本的安全检查：
 
 - `id` 必须匹配 `^[a-z0-9_]+$`
-- 所有 `files` 都必须以 `handlers/` 或 `utils/` 开头、不能包含 `..` 路径段、不能是绝对路径，而且 realpath 解析后的真实路径必须仍在项目根目录内（realpath + commonpath 校验，见 `scripts/module.py` 的 `_assertSafeModulePath`），避免路径遍历和逃逸
+- 所有 `files` / `testFiles` 都必须以 `handlers/` / `utils/` / `tests/` 开头、不能包含 `..` 路径段、不能是绝对路径，而且 realpath 解析后的真实路径必须仍在项目根目录内（realpath + commonpath 校验，见 `scripts/module.py` 的 `_assertSafeModulePath`），避免路径遍历和逃逸
 - `handlers` 中列出的每个文件，都必须真的实现 `def register()`
 - 分支会自动尝试 `main` → `master`，当然也可以用 `--branch` 手动指定
 
