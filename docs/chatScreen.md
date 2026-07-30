@@ -741,7 +741,7 @@ if stripped == ":help":
 | `utils/whitelistManager/data.py` | getAllowedUserIDs 提供切换列表 |
 | `utils/chatHistory.py` | 聊天记录加密存储与读取 |
 | `utils/core/stateManager.py` | 全局状态管理(interactiveMode / messageQueue) |
-| `utils/command/llm.py` | LLM 审核命令处理(`handleChatScreenReviewCommand` 等) |
+| `utils/command/llm/review/chatScreenReview.py` | LLM 审核命令处理(`handleChatScreenReviewCommand` 等) |
 | `utils/llm/state.py` | 审核队列管理(`getReviewQueue` / `peekReviewHint`) |
 
 ---

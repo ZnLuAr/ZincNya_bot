@@ -169,7 +169,7 @@ BM25 分数的固定加成（`+= priority * 1.0`）。惯例：
 
 1. 新增 / 改动标题、人工 tags 时，可以运行标签扩展脚本：python scripts/expand_knowledge_tags.py
 2. 重建知识库索引：在客户端 CLI 中 `/llm knowledge reindex`，或重启 bot 以自动重建
-3. 推荐用 `/llm knowledge search <query>` 校验（`utils/command/llm.py`），模拟提问测试，确认预期问句能正常命中、打分合理。
+3. 推荐用 `/llm knowledge search <query>` 校验（`utils/command/llm/knowledgeCmd.py`），模拟提问测试，确认预期问句能正常命中、打分合理。
 
 > Windows 控制台上，如果运行脚本时遇到 `UnicodeEncodeError`（GBK 编码 emoji），可以加上环境变量 `PYTHONIOENCODING=utf-8`。
 

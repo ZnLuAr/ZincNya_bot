@@ -91,12 +91,18 @@ async def handleConsoleCommand(app , commandLine: str):
     
     commandName = args[0].lstrip("/")  #去掉前缀 “/” 和后面跟着的东西
     commandArgs = args[1:]
+
+    if not commandName or not commandName.replace("_", "").isalnum():
+        print(f"\n/{commandName}……喵？\n锌酱……还没见过这条指令喵……？\n\n")
+        return
     
     # 加载对应命令模块
     moudlePath = f"{COMMAND_MODULE}.{commandName}"
     filePath = os.path.join(COMMAND_DIR , f"{commandName}.py")
+    commandDir = os.path.join(COMMAND_DIR, commandName)
 
-    if not os.path.exists(filePath):
+    # 接受单文件命令（name.py）或包命令（name/ 目录）
+    if not (os.path.exists(filePath) or os.path.isdir(commandDir)):
         print(f"\n/{commandName}……喵？\n锌酱……还没见过这条指令喵……？\n\n")
         return
     

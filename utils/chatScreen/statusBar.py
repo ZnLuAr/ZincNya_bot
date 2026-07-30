@@ -4,7 +4,7 @@ utils/chatScreen/statusBar.py
 状态栏文本常量与工具函数。
 
 集中管理 chatScreen 界面的状态栏文本，避免在 ui.py / mainLoop.py /
-receiver.py / command/llm.py 等多处硬编码同一串文本导致漂移。
+receiver.py / command/llm/ 等多处硬编码同一串文本导致漂移。
 """
 
 
@@ -42,4 +42,4 @@ def getReviewQueueStatus(queueSize: int, hint: str = "") -> str:
 def getEditModeStatus(itemType: str) -> str:
     """编辑模式状态栏。itemType: "memory" 或 "llm"。"""
     typeText = "记忆内容" if itemType == "memory" else "LLM 生成消息"
-    return f" {typeText}编辑审核中 | Ctrl+S 提交 | Esc 取消编辑"
+    return f" {typeText} 编辑审核中 | Ctrl+S 提交 | Esc 取消编辑"

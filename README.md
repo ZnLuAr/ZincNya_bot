@@ -152,7 +152,11 @@ ZincNya_bot/
 │   │   ├── nya.py                  # /nya 语录管理
 │   │   ├── log.py                  # /log 日志管理
 │   │   ├── todos.py                # /todos 待办事项管理（控制台）
-│   │   ├── llm.py                  # /llm LLM 功能控制与控制台审核
+│   │   ├── llm/                    # /llm LLM 功能控制与控制台审核（包）
+│   │   │   ├── _dispatch.py        # execute 主分发 + 状态汇总 + getHelp
+│   │   │   ├── memoryCmd.py        # /llm memory 子命令
+│   │   │   ├── knowledgeCmd.py     # /llm knowledge 子命令
+│   │   │   └── review/             # 审核交互（控制台 / chatScreen）
 │   │   ├── news.py                 # /news 新闻推送管理
 │   │   ├── killsticker.py          # /killsticker 中止表情包下载任务
 │   │   ├── clear.py                # /clear 清屏

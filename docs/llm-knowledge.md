@@ -646,5 +646,5 @@ Category 加成帮助在相似 BM25 分数下优先召回与用户意图最匹�
 
 - 上下文注入由 `utils/llm/contextBuilder.py:buildKnowledgeContext` 统一调度；详见 [docs/llm-memory.md](llm-memory.md) 中"上下文注入格式"小节。
 - 启动钩子由 `utils/core/appLifecycle.py:initializeApp` 串联，与 memory / chatHistory / todos 数据库初始化并列。
-- 命令分发遵循项目通用约定：`utils/command/llm.py:_handleKnowledgeCommand`，由 `/llm knowledge ...` console 入口路由。
+- 命令分发遵循项目通用约定：`utils/command/llm/knowledgeCmd.py:_handleKnowledgeCommand`，由 `/llm knowledge ...` console 入口路由。
 - 配置项 `knowledgeEnabled` / `knowledgeMaxResults` / `knowledgeMinScore` 复用 `utils/llm/config.py` 的 `_setConfig` 加锁读改写机制，和 memory / URL / 模型配置同模式。
