@@ -14,7 +14,6 @@ from handlers.book import (
     register,
     _hashQuery,
     _escapeHtml,
-    _truncate,
 )
 
 
@@ -299,19 +298,6 @@ class TestBookHelpers:
         assert _escapeHtml("<script>") == "&lt;script&gt;"
         assert _escapeHtml("A & B") == "A &amp; B"
         assert _escapeHtml("5 > 3") == "5 &gt; 3"
-
-    def test_truncate_long_title(self):
-        """截断过长标题"""
-        long_title = "A" * 100
-        truncated = _truncate(long_title, 50)
-        assert len(truncated) <= 50  # 截断到 maxLen
-        assert truncated.endswith("…")  # 中文省略号
-
-    def test_truncate_short_title(self):
-        """短标题不截断"""
-        short_title = "Short"
-        truncated = _truncate(short_title, 50)
-        assert truncated == short_title
 
     def test_hash_query_consistency(self):
         """相同搜索词生成相同哈希"""

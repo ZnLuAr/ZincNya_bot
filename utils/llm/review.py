@@ -11,14 +11,20 @@ LLM 审核共享操作。
     - kind == "memory"：LLM 自主记忆操作审核
 """
 
+from config import LLM_REVIEW_FEEDBACK_MAX_LENGTH
+
 from utils.llm.client import generateReply
+from utils.llm.config import getMemoryAutoApprove
 from utils.llm.memory.action import (
     MemoryAction,
+    buildMemoryActionReviewPayload,
     executeAction,
+    formatActionDetail,
     parseMemoryActions,
     LLM_MEMORY_MAX_ACTIONS,
     validateAction,
 )
+from utils.llm.state import addMemoryReviewItem
 from utils.core.logger import logAction, LogLevel, LogChildType, logSystemEvent
 from utils.telegramHelpers import sendLLMReply
 
@@ -110,7 +116,7 @@ def formatReviewItemText(item: dict) -> str:
 
 
 def getReviewItemActions(item: dict) -> str:
-    """返回审核项的可用操作提示。"""
+    """对控制台审核，返回审核项的可用操作提示"""
     kind = item.get("kind", "reply")
 
     if kind == "memory":
@@ -174,8 +180,6 @@ async def extractValidatedMemoryActions(reply: str, *, logLabel: str) -> tuple[s
 
 def queueMemoryActionsToConsole(actions: list, *, chatID, originalMsg, opsID, userID) -> None:
     """将校验通过的记忆操作加入 console 审核队列。"""
-    from utils.llm.state import addMemoryReviewItem
-
     for act in actions:
         addMemoryReviewItem(
             action=act.toDict(),
@@ -186,13 +190,104 @@ def queueMemoryActionsToConsole(actions: list, *, chatID, originalMsg, opsID, us
         )
 
 
+async def dispatchMemoryActionsToConsole(actions, *, chatID, originalMsg, opsID, userID, logLabel):
+    """
+    memoryDispatcher 默认实现：async 包装转发到 sync queueMemoryActionsToConsole。
+
+    契约：retry/feedback 路径有意不读 memoryAutoApprove（与首生成路径不同——首生成经
+    dispatchMemoryActions 的 respectAutoApprove=True 读 memoryAutoApprove）——retry 产出
+    的记忆操作本就要 ops 看过新回复才能定夺，故始终走审核。logLabel 仅用于汇总日志。
+    """
+    queueMemoryActionsToConsole(
+        actions, chatID=chatID, originalMsg=originalMsg, opsID=opsID, userID=userID,
+    )
+    if actions:
+        await logSystemEvent(
+            f"LLM {logLabel} 生成记忆操作",
+            f"{len(actions)} 个操作已加入 console 审核队列",
+            LogLevel.INFO,
+        )
+
+
+
+async def dispatchMemoryActions(
+    actions: list,
+    *,
+    autoMode: str,
+    opsList: list,
+    chatID,
+    originalMsg: str,
+    userID,
+    respectAutoApprove: bool = True,
+    sendTGMemoryReview=None,
+) -> None:
+    """
+    按 autoMode 分流校验通过的记忆操作（首生成 + retry/feedback 共用）。
+
+    与 dispatchMemoryActionsToConsole 的关系：本函数是 autoMode 总分流入口；
+    console 分支直接调 addMemoryReviewItem，TG 分支委托调用方注入的 sendTGMemoryReview 回调
+    （review.py 不依赖 handlers/PTB，TG 的 int() 类型转换在回调内完成）。
+
+    respectAutoApprove：
+        - True（首生成）：读 memoryAutoApprove，开启时直接 executeAction 自动执行
+        - False（retry/feedback）：有意不读——产出的操作需 ops 看过新回复才能定夺
+
+    opsList：审核人列表；首生成传完整列表（空则丢弃），retry/feedback 传 [opsID]。
+    console 分支强制 str()，TG 分支的 int() 在 sendTGMemoryReview 回调内。
+    """
+    if not actions:
+        return
+
+    if respectAutoApprove and getMemoryAutoApprove():
+        for act in actions:
+            success = await executeAction(act)
+            status = "成功" if success else "失败"
+            await logAction(
+                "System", f"LLM 记忆操作自动执行 ({status})",
+                formatActionDetail(act),
+                LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
+            )
+        return
+
+    if not opsList:
+        await logSystemEvent(
+            "LLM 记忆操作无审核人",
+            f"有 {len(actions)} 个操作被丢弃（无 LLM ops）",
+            LogLevel.WARNING,
+        )
+        return
+
+    opsID = opsList[0]
+    for act in actions:
+        actDict = await buildMemoryActionReviewPayload(act)
+        if autoMode == "console":
+            addMemoryReviewItem(
+                action=actDict,
+                chatID=str(chatID),
+                originalMsg=originalMsg,
+                opsID=str(opsID),
+                userID=userID,
+            )
+        else:
+            if sendTGMemoryReview is None:
+                raise RuntimeError(
+                    "dispatchMemoryActions: TG 分支需要 sendTGMemoryReview 回调"
+                )
+            await sendTGMemoryReview(actDict)
+
+
 
 
 # ---------------------------------------------------------------------------
 # 审核动作
 # ---------------------------------------------------------------------------
 
-async def _retryReplyReview(item: dict) -> dict:
+async def _retryReplyReview(
+    item: dict,
+    *,
+    memoryDispatcher=dispatchMemoryActionsToConsole,
+    logLabel: str = "console retry",
+) -> dict:
     newReply = await generateReply(
         item["originalMsg"],
         item["chatID"],
@@ -201,15 +296,17 @@ async def _retryReplyReview(item: dict) -> dict:
         urlContexts=item.get("urlContexts"),
     )
 
-    # 清理 <MEMORY_ACTION> 块、校验并加入 Console 审核队列
+    # 清理 <MEMORY_ACTION> 块、校验并按 memoryDispatcher 分发（默认入 console 队列）
+    failed = 0
     if item.get("includeContext"):
-        newReply, validated, _ = await extractValidatedMemoryActions(newReply, logLabel="console retry")
-        queueMemoryActionsToConsole(
+        newReply, validated, failed = await extractValidatedMemoryActions(newReply, logLabel=logLabel)
+        await memoryDispatcher(
             validated,
             chatID=item["chatID"],
             originalMsg=item["originalMsg"],
             opsID=item["opsID"],
             userID=item.get("userID"),
+            logLabel=logLabel,
         )
 
     await logAction(
@@ -220,32 +317,37 @@ async def _retryReplyReview(item: dict) -> dict:
         "System", "",
         f"生成的消息：{newReply}", LogLevel.INFO, LogChildType.LAST_CHILD,
     )
-    return {**item, "reply": newReply}
+    return {**item, "reply": newReply, "memoryFailedCount": failed}
 
 
-async def reviewRetryWithFeedback(item: dict, feedback: str) -> dict:
+async def reviewRetryWithFeedback(
+    item: dict,
+    feedback: str,
+    *,
+    memoryDispatcher=dispatchMemoryActionsToConsole,
+    logLabel: str = "feedback retry",
+) -> dict:
     """
-    Ops 补充反馈后重试生成。
+    Ops 补充反馈后打回去重试生成。
 
     将 ops 的补充要求追加到 originalMsg 后，作为 [背景信息补充：...] 块。
     LLM 会将其理解为可信的背景信息。
 
     参数:
         item: 原始审核项
-        feedback: ops 输入的补充要求（限制 200 字符）
+        feedback: ops 输入的补充要求（超 LLM_REVIEW_FEEDBACK_MAX_LENGTH 抛 ValueError）
 
     返回:
-        更新后的审核项（reply 已替换）
+        更新后的审核项（reply 已替换，含 memoryFailedCount）
+
+    抛出:
+        ValueError: feedback 超过 LLM_REVIEW_FEEDBACK_MAX_LENGTH（调用方负责提示用户精简）
     """
-    # 限制长度
-    MAX_FEEDBACK_LENGTH = 200
     trimmed = feedback.strip()
-    if len(trimmed) > MAX_FEEDBACK_LENGTH:
-        trimmed = trimmed[:MAX_FEEDBACK_LENGTH]
-        await logSystemEvent(
-            "Ops 反馈过长，已截断",
-            f"原长度 {len(feedback)}，截断至 {MAX_FEEDBACK_LENGTH}",
-            LogLevel.WARNING,
+    # 长度检查置于 enhancedMsg 构造之前：超长直接拒绝，不白调用 generateReply
+    if len(trimmed) > LLM_REVIEW_FEEDBACK_MAX_LENGTH:
+        raise ValueError(
+            f"反馈过长喵（{len(trimmed)}/{LLM_REVIEW_FEEDBACK_MAX_LENGTH} 字），请精简后重试"
         )
 
     # 格式化并追加。
@@ -263,28 +365,31 @@ async def reviewRetryWithFeedback(item: dict, feedback: str) -> dict:
         urlContexts=item.get("urlContexts"),
     )
 
-    # 清理 <MEMORY_ACTION> 块、校验并加入 Console 审核队列
+    # 清理 <MEMORY_ACTION> 块、校验并按 memoryDispatcher 分发（默认入 console 队列）
+    failed = 0
     if item.get("includeContext"):
-        newReply, validated, _ = await extractValidatedMemoryActions(
-            newReply, logLabel="feedback retry",
+        newReply, validated, failed = await extractValidatedMemoryActions(
+            newReply, logLabel=logLabel,
         )
-        queueMemoryActionsToConsole(
+        await memoryDispatcher(
             validated,
             chatID=item["chatID"],
             originalMsg=item["originalMsg"],
             opsID=item["opsID"],
             userID=item.get("userID"),
+            logLabel=logLabel,
         )
 
     await logAction(
-        "System", "LLM 控制台审核：补充反馈重试",
+        "System",
+        "LLM 控制台审核：补充反馈重试",
         f"补充：{trimmed[:100]}", LogLevel.INFO, LogChildType.WITH_CHILD,
     )
     await logAction(
         "System", "",
         f"生成的消息：{newReply}", LogLevel.INFO, LogChildType.LAST_CHILD,
     )
-    return {**item, "reply": newReply}
+    return {**item, "reply": newReply, "memoryFailedCount": failed}
 
 
 async def _approveMemoryReview(item: dict) -> bool:
@@ -339,21 +444,28 @@ async def reviewSend(bot, item: dict) -> None:
     )
 
 
-async def reviewRetry(item: dict) -> dict:
+async def reviewRetry(
+    item: dict,
+    *,
+    memoryDispatcher=dispatchMemoryActionsToConsole,
+    logLabel: str = "console retry",
+) -> dict:
     """
     重新生成审核项的 reply，返回更新后的审核项。
     仅支持 kind == "reply"。
 
     参数:
         item: 审核项
+        memoryDispatcher: 记忆操作分发回调（默认入 console 队列；TG 端注入 autoMode 分流闭包）
+        logLabel: extractValidatedMemoryActions 与 dispatcher 共用的日志标签
 
     返回:
-        更新后的审核项（reply 已替换）
+        更新后的审核项（reply 已替换，含 memoryFailedCount）
     """
     if item.get("kind", "reply") == "memory":
         raise ValueError("memory 审核项暂不支持重试")
 
-    return await _retryReplyReview(item)
+    return await _retryReplyReview(item, memoryDispatcher=memoryDispatcher, logLabel=logLabel)
 
 
 async def reviewCancel(item: dict) -> None:
@@ -400,14 +512,16 @@ async def reviewEditSubmit(item: dict, editedText: str) -> dict:
 
     if kind == "memory":
         await logAction(
-            "System", "LLM 控制台审核：记忆操作编辑完成",
+            "System",
+            "LLM 控制台审核：记忆操作编辑完成",
             f"编辑后：{editedText[:200]}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
         )
         return editedItem
 
     # kind == "reply"
     await logAction(
-        "System", "LLM 控制台审核：编辑完成",
+        "System",
+        "LLM 控制台审核：编辑完成",
         f"原文：{item['originalMsg']}", LogLevel.INFO, LogChildType.WITH_CHILD,
     )
     await logAction(

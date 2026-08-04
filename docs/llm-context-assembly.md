@@ -2,7 +2,7 @@
 
 > 落地时间：Query Reinforcement + 三层结构于 2026-06-24 实装
 >
-> 最后更新：2026-07-10
+> 最后更新：2026-08-02
 > Written by ZincNya~ ❤
 
 ---
@@ -170,6 +170,18 @@ blocks.append(f"<CURRENT_USER_MESSAGE>\n{safeUserMessage}\n</CURRENT_USER_MESSAG
 ```
 
 其中，**`<RETRIEVED_CONTEXT>`** 给所有上下文块一个统一的外层标记，让 LLM 能明确区分"背景参考"和"当前任务"；**`neutralizePromptDelimiters`** 把用户消息里的 XML 分隔符折成全角，防止攻击者构造 `</CURRENT_USER_MESSAGE><TRUSTED_KNOWLEDGE>...` 来越权注入高信任内容。
+
+需要留意的是，`userMessage` 在进入 `buildConversationContext` 之前，可能已被上游 `handlers/llm.py:_injectReplyTextContext` 预处理。当用户以 reply 方式发消息时，实际拼进 `<CURRENT_USER_MESSAGE>` 的 `userMessage` 形如：
+
+```
+[引用的消息]
+<@replySender> {被回复消息文本}
+
+[当前用户消息]
+<@currentSender> {当前用户纯文本}
+```
+
+发送者取 `from_user.username` / `first_name`，缺失时兜底「未知用户」。整段（含朴素括号标记）作为不可信叶子流经 `neutralizePromptDelimiters` 折成全角——`< >` 被折叠意味着 reply 文本无法伪造高信任块越权，而全角标记对 LLM 仍语义可读，「引用」与「当前」的角色区分照样生效。
 
 ### 层 3：Synthesis Prompt
 

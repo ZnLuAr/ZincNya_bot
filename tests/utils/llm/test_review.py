@@ -15,10 +15,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from config import LLM_REVIEW_FEEDBACK_MAX_LENGTH
+
 from utils.llm.memory.action import MemoryAction, LLM_MEMORY_MAX_ACTIONS
 from utils.llm.review import (
+    dispatchMemoryActions,
+    dispatchMemoryActionsToConsole,
     extractValidatedMemoryActions,
     queueMemoryActionsToConsole,
+    reviewRetry,
     reviewRetryWithFeedback,
 )
 
@@ -134,7 +139,7 @@ class TestExtractValidatedMemoryActions:
 class TestQueueMemoryActionsToConsole:
     """queueMemoryActionsToConsole：转发到 console 审核队列"""
 
-    @patch("utils.llm.state.addMemoryReviewItem")
+    @patch("utils.llm.review.addMemoryReviewItem")
     def test_empty_list_no_call(self, mockAdd):
         """空列表：不调用 addMemoryReviewItem"""
         queueMemoryActionsToConsole(
@@ -142,7 +147,7 @@ class TestQueueMemoryActionsToConsole:
         )
         mockAdd.assert_not_called()
 
-    @patch("utils.llm.state.addMemoryReviewItem")
+    @patch("utils.llm.review.addMemoryReviewItem")
     def test_multiple_actions_forwarded(self, mockAdd):
         """多个 action：逐个转发，参数正确"""
         actions = [
@@ -188,23 +193,19 @@ class TestReviewRetryWithFeedback:
         assert "[背景信息补充：假设用户预算 1000 元]" in enhancedMsg
 
     @patch("utils.llm.review.logAction", new_callable=AsyncMock)
-    @patch("utils.llm.review.logSystemEvent", new_callable=AsyncMock)
     @patch("utils.llm.review.generateReply", new_callable=AsyncMock)
-    async def test_feedback_truncated_at_200(self, mockGenerate, mockLog, mockLogAction):
-        """反馈超 200 字符：截断后再拼接，并记录截断日志"""
+    async def test_feedback_over_limit_raises(self, mockGenerate, mockLogAction):
+        """反馈超 LLM_REVIEW_FEEDBACK_MAX_LENGTH：抛 ValueError，不调 generateReply"""
         mockGenerate.return_value = "新回复"
-        longFeedback = "字" * 250
+        longFeedback = "字" * (LLM_REVIEW_FEEDBACK_MAX_LENGTH + 1)
         item = {"originalMsg": "msg", "chatID": "123", "includeContext": False}
 
-        await reviewRetryWithFeedback(item, longFeedback)
+        with pytest.raises(ValueError) as excInfo:
+            await reviewRetryWithFeedback(item, longFeedback)
 
-        enhancedMsg = mockGenerate.await_args.args[0]
-        # 拼接的反馈部分不超过 200 字
-        assert ("字" * 200) in enhancedMsg
-        assert ("字" * 201) not in enhancedMsg
-        # 截断告警被记录
-        events = [c.args[0] for c in mockLog.await_args_list]
-        assert any("反馈过长" in e for e in events)
+        assert "反馈过长" in str(excInfo.value)
+        # 长度检查在 generateReply 之前，不应实际调用
+        mockGenerate.assert_not_called()
 
     @patch("utils.llm.review.logAction", new_callable=AsyncMock)
     @patch("utils.llm.review.generateReply", new_callable=AsyncMock)
@@ -225,31 +226,244 @@ class TestReviewRetryWithFeedback:
         assert "背景信息补充" not in result["originalMsg"]
         # 其他字段透传
         assert result["userID"] == "u1"
+        # memoryFailedCount 显式写回（includeContext=False 时为 0）
+        assert result.get("memoryFailedCount") == 0
 
-    @patch("utils.llm.review.queueMemoryActionsToConsole")
     @patch("utils.llm.review.logAction", new_callable=AsyncMock)
     @patch("utils.llm.review.generateReply", new_callable=AsyncMock)
-    async def test_no_memory_processing_when_context_off(self, mockGenerate, mockLogAction, mockQueue):
-        """includeContext=False：不做记忆操作处理"""
+    async def test_no_memory_processing_when_context_off(self, mockGenerate, mockLogAction):
+        """includeContext=False：不调 memoryDispatcher"""
+        spy = AsyncMock()
         mockGenerate.return_value = "回复"
         item = {"originalMsg": "msg", "chatID": "123", "includeContext": False}
 
-        await reviewRetryWithFeedback(item, "补充")
+        await reviewRetryWithFeedback(item, "补充", memoryDispatcher=spy)
 
-        mockQueue.assert_not_called()
+        spy.assert_not_called()
 
-    @patch("utils.llm.review.queueMemoryActionsToConsole")
     @patch("utils.llm.review.logAction", new_callable=AsyncMock)
-    @patch("utils.llm.review.logSystemEvent", new_callable=AsyncMock)
     @patch("utils.llm.review.generateReply", new_callable=AsyncMock)
-    async def test_memory_processing_when_context_on(self, mockGenerate, mockLog, mockLogAction, mockQueue):
-        """includeContext=True 且生成含记忆块：清理块并入队"""
+    async def test_memory_processing_when_context_on(self, mockGenerate, mockLogAction):
+        """includeContext=True 且生成含记忆块：剥离块并调 memoryDispatcher 传校验通过的操作"""
+        spy = AsyncMock()
         mockGenerate.return_value = f"回复正文\n\n{_addBlock('记住')}"
         item = {"originalMsg": "msg", "chatID": "123", "includeContext": True, "opsID": "o1"}
 
-        result = await reviewRetryWithFeedback(item, "补充")
+        result = await reviewRetryWithFeedback(item, "补充", memoryDispatcher=spy)
 
         # reply 已剥离记忆块
         assert "<MEMORY_ACTION>" not in result["reply"]
-        # 校验通过的操作入队
-        mockQueue.assert_called_once()
+        spy.assert_awaited_once()
+        # dispatcher 收到校验通过的操作列表（1 个 add）
+        dispatchedActions = spy.await_args.args[0]
+        assert len(dispatchedActions) == 1
+        assert dispatchedActions[0].action == "add"
+        # logLabel 透传
+        assert spy.await_args.kwargs["logLabel"] == "feedback retry"
+
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    @patch("utils.llm.review.generateReply", new_callable=AsyncMock)
+    async def test_feedback_retry_injects_custom_dispatcher(self, mockGenerate, mockLogAction):
+        """feedback 透传自定义 memoryDispatcher 与 logLabel"""
+        spy = AsyncMock()
+        mockGenerate.return_value = f"回复\n\n{_addBlock('记住')}"
+        item = {"originalMsg": "msg", "chatID": "123", "includeContext": True, "opsID": "o1"}
+
+        await reviewRetryWithFeedback(item, "补充", memoryDispatcher=spy, logLabel="custom")
+
+        spy.assert_awaited_once()
+        assert spy.await_args.kwargs["logLabel"] == "custom"
+
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    @patch("utils.llm.review.generateReply", new_callable=AsyncMock)
+    async def test_feedback_within_limit_succeeds(self, mockGenerate, mockLogAction):
+        """反馈长度等于上限：正常生成不抛异常"""
+        mockGenerate.return_value = "新回复"
+        item = {"originalMsg": "msg", "chatID": "123", "includeContext": False}
+        feedback = "字" * LLM_REVIEW_FEEDBACK_MAX_LENGTH  # 恰好等于上限，不触发 raise
+
+        result = await reviewRetryWithFeedback(item, feedback)
+
+        assert result["reply"] == "新回复"
+        mockGenerate.assert_awaited_once()
+
+
+
+
+# ===========================================================================
+# reviewRetry
+# ===========================================================================
+
+class TestReviewRetry:
+    """reviewRetry：透传 memoryDispatcher 与 logLabel，写回 memoryFailedCount"""
+
+    def test_retry_default_dispatcher_is_console(self):
+        """默认 memoryDispatcher=dispatchMemoryActionsToConsole, logLabel='console retry'"""
+        assert reviewRetry.__kwdefaults__["memoryDispatcher"] is dispatchMemoryActionsToConsole
+        assert reviewRetry.__kwdefaults__["logLabel"] == "console retry"
+
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    @patch("utils.llm.review.generateReply", new_callable=AsyncMock)
+    async def test_retry_reply_replaced_and_originalmsg_preserved(self, mockGenerate, mockLogAction):
+        """retry 替换 reply，保留 originalMsg，写回 memoryFailedCount=0"""
+        mockGenerate.return_value = "新回复"
+        item = {"originalMsg": "原文", "chatID": "123", "includeContext": False}
+
+        result = await reviewRetry(item)
+
+        assert result["reply"] == "新回复"
+        assert result["originalMsg"] == "原文"
+        assert result.get("memoryFailedCount") == 0
+
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    @patch("utils.llm.review.generateReply", new_callable=AsyncMock)
+    async def test_retry_writes_failed_count_to_item(self, mockGenerate, mockLogAction):
+        """includeContext=True 含非法块：failedCount 写回 memoryFailedCount，非法项不传 dispatcher"""
+        spy = AsyncMock()
+        mockGenerate.return_value = f"回复\n\n{_invalidActionBlock()}"
+        item = {"originalMsg": "msg", "chatID": "123", "includeContext": True, "opsID": "o1"}
+
+        result = await reviewRetry(item, memoryDispatcher=spy)
+
+        assert result["memoryFailedCount"] == 1
+        # 非法操作被丢弃，dispatcher 收到空列表
+        assert spy.await_args.args[0] == []
+
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    @patch("utils.llm.review.generateReply", new_callable=AsyncMock)
+    async def test_retry_injects_custom_dispatcher(self, mockGenerate, mockLogAction):
+        """retry 透传自定义 memoryDispatcher 与 logLabel"""
+        spy = AsyncMock()
+        mockGenerate.return_value = f"回复\n\n{_addBlock('记住')}"
+        item = {"originalMsg": "msg", "chatID": "123", "includeContext": True, "opsID": "o1"}
+
+        await reviewRetry(item, memoryDispatcher=spy, logLabel="custom")
+
+        spy.assert_awaited_once()
+        assert spy.await_args.kwargs["logLabel"] == "custom"
+
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    @patch("utils.llm.review.generateReply", new_callable=AsyncMock)
+    async def test_consecutive_retry_resets_failed_count(self, mockGenerate, mockLogAction):
+        """连续 retry：第二次干净回复时 memoryFailedCount 重置为 0（不残留前次）"""
+        spy = AsyncMock()
+        # 第一次生成含非法块（failed=1）
+        mockGenerate.return_value = f"回复\n\n{_invalidActionBlock()}"
+        item = {"originalMsg": "msg", "chatID": "123", "includeContext": True, "opsID": "o1"}
+
+        first = await reviewRetry(item, memoryDispatcher=spy)
+        assert first["memoryFailedCount"] == 1
+
+        # 第二次生成干净回复（failed=0，不残留 1）
+        mockGenerate.return_value = "干净回复"
+        second = await reviewRetry(first, memoryDispatcher=spy)
+        assert second["memoryFailedCount"] == 0
+
+
+
+
+# ===========================================================================
+# dispatchMemoryActions
+# ===========================================================================
+
+class TestDispatchMemoryActions:
+    """dispatchMemoryActions：autoMode 总分流入口（首生成 + retry/feedback 共用）"""
+
+    @patch("utils.llm.review.logSystemEvent", new_callable=AsyncMock)
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    async def test_empty_actions_early_return(self, mockLogAction, mockLogEvent):
+        """空 actions：直接返回，不调任何下游"""
+        spy = AsyncMock()
+        await dispatchMemoryActions(
+            [], autoMode="on", opsList=["1"], chatID=1,
+            originalMsg="msg", userID=1, sendTGMemoryReview=spy,
+        )
+        spy.assert_not_called()
+        mockLogEvent.assert_not_called()
+
+    @patch("utils.llm.review.executeAction", new_callable=AsyncMock)
+    @patch("utils.llm.review.getMemoryAutoApprove", return_value=True)
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    async def test_autoapprove_short_circuits(self, mockLogAction, mockAuto, mockExec):
+        """respectAutoApprove=True + memoryAutoApprove 开启：逐个 executeAction，不走审核"""
+        spy = AsyncMock()
+        actions = [
+            MemoryAction(action="add", scopeType="global", scopeID="global", content="A"),
+            MemoryAction(action="add", scopeType="global", scopeID="global", content="B"),
+        ]
+        await dispatchMemoryActions(
+            actions, autoMode="on", opsList=["1"], chatID=1, originalMsg="msg", userID=1,
+            respectAutoApprove=True, sendTGMemoryReview=spy,
+        )
+        assert mockExec.await_count == 2
+        spy.assert_not_called()
+
+    @patch("utils.llm.review.logSystemEvent", new_callable=AsyncMock)
+    @patch("utils.llm.review.getMemoryAutoApprove", return_value=False)
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    async def test_no_opslist_drops_with_warning(self, mockLogAction, mockAuto, mockLogEvent):
+        """opsList 空：丢弃并告警，不调回调"""
+        spy = AsyncMock()
+        actions = [MemoryAction(action="add", scopeType="global", scopeID="global", content="A")]
+        await dispatchMemoryActions(
+            actions, autoMode="on", opsList=[], chatID=1,
+            originalMsg="msg", userID=1, sendTGMemoryReview=spy,
+        )
+        spy.assert_not_called()
+        events = [c.args[0] for c in mockLogEvent.await_args_list]
+        assert any("无审核人" in e for e in events)
+
+    @patch("utils.llm.review.addMemoryReviewItem")
+    @patch("utils.llm.review.getMemoryAutoApprove", return_value=False)
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    async def test_console_branch_uses_str_ids(self, mockLogAction, mockAuto, mockAdd):
+        """autoMode=console：addMemoryReviewItem 收到 str(chatID)/str(opsID)"""
+        actions = [MemoryAction(action="add", scopeType="global", scopeID="global", content="A")]
+        await dispatchMemoryActions(
+            actions, autoMode="console", opsList=[42], chatID=99,
+            originalMsg="msg", userID=7,
+        )
+        mockAdd.assert_called_once()
+        kwargs = mockAdd.call_args.kwargs
+        assert kwargs["chatID"] == "99"
+        assert kwargs["opsID"] == "42"
+
+    @patch("utils.llm.review.buildMemoryActionReviewPayload", new_callable=AsyncMock)
+    @patch("utils.llm.review.getMemoryAutoApprove", return_value=False)
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    async def test_tg_branch_calls_callback_with_dict(self, mockLogAction, mockAuto, mockBuild):
+        """autoMode 非 console：调 sendTGMemoryReview，传 buildMemoryActionReviewPayload 的 dict"""
+        mockBuild.return_value = {"action": "add", "content": "X"}
+        spy = AsyncMock()
+        actions = [MemoryAction(action="add", scopeType="global", scopeID="global", content="A")]
+        await dispatchMemoryActions(
+            actions, autoMode="on", opsList=["1"], chatID=1,
+            originalMsg="msg", userID=1, sendTGMemoryReview=spy,
+        )
+        spy.assert_awaited_once_with({"action": "add", "content": "X"})
+
+    @patch("utils.llm.review.getMemoryAutoApprove", return_value=False)
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    async def test_tg_branch_without_callback_raises(self, mockLogAction, mockAuto):
+        """autoMode 非 console 但 sendTGMemoryReview=None：raise RuntimeError"""
+        actions = [MemoryAction(action="add", scopeType="global", scopeID="global", content="A")]
+        with pytest.raises(RuntimeError):
+            await dispatchMemoryActions(
+                actions, autoMode="on", opsList=["1"], chatID=1, originalMsg="msg", userID=1,
+            )
+
+    @patch("utils.llm.review.executeAction", new_callable=AsyncMock)
+    @patch("utils.llm.review.buildMemoryActionReviewPayload", new_callable=AsyncMock)
+    @patch("utils.llm.review.getMemoryAutoApprove", return_value=True)
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    async def test_respect_autoapprove_false_skips_shortcut(self, mockLogAction, mockAuto, mockBuild, mockExec):
+        """respectAutoApprove=False：即使 memoryAutoApprove 开启也不自动执行，走审核分流"""
+        mockBuild.return_value = {"action": "add", "content": "X"}
+        spy = AsyncMock()
+        actions = [MemoryAction(action="add", scopeType="global", scopeID="global", content="A")]
+        await dispatchMemoryActions(
+            actions, autoMode="on", opsList=["1"], chatID=1, originalMsg="msg", userID=1,
+            respectAutoApprove=False, sendTGMemoryReview=spy,
+        )
+        mockExec.assert_not_called()
+        spy.assert_awaited_once()

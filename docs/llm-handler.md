@@ -114,7 +114,7 @@ utils/llm/
 ├── state.py            # 运行时状态：审核队列、速率限制、防抖、one-shot
 ├── contextBuilder.py   # 上下文组装（memory + history + URL + 当前消息）
 ├── urlReader.py        # URL 提取、意图判断、安全抓取、内容提取
-├── review.py           # console 审核动作（send/retry/cancel/editSubmit）
+├── review.py           # 审核共享层（TG/chatScreen/CLI 三入口共用）
 ├── vision.py           # 图片提取与下载
 ├── client/
 │   ├── _generate.py    # generateReply：主 LLM 调用
@@ -123,7 +123,7 @@ utils/llm/
 ├── memory/
 │   ├── action.py       # 记忆操作解析、校验、执行
 │   ├── database.py     # memory_entries 存储与格式化
-│   └── ui.py           # Telegram 记忆审核 UI（inline keyboard）
+│   └── ui.py           # Memory TUI 管理界面（控制台编辑器，非 TG 卡片）
 └── knowledge/
     ├── database.py     # knowledge_entries 存储
     ├── loader.py       # Markdown 文件加载与解析
@@ -476,7 +476,9 @@ LLM 输出习惯用 Markdown 排版，但 Telegram 原生只支持一小部分�
 
 ## 记忆操作分发（`memoryAutoApprove`）
 
-LLM 在回复里夹带 `<MEMORY_ACTION>` 标签、想要新增 / 修改 / 删除记忆时，会走到 `_dispatchMemoryActions` 做分发处理，区分自动通过和人工审核两条分支。
+LLM 在回复里夹带 `<MEMORY_ACTION>` 标签、想要新增 / 修改 / 删除记忆时，会走到 `utils/llm/review.py` 的 `dispatchMemoryActions` 做分发处理，区分自动通过和人工审核两条分支。
+
+> 下表描述的是**首次生成路径**（由 `_dispatchGeneratedOutput` 调用，在 `respectAutoApprove=True` 的情况下）。retry / `:fb` 补充反馈路径经 `_makeTelegramDispatcher` 闭包通过 `respectAutoApprove=False`——此处是**有意不读 `memoryAutoApprove` 的，产出的记忆操作始终需要审核**，因为管理员得看过新回复才能定夺。
 
 | 条件 | 行为 |
 |------|------|

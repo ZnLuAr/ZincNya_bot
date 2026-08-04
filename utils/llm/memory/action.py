@@ -363,3 +363,18 @@ async def executeAction(action: MemoryAction) -> bool:
         return await deleteMemory(action.memoryID)
 
     return False
+
+
+
+
+async def buildMemoryActionReviewPayload(act: MemoryAction) -> dict:
+    """
+    构造记忆操作的审核展示 payload：toDict 后，对带 memoryID 且无 content 的操作（典型为
+    update/delete）补 originalContent（查库取原内容），供审核卡片显示「改前内容」。
+    """
+    actDict = act.toDict()
+    if act.memoryID is not None and not act.content:
+        target = await getMemoryByID(act.memoryID)
+        if target:
+            actDict["originalContent"] = target.get("content", "")
+    return actDict

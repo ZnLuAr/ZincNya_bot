@@ -132,9 +132,6 @@ _hashQuery(query) -> str
 _escapeHtml(text) -> str
     转义 HTML 特殊字符（& < >）
 
-_truncate(text , maxLen) -> str
-    截断文本，超长时末尾加 "…"
-
 safeEditMessage(message , text , **kwargs) -> bool
     安全地编辑消息，忽略"消息未修改"错误
 
@@ -158,7 +155,7 @@ from config import BOOK_ITEMS_PER_PAGE, BOOK_QUERY_HASH_LENGTH
 
 from utils.bookSearchAPI import searchBooks
 from utils.core.errorDecorators import handleTelegramErrors
-from utils.telegramHelpers import safeEditMessage
+from utils.telegramHelpers import safeEditMessage, truncateText
 
 
 
@@ -166,12 +163,6 @@ from utils.telegramHelpers import safeEditMessage
 def _hashQuery(query: str) -> str:
     """生成搜索词的短哈希"""
     return hashlib.md5(query.encode()).hexdigest()[:BOOK_QUERY_HASH_LENGTH]
-
-def _truncate(text: str , maxLen: int) -> str:
-    """截断文本"""
-    if len(text) <= maxLen:
-        return text
-    return text[:maxLen - 1] + "…"
 
 
 def _escapeHtml(text: str) -> str:
@@ -216,12 +207,12 @@ def _renderListView(query: str , searchResult: dict) -> tuple[str , InlineKeyboa
         return text , keyboard
 
     # 构建列表文本（HTML 格式）
-    lines = [f"📚 搜索「{_escapeHtml(_truncate(query , 20))}」- 找到 {total} 本喵\n"]
+    lines = [f"📚 搜索「{_escapeHtml(truncateText(query, 20))}」- 找到 {total} 本喵\n"]
 
     for book in results:
-        title = _truncate(book["title"] , 40)
+        title = truncateText(book["title"], 40)
         authors = " , ".join(book["authors"][:2]) if book["authors"] else "Unknown"
-        authors = _truncate(authors , 25)
+        authors = truncateText(authors, 25)
         year = book["year"] or "?"
         lang = book["language"] or "?"
 

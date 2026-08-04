@@ -92,7 +92,10 @@ MODULES = {
             "tests/utils/llm/memory/test_ui.py",
             "tests/utils/command/llm/test_smoke.py",
             "tests/handlers/test_llmCommand.py",
+            "tests/handlers/test_llm.py",
+            "tests/handlers/test_llmReview.py",
             "tests/utils/test_markdownToHtml.py",
+            "tests/utils/test_telegramHelpers.py",
         ],
         "handlers": ["handlers/llm.py", "handlers/llmCommand.py", "handlers/llmReview.py"],
         "initFunctions": [

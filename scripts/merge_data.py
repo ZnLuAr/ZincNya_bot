@@ -2164,6 +2164,11 @@ def _display_width(text: str) -> int:
 
 
 def _truncate(text: str, width: int) -> str:
+    """按显示宽度截断（east_asian_width，中文计 2），用于终端 diff 表格列对齐。
+
+    与 utils.telegramHelpers.truncateText（按码点数截断）语义不同——这里要的是等宽对齐，
+    不是字符计数；两者有意不统一。
+    """
     w = 0
     for i, ch in enumerate(text):
         cw = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1

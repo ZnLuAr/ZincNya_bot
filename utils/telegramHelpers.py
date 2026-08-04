@@ -9,6 +9,8 @@ from telegram.error import BadRequest
 from utils.markdownToHtml import convertMarkdownToHtml
 
 
+
+
 async def safeEditMessage(message, text: str, **kwargs) -> bool:
     """
     安全地编辑消息，抑制 "Message is not modified" 错误。
@@ -71,6 +73,24 @@ def removeMention(text: str, botUsername: str) -> str:
 
 
 
+def truncateText(text: str, limit: int, *, suffix: str = "…") -> str:
+    """
+    按 Unicode 码点长度截断文本，超出 limit 时附加 suffix，保证返回长度 ≤ limit。
+
+    limit ≤ len(suffix) 时返回 suffix 前 limit 个字符，避免负切片。
+    suffix 默认单字省略号；调用方可传 "……[内容过长，已截断]" / "..." 等自定义提示。
+
+    与 scripts/merge_data.py 的 _truncate（按显示宽度 east_asian_width 截断，做终端表格列对齐）
+    语义不同，有意不统一。
+    """
+    if len(text) <= limit:
+        return text
+    if limit <= len(suffix):
+        return suffix[:limit]
+    return text[:limit - len(suffix)] + suffix
+
+
+
 
 def prepareMarkdownReply(reply: str, maxLength: int = 4096) -> tuple[str, str]:
     """
@@ -95,8 +115,7 @@ def prepareMarkdownReply(reply: str, maxLength: int = 4096) -> tuple[str, str]:
         ('这是 <b>重要</b> 内容', 'HTML')
     """
     htmlText = convertMarkdownToHtml(reply)
-    if len(htmlText) > maxLength:
-        htmlText = htmlText[:maxLength - 3] + "..."
+    htmlText = truncateText(htmlText, maxLength, suffix="...")
     return (htmlText, "HTML")
 
 
@@ -151,7 +170,7 @@ async def sendLLMReply(
                 LogLevel.WARNING,
                 LogChildType.WITH_ONE_CHILD,
             )
-            truncated = reply[:maxLength - 3] + "..." if len(reply) > maxLength else reply
+            truncated = truncateText(reply, maxLength, suffix="...")
             await bot.send_message(
                 chat_id=chatID,
                 text=truncated,
@@ -159,4 +178,3 @@ async def sendLLMReply(
             )
         else:
             raise
-

@@ -28,7 +28,7 @@ from telegram.ext import (
 
 from config import Permission, LLM_DEBOUNCE_SECONDS
 
-from handlers.llmReview import handleEditReply, handleFeedbackRetry, sendReviewMessage, sendMemoryReviewMessage, _truncate
+from handlers.llmReview import handleEditReply, handleFeedbackRetry, sendReviewMessage, sendMemoryReviewMessage
 
 from utils.core.errorDecorators import handleTelegramErrors
 from utils.llm import (
@@ -42,7 +42,6 @@ from utils.llm import (
     getLLMEnabled,
     getGroupTriggerKeywords,
     getGroupTriggerMode,
-    getMemoryAutoApprove,
     getMemoryEnabled,
     getPendingTask,
     isRateLimited,
@@ -52,12 +51,10 @@ from utils.llm import (
 )
 from utils.llm.memory.action import (
     LLM_MEMORY_MAX_ACTIONS,
-    executeAction as executeMemoryAction,
-    formatActionDetail,
     parseMemoryActions,
     validateAction,
 )
-from utils.llm.state import addMemoryReviewItem
+from utils.llm.review import dispatchMemoryActions
 from utils.llm.vision import extractImageRefs, extractReplyImageRefs, downloadImages
 from utils.core.logger import logAction, logSystemEvent, LogLevel, LogChildType
 from utils.operators import loadOperators
@@ -181,7 +178,7 @@ def _injectReplyTextContext(message, pureText: str) -> str:
         - 格式上接近 history 块的 `<sender> xxx`，让 LLM 识别这是「别人说过的话」而非「用户现在说的话」
 
     分隔符安全:
-        这里用朴素括号写 [引用消息] / <sender> / [当前用户消息] 标记。整段 pureText
+        这里用朴素括号写 [引用的消息] / <sender> / [当前用户消息] 标记。整段 pureText
         作为 userMessage 流经 contextBuilder，进 <CURRENT_USER_MESSAGE> 前会被
         neutralizePromptDelimiters 整体折成全角——包括这里的标记和 replyText / pureText。
         这是有意且安全的：
@@ -206,10 +203,16 @@ def _injectReplyTextContext(message, pureText: str) -> str:
     replyUser = ""
     if replyMsg.from_user:
         replyUser = replyMsg.from_user.username or replyMsg.from_user.first_name or ""
-    displayName = f"@{replyUser}" if replyUser else "未知用户"
+    replySender = f"@{replyUser}" if replyUser else "未知用户"
 
-    # 格式接近 history 块的 "<sender> 说的内容"
-    return f"[引用消息]\n<{displayName}> {replyText}\n\n[当前用户消息]\n{pureText}"
+    # 当前用户发送者（匿名群/频道 from_user 可能为 None）
+    currentUser = ""
+    if message.from_user:
+        currentUser = message.from_user.username or message.from_user.first_name or ""
+    currentSender = f"@{currentUser}" if currentUser else "未知用户"
+
+    # 格式接近 history 块的 "<sender> 说的内容"；引用与当前消息对称带 sender 前缀
+    return f"[引用的消息]\n<{replySender}> {replyText}\n\n[当前用户消息]\n<{currentSender}> {pureText}"
 
 
 def _getReplyURLCandidateText(message) -> str:
@@ -516,71 +519,6 @@ async def _dispatchTextReply(
             await logAction("System", "", f"生成的消息：{reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
 
 
-async def _buildMemoryActionReviewPayload(act) -> dict:
-    actDict = act.toDict()
-    if act.memoryID is not None and not act.content:
-        from utils.llm.memory.database import getMemoryByID
-        target = await getMemoryByID(act.memoryID)
-        if target:
-            actDict["originalContent"] = target.get("content", "")
-    return actDict
-
-
-async def _dispatchMemoryActions(
-    *,
-    memoryActions: list,
-    autoMode: str,
-    opsList: list[str],
-    context: ContextTypes.DEFAULT_TYPE,
-    chatID: str,
-    displayOriginalMsg: str,
-    userID: int,
-) -> None:
-    if not memoryActions:
-        return
-
-    memoryAutoApprove = getMemoryAutoApprove()
-    if memoryAutoApprove:
-        for act in memoryActions:
-            success = await executeMemoryAction(act)
-            status = "成功" if success else "失败"
-            await logAction(
-                "System", f"LLM 记忆操作自动执行 ({status})",
-                formatActionDetail(act),
-                LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
-            )
-        return
-
-    if not opsList:
-        await logSystemEvent(
-            "LLM 记忆操作无审核人",
-            f"有 {len(memoryActions)} 个操作被丢弃（无 LLM ops）",
-            LogLevel.WARNING,
-        )
-        return
-
-    for act in memoryActions:
-        actDict = await _buildMemoryActionReviewPayload(act)
-        if autoMode == "console":
-            addMemoryReviewItem(
-                action=actDict,
-                chatID=chatID,
-                originalMsg=displayOriginalMsg,
-                opsID=opsList[0],
-                userID=userID,
-            )
-        else:
-            await sendMemoryReviewMessage(
-                bot=context.bot,
-                opsID=int(opsList[0]),
-                action=actDict,
-                originalMsg=displayOriginalMsg,
-                chatID=int(chatID),
-                context=context,
-                userID=userID,
-            )
-
-
 async def _dispatchGeneratedOutput(
     *,
     reply: str,
@@ -624,14 +562,26 @@ async def _dispatchGeneratedOutput(
                 urlContexts=urlContexts,
             )
 
-        await _dispatchMemoryActions(
-            memoryActions=memoryActions,
+        async def _sendTGMemoryReview(actDict):
+            # TG 分支回调：review.py 不碰 PTB，int() 类型转换留在 handler 侧
+            await sendMemoryReviewMessage(
+                bot=context.bot,
+                opsID=int(opsList[0]),
+                action=actDict,
+                originalMsg=displayOriginalMsg,
+                chatID=int(chatID),
+                context=context,
+                userID=userID,
+            )
+
+        await dispatchMemoryActions(
+            memoryActions,
             autoMode=autoMode,
             opsList=opsList,
-            context=context,
             chatID=chatID,
-            displayOriginalMsg=displayOriginalMsg,
+            originalMsg=displayOriginalMsg,
             userID=userID,
+            sendTGMemoryReview=_sendTGMemoryReview,
         )
 
     except NetworkError as e:

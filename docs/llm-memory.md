@@ -151,21 +151,23 @@ Memory 只在以下情况下被检索并注入：
 
 ```
 <MEMORY_ACTION>
-{"op": "add", "scope_type": "user", "scope_id": "12345", "content": "...", "tags": [...]}
-{"op": "update", "id": 7, "content": "..."}
-{"op": "delete", "id": 8}
+{"action": "add", "scope_type": "user", "scope_id": "12345", "content": "...", "tags": [...]}
+{"action": "update", "memory_id": 7, "content": "..."}
+{"action": "delete", "memory_id": 8}
 </MEMORY_ACTION>
 ```
 
-`utils/llm/memory/action.py` 在 `_dispatchLLMReply` 中负责：
+`<MEMORY_ACTION>` 块的处理分两层：`utils/llm/memory/action.py` 提供解析（`parseMemoryActions`）、校验（`validateAction`）、执行（`executeAction`）等原语；编排由 `utils/llm/review.py:dispatchMemoryActions` 统一负责（首生成路径由 `handlers/llm.py` 注入 TG 发送回调，retry / `:fb` 路径由 `handlers/llmReview.py` 的 `_makeTelegramDispatcher` 注入）：
 
 1. 用正则从 reply 中剥离 `<MEMORY_ACTION>...</MEMORY_ACTION>` 块，不让用户看到；
 2. 逐条校验合法性，拦截跨会话、修改不存在的记忆这类越界操作；
-3. 按 `memoryAutoApprove` 配置决定执行方式：
+3. 首生成路径按 `memoryAutoApprove` 配置决定执行方式：
    - `memoryAutoApprove = True`：直接执行写入，标记来源 inferred；
    - `False` 且 `autoMode == "console"`，推入控制台待审队列；
-   - `False` 且非 console，则发 Telegram memory review（inline keyboard，由 `memory/ui.py` 渲染）；
+   - `False` 且非 console，则发 Telegram memory review（卡片由 `handlers/llmReview.py` 渲染）；
    - 若不存在管理员账号，则仅记录 `Warning` 日志，直接丢弃本次操作。
+
+> retry / `:fb` 路径产出的记忆操作**不经过 `memoryAutoApprove` 而始终走审核**（统一 dispatcher 的 `respectAutoApprove=False`），这是因为管理员需要看过新回复才能定夺新产出的记忆是否能够通过。
 
 详见 [docs/llm-handler.md](llm-handler.md) 的"记忆操作分发"一节。
 

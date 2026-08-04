@@ -192,12 +192,12 @@ ZincNya_bot/
 │   │       └── todos.sql           # todos 表结构
 │   │
 │   ├── llm/                        # LLM 集成模块
-│   │   ├── config.py               # 配置管理（开关、审核模式、（视觉）模型、群聊触发、记忆、知识库等）
-│   │   ├── state.py                # 运行时状态（多类型审核队列、速率限制、防抖、one-shot）
-│   │   ├── review.py               # 审核共享操作（console / chatScreen 的 send/retry/cancel）
-│   │   ├── contextBuilder.py       # 上下文组装（memory + knowledge + history + URL + 当前消息）
+│   │   ├── config.py               # 配置管理
+│   │   ├── state.py                # 运行时状态
+│   │   ├── review.py               # 审核共享层
+│   │   ├── contextBuilder.py       # 上下文组装
 │   │   ├── promptSafety.py         # 提示注入防护（统一中和结构分隔符）
-│   │   ├── vision.py               # 图片提取（photo/document/reply）与下载编码
+│   │   ├── vision.py               # 图片提取与下载编码
 │   │   ├── urlIntent.py            # URL 读取意图判断（关键词 / 正则 / 全局抑制 / 近邻否定）
 │   │   ├── urlReader.py            # 受控 URL 抓取（SSRF 防护、redirect、byte cap、HTML/text 提取）
 │   │   ├── client/                 # 多模型 API 客户端（双调用视觉架构）
