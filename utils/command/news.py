@@ -32,6 +32,10 @@ from utils.newsAPI import (
 )
 
 
+# 测试输出时摘要预览的截断长度
+_SUMMARY_LEN = 50
+
+
 
 
 async def execute(app, args: list[str]):
@@ -109,7 +113,7 @@ async def testFetch():
             if article.cover_url:
                 print(f"      封面: {article.cover_url}")
             if article.summary:
-                print(f"      摘要: {article.summary[:50]}...")
+                print(f"      摘要: {article.summary[:_SUMMARY_LEN]}...")
             print()
 
     except Exception as e:

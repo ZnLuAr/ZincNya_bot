@@ -13,11 +13,15 @@ import base64
 import logging
 from dataclasses import dataclass
 
-from config import LLM_IMAGE_MAX_BYTES, LLM_IMAGE_SUPPORTED_MIMES
+from config import LLM_IMAGE_MAX_BYTES, LLM_IMAGE_SUPPORTED_MIMES, LLM_VISION_PREFERRED_MIN_WIDTH
 
 from utils.core.logger import logSystemEvent, LogLevel, LogChildType
 
 _logger = logging.getLogger(__name__)
+
+
+# === 截断 / 长度常量 ===
+_LOG_FILEID_LEN = 20  # 日志预览中 file_id 的截断长度
 
 
 
@@ -33,13 +37,10 @@ class ImageRef:
 
 
 
-_VISION_PREFERRED_MIN_WIDTH = 800
-
-
 def _pickBestPhoto(photos: tuple) -> object:
     """选择适合视觉模型的分辨率—— 宽度 >= 800px 的最小尺寸，不够则取最大。"""
     for p in photos:
-        if p.width >= _VISION_PREFERRED_MIN_WIDTH:
+        if p.width >= LLM_VISION_PREFERRED_MIN_WIDTH:
             return p
     return photos[-1]
 
@@ -116,7 +117,7 @@ async def downloadImages(bot, refs: list[ImageRef]) -> tuple[list[dict], list[st
             raw = await file.download_as_bytearray()
             await logSystemEvent(
                 "LLM 图片下载完成",
-                f"file_id={ref.fileID[:20]}..., mime={ref.mimeType}, size={len(raw)} bytes",
+                f"file_id={ref.fileID[:_LOG_FILEID_LEN]}..., mime={ref.mimeType}, size={len(raw)} bytes",
                 LogLevel.INFO,
                 LogChildType.WITH_ONE_CHILD,
             )
@@ -128,7 +129,7 @@ async def downloadImages(bot, refs: list[ImageRef]) -> tuple[list[dict], list[st
             notes.append("[有一张图片下载失败]")
             await logSystemEvent(
                 "LLM 图片下载失败",
-                f"file_id={ref.fileID[:20]}..., error={e}",
+                f"file_id={ref.fileID[:_LOG_FILEID_LEN]}..., error={e}",
                 LogLevel.WARNING,
                 LogChildType.WITH_ONE_CHILD
             )

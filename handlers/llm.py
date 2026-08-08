@@ -26,7 +26,7 @@ from telegram.ext import (
     MessageHandler,
 )
 
-from config import Permission, LLM_DEBOUNCE_SECONDS
+from config import Permission, LLM_DEBOUNCE_SECONDS, TG_MESSAGE_MAX_LEN, LLM_REPLY_CONTEXT_LIMIT, LLM_MEMORY_MAX_ACTIONS
 
 from handlers.llmReview import handleEditReply, handleFeedbackRetry, sendReviewMessage, sendMemoryReviewMessage
 
@@ -50,7 +50,6 @@ from utils.llm import (
     setPendingTask,
 )
 from utils.llm.memory.action import (
-    LLM_MEMORY_MAX_ACTIONS,
     parseMemoryActions,
     validateAction,
 )
@@ -62,7 +61,9 @@ from utils.telegramHelpers import removeMention, sendLLMReply
 from utils.whitelistManager.data import whetherAuthorizedUser
 
 
-_TG_MAX_LEN = 4096
+_TG_MAX_LEN = TG_MESSAGE_MAX_LEN  # Telegram 消息上限（平台硬约束，复用 config）
+
+_NO_OPS_HINT = "诶——等等……管理员配置貌似有缺位……💦\n得有人为锌酱说的话负责，锌酱才可以畅所欲言不逾矩的喵……"
 
 
 
@@ -196,8 +197,8 @@ def _injectReplyTextContext(message, pureText: str) -> str:
         return pureText
 
     # 截断过长的 reply 文本
-    if len(replyText) > 300:
-        replyText = replyText[:300] + "……"
+    if len(replyText) > LLM_REPLY_CONTEXT_LIMIT:
+        replyText = replyText[:LLM_REPLY_CONTEXT_LIMIT] + "……"
 
     # 提取 reply 消息的发送者
     replyUser = ""
@@ -471,7 +472,7 @@ async def _dispatchTextReply(
         if not opsList:
             await context.bot.send_message(
                 chat_id=chatID,
-                text="诶——等等……管理员配置貌似有缺位……💦\n得有人为锌酱说的话负责，锌酱才可以畅所欲言不逾矩的喵……"
+                text=_NO_OPS_HINT,
             )
         else:
             for opsID in opsList:
@@ -498,7 +499,7 @@ async def _dispatchTextReply(
 
     else:
         if not opsList:
-            await context.bot.send_message(chat_id=chatID, text="诶——等等……管理员配置貌似有缺位……💦\n得有人为锌酱说的话负责，锌酱才可以畅所欲言不逾矩的喵……")
+            await context.bot.send_message(chat_id=chatID, text=_NO_OPS_HINT)
         else:
             addReviewItem(
                 chatID=chatID,

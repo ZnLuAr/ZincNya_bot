@@ -21,6 +21,8 @@ from urllib.parse import urlsplit, urljoin
 import aiohttp
 from bs4 import BeautifulSoup
 
+import config
+
 from utils.core.resourceManager import getResourceManager
 from utils.llm.config import (
     getURLReadEnabled,
@@ -40,9 +42,8 @@ from utils.core.logger import logSystemEvent, LogLevel, LogChildType
 _USER_AGENT = "Mozilla/5.0 (compatible; ZincNyaBot/1.0; Telegram link preview)"
 _ACCEPT = "text/html,text/plain,text/markdown,application/json,application/xml,application/xhtml+xml,*/*;q=0.1"
 _CHUNK_SIZE = 8192
-_RETRY_BACKOFF_SECONDS = 0.5
-# 整个 readURLContextsForUserText 的总墙钟上限（秒），防止单个 URL 卡住整条 LLM 流水线
-_TOTAL_FETCH_DEADLINE = 15
+_BINARY_SNIFF_BYTES = 4096
+_BINARY_CONTROL_RATIO = 0.3
 
 
 
@@ -272,12 +273,12 @@ def _isTextContentType(contentType: str, url: str) -> bool:
 
 def _isBinaryContent(data: bytes) -> bool:
     """二进制嗅探：前几 KB 有 NUL 字节或控制字符比例过高则视为二进制。"""
-    sample = data[:4096]
+    sample = data[:_BINARY_SNIFF_BYTES]
     if b"\x00" in sample:
         return True
 
     controlCount = sum(1 for b in sample if b < 32 and b not in (9, 10, 13))
-    if len(sample) > 0 and controlCount / len(sample) > 0.3:
+    if len(sample) > 0 and controlCount / len(sample) > _BINARY_CONTROL_RATIO:
         return True
 
     return False
@@ -329,7 +330,7 @@ async def _fetchURL(url: str) -> dict:
             break
         except (asyncio.TimeoutError, aiohttp.ClientError) as e:
             if attempt < maxRetries:
-                await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+                await asyncio.sleep(config.LLM_URL_RETRY_BACKOFF_SECONDS)
                 continue
             result["error"] = f"抓取失败（{attempt + 1} 次尝试均出错）：{type(e).__name__} {e}"
             break
@@ -571,7 +572,7 @@ async def readURLContextsForUserText(*, intentText: str, candidateText: str) -> 
     try:
         raw = await asyncio.wait_for(
             asyncio.gather(*tasks, return_exceptions=True),
-            timeout=_TOTAL_FETCH_DEADLINE,
+            timeout=config.LLM_URL_TOTAL_FETCH_DEADLINE,
         )
     except asyncio.TimeoutError:
         # 总 deadline 到了，取消还在跑的任务，保留已完成的结果
@@ -581,7 +582,7 @@ async def readURLContextsForUserText(*, intentText: str, candidateText: str) -> 
 
         await logSystemEvent(
             "LLM URL 抓取整体超时",
-            f"{len(urls)} 个 URL，{_TOTAL_FETCH_DEADLINE}s 内未全部完成，返回已完成部分",
+            f"{len(urls)} 个 URL，{config.LLM_URL_TOTAL_FETCH_DEADLINE}s 内未全部完成，返回已完成部分",
             LogLevel.WARNING,
             LogChildType.WITH_ONE_CHILD,
         )

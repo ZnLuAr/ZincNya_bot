@@ -14,8 +14,8 @@ from handlers.todos import (
     handleTodosCallback,
     register,
     _lastQueryMessages,
-    _MAX_CACHED_MESSAGES,
 )
+from config import TODOS_MAX_CACHED_MESSAGES
 
 
 @pytest.fixture(autouse=True)
@@ -188,10 +188,10 @@ class TestTodosLRUCache:
     async def test_lru_cache_evicts_oldest_when_full(self, mockUpdate, mockContext):
         """缓存满时淘汰最旧条目"""
         # 填满缓存到上限
-        for i in range(_MAX_CACHED_MESSAGES):
+        for i in range(TODOS_MAX_CACHED_MESSAGES):
             _lastQueryMessages[(f"chat{i}", f"user{i}")] = i
 
-        assert len(_lastQueryMessages) == _MAX_CACHED_MESSAGES
+        assert len(_lastQueryMessages) == TODOS_MAX_CACHED_MESSAGES
         oldest_key = ("chat0", "user0")
         assert oldest_key in _lastQueryMessages
 
@@ -207,7 +207,7 @@ class TestTodosLRUCache:
             # 最旧条目应被淘汰
             assert oldest_key not in _lastQueryMessages
             # 缓存大小不超过上限
-            assert len(_lastQueryMessages) <= _MAX_CACHED_MESSAGES
+            assert len(_lastQueryMessages) <= TODOS_MAX_CACHED_MESSAGES
 
     @pytest.mark.asyncio
     async def test_cache_isolated_by_chat_and_user(self, mockUpdate, mockContext):

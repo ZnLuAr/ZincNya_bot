@@ -52,9 +52,11 @@ GIF_QUEUE_ALERT_THRESHOLD = 2   # GIF 任务数达到此值时告警
 GIF_ALERT_COOLDOWN = 300        # operator 告警冷却（秒）
 DEFAULT_READ_TIMEOUT = 300      # 请求发出后，等待返回响应的超时缓冲区 (秒)
 DEFAULT_WRITE_TIMEOUT = 60      # 将请求上传至 Telegram 请求体的超时缓冲区（秒）
+STICKER_MAX_CACHE = 50          # 贴纸集缓存条目上限（模块内 LRU）
 
 # 大文件发送相关常量
 TELEGRAM_FILE_SIZE_LIMIT_MB = 48  # Telegram 文件大小限制（MB，留 2MB 裕度）
+TG_MESSAGE_MAX_LEN = 4096         # Telegram 单条消息字符上限（平台硬约束，多处复用，禁止重复硬编码）
 
 # 内存监控
 MEMORY_MONITOR_INTERVAL = 60          # 监测间隔（秒）
@@ -67,6 +69,8 @@ MEMORY_GATE_THRESHOLD_MB = 200        # 拦截阈值（MB）：低于此值拒�
 
 # /nya 功能相关常量
 QUOTES_PATH = os.path.join(PROJECT_ROOT, "data", "ZincNyaQuotes.json")
+NYA_MESSAGE_DELAY_MIN = 1           # 多条 nya 语录发送间隔下限（秒）
+NYA_MESSAGE_DELAY_MAX = 3           # 多条 nya 语录发送间隔上限（秒）
 
 
 
@@ -87,6 +91,8 @@ COMMAND_MODULE = "utils.command"                                 # Python 模块
 # Whitelist 相关常量
 WHITELIST_PATH = os.path.join(PROJECT_ROOT, "data", "whitelist.json")
 AUTH_ENABLED = True     # 设为 False 则跳过白名单鉴权，允许所有用户使用
+WHITELIST_NOTIFY_COOLDOWN = 600       # /start 通知冷却（秒），同用户 10 分钟只通知一次
+WHITELIST_MAX_NOTIFY_CACHE = 4096     # 通知缓存条目安全上限
 
 
 
@@ -122,6 +128,9 @@ BOOK_HTTP_PROXY = os.getenv("BOOK_HTTP_PROXY", None)        # HTTP 代理（可�
 
 
 
+# 数据库共享常量（跨 chatHistory / memory / knowledge / todos）
+DB_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"   # 各 db 模块统一的时间戳格式
+
 # 聊天记录保存相关常量
 CHAT_DATA_DIR = DATA_DIR                                                        # 兼容旧引用
 DB_PATH = os.path.join(DATA_DIR, "chatHistory.db")                              # 聊天记录保存文件名
@@ -152,12 +161,15 @@ TODOS_ITEMS_PER_PAGE = 6                                                        
 TODOS_REMINDER_CHECK_INTERVAL = 60                                              # 提醒检查间隔（秒）
 TODOS_CONTENT_MAX_LENGTH = 200                                                  # 待办内容最大长度
 TODOS_CONTENT_PREVIEW_LENGTH = 15                                               # 列表中内容预览长度（字符数）
+TODOS_MAX_CACHED_MESSAGES = 1023                                                 # 每用户最后一条 /todos 列表消息缓存上限（防刷屏/内存泄漏）
 
 
 
 
 # LLM 相关常量
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", None)
+ANTHROPIC_AUTH_TOKEN = os.getenv("ANTHROPIC_AUTH_TOKEN", None)    # Bearer 认证（自定义端点用，与 API_KEY 二选一）
+ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", None)       # 自定义 Anthropic 兼容端点（中转/绕过区域限制等）
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", None)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", None)
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", None)
@@ -181,6 +193,27 @@ LLM_REQUEST_MAX_RETRIES = 2                                    # LLM 请求最�
 LLM_REQUEST_RETRY_DELAY = 3                                    # 重试间隔（秒）
 LLM_KNOWLEDGE_DB_PATH = os.path.join(DATA_DIR, "llm", "knowledge.db")  # 知识库数据库
 LLM_KNOWLEDGE_DIR = os.path.join(DATA_DIR, "llm", "knowledge")         # 知识库 Markdown 文件目录
+# LLM 记忆操作约束（原散落于 memory/action.py / contextBuilder.py）
+LLM_MEMORY_PRIORITY_CAP = 3                # 单条记忆 priority 上限
+LLM_MEMORY_MAX_CONTENT_LEN = 500           # 单条记忆 content 最大长度（字符）
+LLM_MEMORY_MAX_ACTIONS = 3                 # 单轮回复最多解析的记忆操作数
+LLM_MEMORY_MAX_TAGS = 10                   # 单条记忆最多标签数
+LLM_MEMORY_RETRIEVE_PER_SCOPE = 20         # 检索时每作用域候选上限
+LLM_MEMORY_RETRIEVE_TOTAL = 10             # 检索时汇池后取前 N 条
+# 视觉描述生成参数（原散落于 client/_generate.py / vision.py）
+LLM_VISION_MAX_TOKENS = 4096               # 视觉描述生成 max_tokens
+LLM_VISION_TEMPERATURE = 0.2               # 视觉描述生成 temperature
+LLM_VISION_MIN_DESCRIPTION_LEN = 150       # 视觉描述最小合法长度，低于则视为异常
+LLM_VISION_PREFERRED_MIN_WIDTH = 800       # 选图时偏好的最小宽度阈值
+# URL 读取 / 意图判定（原散落于 urlReader.py / urlIntent.py）
+LLM_URL_RETRY_BACKOFF_SECONDS = 0.5        # URL 抓取重试退避（秒）
+LLM_URL_TOTAL_FETCH_DEADLINE = 15          # 单次 readURLContextsForUserText 总墙钟上限（秒）
+LLM_URL_INTENT_NEGATION_WINDOW = 32        # 否定前缀与 intent 词之间允许的字符窗口
+LLM_REPLY_CONTEXT_LIMIT = 300              # reply-to 文本注入 prompt 时的截断长度（字符）
+
+# AFC（自主工具调用）相关常量（原散落于 afc/executor.py / afcIntent.py）
+AFC_TOOL_TIMEOUT_SECONDS = 15              # 单次工具执行超时（秒），防工具卡死回复链
+AFC_MAX_CONTEXTUAL_MESSAGE_LEN = 10        # L4 延续判定：消息不超此长度且含指代词才继承上轮工具集
 
 
 

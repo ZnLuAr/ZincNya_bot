@@ -6,6 +6,7 @@ utils/command/llm/memoryCmd.py
 
 from handlers.cli import parseArgsTokens
 
+from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.llm import (
     addMemory,
     deleteMemory,
@@ -20,7 +21,6 @@ from utils.llm import (
     setMemoryEnabled,
     updateMemory,
 )
-from utils.core.logger import logAction, LogLevel, LogChildType
 
 
 

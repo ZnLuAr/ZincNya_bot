@@ -15,9 +15,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from config import LLM_REVIEW_FEEDBACK_MAX_LENGTH
+from config import LLM_REVIEW_FEEDBACK_MAX_LENGTH, LLM_MEMORY_MAX_ACTIONS
 
-from utils.llm.memory.action import MemoryAction, LLM_MEMORY_MAX_ACTIONS
+from utils.llm.memory.action import MemoryAction
 from utils.llm.review import (
     dispatchMemoryActions,
     dispatchMemoryActionsToConsole,

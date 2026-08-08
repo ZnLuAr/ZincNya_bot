@@ -47,6 +47,8 @@ from utils.llm.config import getModel
 
 _JUDGE_MAX_TOKENS = 256
 _JUDGE_TEMPERATURE = 0.0
+_EVAL_CONTENT_LEN = 120
+_PROGRESS_QUERY_LEN = 60
 
 
 async def _judge(systemPrompt: str, userPrompt: str, *, judgeModel: str) -> dict:
@@ -74,7 +76,7 @@ async def evalContextHit(query: str, reply: str, *, judgeModel: str) -> dict:
         return {"hit": None, "reason": "no_context_retrieved"}
 
     ctx = "\n".join(
-        f"- [{e['category']}] {e['title']}: {e['content'][:120]}"
+        f"- [{e['category']}] {e['title']}: {e['content'][:_EVAL_CONTENT_LEN]}"
         for e in entries
     )
     return await _judge(
@@ -165,7 +167,7 @@ async def main():
 
     results = []
     for i, query in enumerate(queries, 1):
-        print(f"[{i}/{len(queries)}] {query[:60]}", flush=True)
+        print(f"[{i}/{len(queries)}] {query[:_PROGRESS_QUERY_LEN]}", flush=True)
         result = await evalQuery(query, args.chatID, evalCtx, judgeModel=judgeModel)
         results.append(result)
 

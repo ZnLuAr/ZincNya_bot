@@ -54,17 +54,16 @@ Callback Data 格式
 
 
 
-import html
 from collections import OrderedDict
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CommandHandler, CallbackQueryHandler, ContextTypes
 
-from config import TODOS_ITEMS_PER_PAGE, TODOS_CONTENT_MAX_LENGTH
+from config import TODOS_ITEMS_PER_PAGE, TODOS_CONTENT_MAX_LENGTH, TODOS_MAX_CACHED_MESSAGES
 
 from utils.core.errorDecorators import handleTelegramErrors
 from utils.core.logger import logAction, LogLevel, LogChildType
-from utils.telegramHelpers import safeEditMessage
+from utils.telegramHelpers import escapeHtml, safeEditMessage
 from utils.todos.database import (
     addTodo, getTodos, getTodoByID,
     updateTodo, deleteTodo, markDone, reopenTodo, getTodosCount,
@@ -76,7 +75,6 @@ from utils.todos.utils import parseTime, parsePriority, PRIORITY_EMOJI, formatRe
 # 记录每个用户最后一条 /todos 列表消息，用于防刷屏
 # key: (chat_id, user_id), value: message_id
 # 使用 OrderedDict 实现 LRU，限制最大条目数防止内存泄漏
-_MAX_CACHED_MESSAGES = 1023
 _lastQueryMessages: OrderedDict[tuple[str, str], int] = OrderedDict()
 
 
@@ -135,7 +133,7 @@ async def handleTodosCommand(update: Update, context: ContextTypes.DEFAULT_TYPE)
         msg = await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
         # LRU: 如果超出限制，移除最旧的条目
-        if len(_lastQueryMessages) >= _MAX_CACHED_MESSAGES:
+        if len(_lastQueryMessages) >= TODOS_MAX_CACHED_MESSAGES:
             _lastQueryMessages.popitem(last=False)
         _lastQueryMessages[key] = msg.message_id
         return
@@ -172,7 +170,7 @@ async def handleTodosCommand(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await update.message.reply_text(
         f"好、记下来了喵——\n\n"
-        f"{html.escape(content)}{remindStr}\n\n"
+        f"{escapeHtml(content)}{remindStr}\n\n"
         f"优先级：{pri} {priority}",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("查看全部 todos", callback_data="todos:list:1")
@@ -218,7 +216,7 @@ async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
     chatID = str(update.effective_chat.id)
     userID = str(user.id)
     userName = user.username or user.first_name or str(user.id)
-    userTag = f"@{html.escape(userName)}"
+    userTag = f"@{escapeHtml(userName)}"
 
     # 统一解析 callback_data，防止 ValueError
     parts = query.data.split(':')
@@ -317,7 +315,7 @@ async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await markDone(todoID)
         await safeEditMessage(
             query.message,
-            f"✅ 那么就完成了喵——\n\n{html.escape(todo['content'])}",
+            f"✅ 那么就完成了喵——\n\n{escapeHtml(todo['content'])}",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("↩️ 返回列表", callback_data="todos:list:1")
             ]]),
@@ -357,7 +355,7 @@ async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         await safeEditMessage(
             query.message,
-            f"确定要删除这条待办吗？\n\n{html.escape(todo['content'])}",
+            f"确定要删除这条待办吗？\n\n{escapeHtml(todo['content'])}",
             reply_markup=InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("确认删除", callback_data=f"todos:del:{todoID}"),

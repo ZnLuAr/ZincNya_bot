@@ -25,6 +25,16 @@ from .database import (
 )
 
 
+# memory 列表预览截断长度
+_LIST_PREVIEW_LEN = 40
+
+# 操作结果提示在屏幕上的停留时间（秒）
+_ACTION_NOTICE_DELAY = 0.5
+
+# scope 排序优先级表（global → chat → user → session）
+_SCOPE_ORDER = {"global": 0, "chat": 1, "user": 2, "session": 3}
+
+
 
 
 async def editMemoryViaEditor(
@@ -140,7 +150,6 @@ class MemoryTUIController(ListMenuController):
         """
         rows = await getMemories(enabledOnly=False)
 
-        _SCOPE_ORDER = {"global": 0, "chat": 1, "user": 2, "session": 3}
         rows = sorted(
             rows,
             key=lambda r: (
@@ -155,8 +164,8 @@ class MemoryTUIController(ListMenuController):
 
         for row in rows:
             preview = row["content"].replace("\n", " ")
-            if len(preview) > 40:
-                preview = preview[:40] + "…"
+            if len(preview) > _LIST_PREVIEW_LEN:
+                preview = preview[:_LIST_PREVIEW_LEN] + "…"
 
             entries.append({
                 "isAddRow": False,
@@ -297,7 +306,7 @@ class MemoryTUIController(ListMenuController):
             if confirm.strip().lower() == "y":
                 ok = await deleteMemory(entry["id"])
                 print("✅ 已删除喵\n" if ok else "❌ 删除失败喵\n")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(_ACTION_NOTICE_DELAY)
                 await self.refreshEntries()
                 self.selected = min(self.selected, len(self.entries) - 1)
 
@@ -307,7 +316,7 @@ class MemoryTUIController(ListMenuController):
 
             if scopeType not in VALID_SCOPE_TYPES:
                 print(f"❌ 这个 scope 是无效的: {scopeType}\n")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(_ACTION_NOTICE_DELAY)
                 return True
 
             scopeID = None
@@ -315,7 +324,7 @@ class MemoryTUIController(ListMenuController):
                 scopeID = (await asyncInput(f"Scope ID ({scopeType}): ")).strip()
                 if not scopeID:
                     print("❌ scope ID 是不能为空的喵\n")
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(_ACTION_NOTICE_DELAY)
                     return True
 
             result = await editMemoryViaEditor()
@@ -326,7 +335,7 @@ class MemoryTUIController(ListMenuController):
             memoryID = await addMemory(scopeType, scopeID, content, tags=tags, priority=priority)
 
             print(f"✅ memory #{memoryID} 成功添加喵\n" if memoryID else "❌ 添加失败喵\n")
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(_ACTION_NOTICE_DELAY)
             await self.refreshEntries()
 
         elif actionType == "edit":
@@ -353,7 +362,7 @@ class MemoryTUIController(ListMenuController):
             if updateKwargs:
                 ok = await updateMemory(entry["id"], **updateKwargs)
                 print("✅ 更新成功喵\n" if ok else "❌ 更新失败喵\n")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(_ACTION_NOTICE_DELAY)
 
             await self.refreshEntries()
 

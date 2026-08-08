@@ -16,6 +16,9 @@ import asyncio
 
 from config import LLM_RATE_LIMIT_SECONDS, LLM_PENDING_MSG_LIMIT
 
+# chatScreen 状态栏预览截断长度
+_HINT_LEN = 16
+
 
 
 
@@ -50,7 +53,7 @@ def _formatReviewHint(item: dict) -> str:
         if content:
             # 转义换行符，避免底边栏被截断
             escaped = content.replace('\n', '\\n')
-            preview = escaped[:16] + "…" if len(escaped) > 16 else escaped
+            preview = escaped[:_HINT_LEN] + "…" if len(escaped) > _HINT_LEN else escaped
         elif memoryID is not None:
             preview = f"#{memoryID}"
         else:
@@ -60,7 +63,7 @@ def _formatReviewHint(item: dict) -> str:
     reply = item.get("reply") or ""
     # 转义换行符，避免底边栏被截断
     escaped = reply.replace('\n', '\\n')
-    preview = escaped[:16] + "…" if len(escaped) > 16 else escaped
+    preview = escaped[:_HINT_LEN] + "…" if len(escaped) > _HINT_LEN else escaped
     return f"当前操作的是：[回复] {preview}" if preview else "当前操作的是：[回复]"
 
 

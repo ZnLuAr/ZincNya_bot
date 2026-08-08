@@ -38,6 +38,10 @@ from telegram.ext import ApplicationHandlerStop
 from utils.core.errorHandler import getErrorHandler
 
 
+# 错误日志 context 中用户消息的截断长度
+_ERROR_KEY_LEN = 50
+
+
 
 
 class ErrorContext:
@@ -227,7 +231,7 @@ def handleTelegramErrors(func: Callable = None, *, errorReply: str = None):
                     errorType="TelegramHandler",
                     message=str(e),
                     exception=e,
-                    context=f"User: {user}, Message: {message[:50]}"
+                    context=f"User: {user}, Message: {message[:_ERROR_KEY_LEN]}"
                 )
 
                 # 回复用户友好的错误消息

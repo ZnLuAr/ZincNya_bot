@@ -13,13 +13,13 @@ Telegram 侧渲染模块。
 """
 
 
-import html
 from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import TODOS_ITEMS_PER_PAGE, TODOS_CONTENT_PREVIEW_LENGTH
 
+from utils.telegramHelpers import escapeHtml
 from utils.todos.utils import PRIORITY_EMOJI, formatRemindTime
 
 
@@ -47,7 +47,7 @@ def renderListView(
     # 空列表
     if not todos:
         text = (
-            f"@{html.escape(userName)} ……？喵（疑惑）\n\n"
+            f"@{escapeHtml(userName)} ……？喵（疑惑）\n\n"
             "你目前还没有交代给咱要提醒的事情哦……\n"
             "还是说想看看命令怎么用吗？\n"
             "那就键入 /todos help 吧——"
@@ -58,13 +58,13 @@ def renderListView(
         return text, keyboard
 
     # 构建列表文本
-    lines = [f"@{html.escape(userName)} 你有以下 todos 哦——\n"]
+    lines = [f"@{escapeHtml(userName)} 你有以下 todos 哦——\n"]
     offset = (page - 1) * TODOS_ITEMS_PER_PAGE
 
     for i, todo in enumerate(todos):
         num = offset + i + 1
         pri = PRIORITY_EMOJI.get(todo['priority'], '⚪')
-        previewText = html.escape(preview(todo['content']))
+        previewText = escapeHtml(preview(todo['content']))
         timeStr = f"    {formatRemindTime(todo['remind_time'])}" if todo['remind_time'] else ""
         line = f"{pri} {num}. {previewText}{timeStr}    - {todo['priority']}"
 
@@ -119,7 +119,7 @@ def renderDetailView(todo: dict) -> tuple[str, InlineKeyboardMarkup]:
     )
 
     text = (
-        f"{html.escape(todo['content'])}\n\n"
+        f"{escapeHtml(todo['content'])}\n\n"
         f"{remindLine}\n"
         f"优先级：{priEmoji} {pri} 喵\n\n"
         "按下面的按钮可以编辑哦——"

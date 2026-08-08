@@ -11,6 +11,8 @@ import asyncio
 import importlib
 from pathlib import Path
 
+import config
+
 
 # ── 索引与缓存 ──────────────────────────────────────
 
@@ -47,10 +49,6 @@ REFERENTIAL_WORDS = [
     "还",
     "也",
 ]
-
-
-# L4 上下文延续：仅当消息不超过此长度且含指代词时，才继承上一轮工具集
-MAX_CONTEXTUAL_MESSAGE_LEN = 10
 
 
 
@@ -183,7 +181,7 @@ def detectTools(message: str, chatID: str) -> set[str]:
         hits = _allToolNames.copy()
 
     # L4: 上下文延续（短消息 + 指代词 → 继承上一轮）
-    if not hits and len(message) <= MAX_CONTEXTUAL_MESSAGE_LEN:
+    if not hits and len(message) <= config.AFC_MAX_CONTEXTUAL_MESSAGE_LEN:
         if any(ref in message for ref in REFERENTIAL_WORDS):
             lastTools = _lastTriggeredTools.get(chatID, set())
             if lastTools:

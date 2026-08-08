@@ -71,7 +71,7 @@ import sqlite3
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
-from config import TODOS_DB_PATH
+from config import TODOS_DB_PATH, DB_TIMESTAMP_FORMAT
 
 from utils.core.database import Database
 from utils.core.schema import loadSchema
@@ -79,7 +79,7 @@ from utils.core.crypto import encryptText, decryptText
 from utils.core.logger import logSystemEvent, LogLevel
 
 
-TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"  # 数据库时间戳格式
+TIMESTAMP_FORMAT = DB_TIMESTAMP_FORMAT  # 数据库时间戳格式（复用 config）
 
 
 

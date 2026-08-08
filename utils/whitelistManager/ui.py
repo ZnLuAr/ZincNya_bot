@@ -18,6 +18,9 @@ from utils.inputHelper import asyncInput
 
 from .data import loadWhitelistFile, userOperation
 
+_COMMENT_PREVIEW_LEN = 15
+_ACTION_NOTICE_DELAY = 0.5
+
 
 
 
@@ -138,7 +141,7 @@ class WhitelistTUIController(ListMenuController):
                 else:
                     table.add_row("" , "[cyan](+)[/]" , "[dim]添加新用户[/]" , "")
             else:
-                commentPreview = "" if comment.strip() == "" else comment[:15] + ("..." if len(comment) > 15 else "")
+                commentPreview = "" if comment.strip() == "" else comment[:_COMMENT_PREVIEW_LEN] + ("..." if len(comment) > _COMMENT_PREVIEW_LEN else "")
                 displayNo = globalIdx - self.addRowOffset + 1
                 if isSelected:
                     table.add_row(f"[bold yellow]> {displayNo}[/]" , f"[bold yellow]{uid}[/]" , f"[bold yellow]{displayStatus}[/]" , f"[bold yellow]{commentPreview}[/]")
@@ -247,7 +250,7 @@ class WhitelistTUIController(ListMenuController):
                         print(f"已添加 {newUid} 到白名单")
                     else:
                         print(f"{newUid} 已在白名单中")
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(_ACTION_NOTICE_DELAY)
                     await self.refreshEntries()
             finally:
                 smcup()

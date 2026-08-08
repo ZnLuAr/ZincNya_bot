@@ -38,6 +38,7 @@ from utils.core.resourceManager import getResourceManager
 
 
 T = TypeVar("T")
+_BUSY_TIMEOUT_MS = 5000  # SQLite busy_timeout（ms）：并发写等待上限
 
 
 
@@ -61,7 +62,7 @@ class Database:
         """创建并配置 SQLite 连接"""
         conn = sqlite3.connect(self._dbPath)
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
         conn.row_factory = sqlite3.Row
         return conn
 

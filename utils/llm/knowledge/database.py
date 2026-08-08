@@ -13,12 +13,12 @@ import json
 from datetime import datetime
 from typing import Optional
 
-from config import LLM_KNOWLEDGE_DB_PATH
+from config import LLM_KNOWLEDGE_DB_PATH, DB_TIMESTAMP_FORMAT
 from utils.core.database import Database
 from utils.core.schema import loadSchema
 
 
-TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+TIMESTAMP_FORMAT = DB_TIMESTAMP_FORMAT  # 数据库时间戳格式（复用 config）
 
 
 # 模块级数据库实例

@@ -20,18 +20,28 @@ import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler
 
-from config import Permission, LLM_REVIEW_TTL_SECONDS, LLM_REVIEW_REPLY_PREVIEW_LEN
+from config import Permission, LLM_REVIEW_TTL_SECONDS, LLM_REVIEW_REPLY_PREVIEW_LEN, TG_MESSAGE_MAX_LEN
 
 from utils.core.errorDecorators import handleTelegramErrors
 from utils.llm.memory.action import MemoryAction, executeAction
 from utils.llm.review import dispatchMemoryActions, extractMemoryActionFields, reviewRetry, reviewRetryWithFeedback
 from utils.core.logger import logAction, LogLevel, LogChildType, logSystemEvent
 from utils.operators import hasPermission
-from utils.telegramHelpers import sendLLMReply, truncateText
+from utils.markdownToHtml import convertMarkdownToHtml
+from utils.telegramHelpers import escapeHtml, safeEditMessage, sendLLMReply, truncateText
 
 
-_TG_MAX_LEN = 4096  # Telegram 消息上限（平台硬限制，非项目配置）
+_TG_MAX_LEN = TG_MESSAGE_MAX_LEN  # Telegram 消息上限（平台硬约束，复用 config）
 _REPLY_PREVIEW_LEN = LLM_REVIEW_REPLY_PREVIEW_LEN
+
+# 审核卡片 / 结果 / 日志的截断长度（按显示需要设定，非业务阈值）
+_CARD_CONTENT_LEN = 500  # 记忆审核卡片中 content 的截断长度
+_RESULT_CONTENT_LEN = 300  # 批准结果回显中 content 的截断长度
+_LOG_LEN = 100  # 日志中截断展示的字符数
+_ORIGINAL_MSG_LEN = 1800  # 原始消息区截断长度（与 reply 预览同量级，控制卡片总长 < TG 上限）
+
+# 重复使用的动态后缀模板（记忆操作校验失败警告）
+_MEMORY_FAILED_WARNING = "\n\n⚠️ {} 个记忆操作校验失败，已丢弃"
 
 
 
@@ -95,18 +105,43 @@ def _truncate(text: str, limit: int) -> str:
     return truncateText(text, limit, suffix="……[内容过长，已截断]")
 
 
+def _renderOriginalMsgBlock(originalMsg: str) -> str:
+    """渲染原始消息区为 HTML blockquote。
+
+    originalMsg 可能是 _injectReplyTextContext 的输出（含 [引用的消息]/[当前用户消息]
+    标记 + <@sender>），拆成两个独立 blockquote 便于 ops 区分引用 vs 当前；否则整块
+    一个 blockquote。先截断原始文本再 escape（铁律：截断 → 转义 → 拼），避免断实体。
+    解析失败回退单 blockquote。
+    """
+    truncated = _truncate(originalMsg, _ORIGINAL_MSG_LEN)
+    replyMark = "[引用的消息]"
+    currentMark = "[当前用户消息]"
+    if replyMark in truncated and currentMark in truncated:
+        try:
+            replyPart, _, afterCurrent = truncated.partition(currentMark)
+            return (
+                f"<blockquote>{escapeHtml(replyPart.strip())}</blockquote>"
+                f"<blockquote>{escapeHtml(currentMark + chr(10) + afterCurrent.strip())}</blockquote>"
+            )
+        except Exception:
+            pass
+    return f"<blockquote>{escapeHtml(truncated)}</blockquote>"
+
+
 def _formatReviewText(originalMsg: str, reply: str) -> str:
-    """构造回复审核消息文本（自动截断超长内容）。保留为纯文本入口，供 +后缀 场景使用。"""
-    reply = _truncate(reply, _REPLY_PREVIEW_LEN)
-    text = (
-        f"[待审核]\n\n"
-        f"原始消息：\n{originalMsg}\n\n"
-        f"---\n"
-        f"{reply}\n"
-        f"---\n\n"
-        f"💡 回复此消息以 :edit 修改 / :fb 补充反馈喵"
+    """构造回复审核卡片 HTML（加粗标题 + blockquote + reply 渲染 Markdown）。
+
+    各动态段先截断原始再转义/渲染（铁律），整体不裸截断 escape 文本。
+    保留为纯文本入口（返回 HTML 字符串），供 _renderReviewCard 加 suffix 后发给 ops。
+    """
+    replyRendered = convertMarkdownToHtml(_truncate(reply, _REPLY_PREVIEW_LEN))
+    originalBlock = _renderOriginalMsgBlock(originalMsg)
+    return (
+        f"<b>待审核</b>\n\n"
+        f"<b>原始消息</b>\n{originalBlock}\n\n"
+        f"<b>回复</b>\n{replyRendered}\n\n"
+        f"<i>回复此消息以 :edit 修改 / :fb 补充反馈喵</i>"
     )
-    return _truncate(text, _TG_MAX_LEN)
 
 
 def _buildReviewKeyboard(chatID) -> InlineKeyboardMarkup:
@@ -136,31 +171,36 @@ def _renderReviewCard(originalMsg: str, reply: str, chatID, suffix: str = "") ->
 # ---------------------------------------------------------------------------
 
 def _formatMemoryReviewText(action: dict, originalMsg: str) -> str:
-    """构造记忆审核消息文本"""
+    """构造记忆审核卡片 HTML（字段加粗 + 触发消息 blockquote）。
+
+    各动态段先截断原始再 escape（铁律）。触发消息同样走 _renderOriginalMsgBlock
+    （用户 reply 触发记忆操作时，originalMsg 也可能含 [引用的消息]/[当前用户消息] 标记）。
+    """
     f = extractMemoryActionFields(action)
 
     lines = [
-        f"[记忆操作待审核] {f['actionType'].upper()}",
-        f"范围: {f['scopeType']}:{f['scopeID'] or 'global'}",
+        f"<b>记忆操作待审核 · {escapeHtml(f['actionType'].upper())}</b>",
+        "",
+        f"<b>范围</b>：{escapeHtml(f['scopeType'])}:{escapeHtml(f['scopeID'] or 'global')}",
     ]
     if f["memoryID"] is not None:
-        lines.append(f"目标 ID: #{f['memoryID']}")
+        lines.append(f"<b>目标 ID</b>：#{f['memoryID']}")
     if f["content"]:
-        displayContent = _truncate(f["content"], 500)
-        lines.append(f"内容: {displayContent}")
+        lines.append(f"<b>内容</b>：{escapeHtml(_truncate(f['content'], _CARD_CONTENT_LEN))}")
     if f["tags"]:
-        lines.append(f"标签: {', '.join(f['tags'])}")
+        lines.append(f"<b>标签</b>：{escapeHtml(', '.join(f['tags']))}")
     if f["priority"]:
-        lines.append(f"优先级: {f['priority']}")
+        lines.append(f"<b>优先级</b>：{f['priority']}")
     if f["reason"]:
-        lines.append(f"理由: {f['reason']}")
-    lines.append(f"\n触发消息: {originalMsg}")
+        lines.append(f"<b>理由</b>：{escapeHtml(_truncate(f['reason'], _CARD_CONTENT_LEN))}")
+    lines.append("")
+    lines.append("<b>触发消息</b>")
+    lines.append(_renderOriginalMsgBlock(originalMsg))
 
     if f["actionType"] in ("add", "update"):
-        lines.append("\n💡 回复此消息并以 :edit 开头修改记忆内容")
+        lines.append("\n<i>回复此消息并以 :edit 开头修改记忆内容</i>")
 
-    text = "\n".join(lines)
-    return _truncate(text, _TG_MAX_LEN)
+    return "\n".join(lines)
 
 
 def _buildMemoryReviewKeyboard(chatID) -> InlineKeyboardMarkup:
@@ -231,6 +271,7 @@ async def handleEditReply(message, context: ContextTypes.DEFAULT_TYPE) -> bool:
             message_id=replyToID,
             text=textEdit,
             reply_markup=markupEdit,
+            parse_mode="HTML",
         )
         await message.delete()
     return True
@@ -256,7 +297,7 @@ async def sendReviewMessage(
     """
     # 一次发送带 keyboard（callback_data 不含 msgID，无需先发再改）
     text, markup = _renderReviewCard(originalMsg, reply, chatID)
-    sent = await bot.send_message(chat_id=opsID, text=text, reply_markup=markup)
+    sent = await bot.send_message(chat_id=opsID, text=text, reply_markup=markup, parse_mode="HTML")
     reviewMsgID = sent.message_id
 
     # 存储审核状态（重启后失效可接受）
@@ -295,7 +336,7 @@ async def sendMemoryReviewMessage(
         chatID: 原始聊天 ID
     """
     text, markup = _renderMemoryReviewCard(action, originalMsg, chatID)
-    sent = await bot.send_message(chat_id=opsID, text=text, reply_markup=markup)
+    sent = await bot.send_message(chat_id=opsID, text=text, reply_markup=markup, parse_mode="HTML")
     reviewMsgID = sent.message_id
 
     _putMemoryReview(
@@ -385,7 +426,7 @@ async def handleReviewCallback(update: Update, context: ContextTypes.DEFAULT_TYP
     if len(parts) != 4 or query.message is None:
         await query.answer()
         if query.message is not None:
-            await query.edit_message_text("[无效的操作喵]")
+            await safeEditMessage(query.message, "[无效的操作喵]", parse_mode="HTML")
         return
     action, chatID = parts[2:]
     chatID = int(chatID)
@@ -395,7 +436,7 @@ async def handleReviewCallback(update: Update, context: ContextTypes.DEFAULT_TYP
     reviewData = context.bot_data.get(key)
     if not reviewData:
         await query.answer()
-        await query.edit_message_text("[消息已过期喵]")
+        await safeEditMessage(query.message, "[消息已过期喵]", parse_mode="HTML")
         return
 
     opsID = str(reviewData["opsID"])
@@ -414,13 +455,13 @@ async def handleReviewCallback(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
         sentText = (
-            "[消息已发送喵]\n\n"
-            "原始消息：\n"
-            f"{reviewData['originalMsg']}\n\n"
-            "---\n"
-            f"{reviewData['reply']}\n"
+            "<b>消息已发送</b>\n\n"
+            "<b>原始消息</b>\n"
+            f"{_renderOriginalMsgBlock(reviewData['originalMsg'])}\n\n"
+            "<b>回复</b>\n"
+            f"{convertMarkdownToHtml(_truncate(reviewData['reply'], _REPLY_PREVIEW_LEN))}"
         )
-        await query.edit_message_text(_truncate(sentText, _TG_MAX_LEN))
+        await safeEditMessage(query.message, _truncate(sentText, _TG_MAX_LEN), parse_mode="HTML")
 
         _deleteReviewEntry(context.bot_data, key)
         await logAction("System", f"LLM 生成内容审核通过：{chatID}", f"原文：{reviewData['originalMsg']}", LogLevel.INFO, LogChildType.WITH_CHILD)
@@ -436,22 +477,22 @@ async def handleReviewCallback(update: Update, context: ContextTypes.DEFAULT_TYP
                 logLabel="retry",
             )
         except Exception as e:
-            await context.bot.send_message(chat_id=opsID, text=f"重试失败：{e}")
+            await context.bot.send_message(chat_id=opsID, text=f"重试失败：{escapeHtml(str(e))}", parse_mode="HTML")
             return
 
         # memoryFailedCount 由 reviewRetry 写回（includeContext=False 时显式置 0）
         failedCount = newItem.get("memoryFailedCount", 0)
-        warningText = f"\n\n⚠️ {failedCount} 个记忆操作校验失败，已丢弃" if failedCount > 0 else ""
+        warningText = _MEMORY_FAILED_WARNING.format(failedCount) if failedCount > 0 else ""
         textRetry, markupRetry = _renderReviewCard(
             reviewData["originalMsg"], newItem["reply"], chatID, suffix=warningText,
         )
-        await query.edit_message_text(text=textRetry, reply_markup=markupRetry)
+        await safeEditMessage(query.message, textRetry, reply_markup=markupRetry, parse_mode="HTML")
         context.bot_data[key]["reply"] = newItem["reply"]
         await logAction("System", f"LLM 生成内容审核重试：{chatID}", f"原文：{reviewData['originalMsg']}", LogLevel.INFO, LogChildType.WITH_CHILD)
         await logAction("System", "", f"生成的消息：{newItem['reply']}", LogLevel.INFO, LogChildType.LAST_CHILD)
 
     elif action == "cancel":
-        await query.edit_message_text("[已取消]")
+        await safeEditMessage(query.message, "[已取消]", parse_mode="HTML")
         _deleteReviewEntry(context.bot_data, key)
         await logAction("System", f"LLM 生成内容审核取消：{chatID}", f"原文：{reviewData['originalMsg']}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
 
@@ -472,7 +513,7 @@ async def handleMemoryReviewCallback(update: Update, context: ContextTypes.DEFAU
     if len(parts) != 4 or query.message is None:
         await query.answer()
         if query.message is not None:
-            await query.edit_message_text("[无效的操作喵]")
+            await safeEditMessage(query.message, "[无效的操作喵]", parse_mode="HTML")
         return
     action, chatID = parts[2:]
     msgID = str(query.message.message_id)
@@ -481,7 +522,7 @@ async def handleMemoryReviewCallback(update: Update, context: ContextTypes.DEFAU
     reviewData = context.bot_data.get(key)
     if not reviewData:
         await query.answer()
-        await query.edit_message_text("[记忆审核已过期喵]")
+        await safeEditMessage(query.message, "[记忆审核已过期喵]", parse_mode="HTML")
         return
 
     opsID = str(reviewData["opsID"])
@@ -498,24 +539,24 @@ async def handleMemoryReviewCallback(update: Update, context: ContextTypes.DEFAU
         status = "成功" if success else "失败"
 
         resultText = (
-            f"[记忆操作已批准 - {status}]\n\n"
-            f"操作: {actionData.get('action', '?').upper()}\n"
-            f"范围: {actionData.get('scopeType', '?')}:{actionData.get('scopeID', 'global')}\n"
+            f"<b>记忆操作已批准 · {escapeHtml(status)}</b>\n\n"
+            f"<b>操作</b>：{escapeHtml(actionData.get('action', '?').upper())}\n"
+            f"<b>范围</b>：{escapeHtml(actionData.get('scopeType', '?'))}:{escapeHtml(actionData.get('scopeID', 'global'))}\n"
         )
         if actionData.get("content"):
-            resultText += f"内容: {_truncate(actionData['content'], 300)}\n"
-        await query.edit_message_text(_truncate(resultText, _TG_MAX_LEN))
+            resultText += f"<b>内容</b>：{escapeHtml(_truncate(actionData['content'], _RESULT_CONTENT_LEN))}\n"
+        await safeEditMessage(query.message, _truncate(resultText, _TG_MAX_LEN), parse_mode="HTML")
 
         _deleteReviewEntry(context.bot_data, key)
         await logAction(
             "System",
             f"LLM 记忆操作审核通过 ({status})",
-            f"action={actionData.get('action')}, scope={actionData.get('scopeType')}:{actionData.get('scopeID', '')}, content={str(actionData.get('content', ''))[:100]}",
+            f"action={actionData.get('action')}, scope={actionData.get('scopeType')}:{actionData.get('scopeID', '')}, content={str(actionData.get('content', ''))[:_LOG_LEN]}",
             LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
         )
 
     elif action == "cancel":
-        await query.edit_message_text("[记忆操作已取消]")
+        await safeEditMessage(query.message, "[记忆操作已取消]", parse_mode="HTML")
         _deleteReviewEntry(context.bot_data, key)
         await logAction(
             "System",
@@ -576,6 +617,7 @@ async def handleFeedbackRetry(message, context: ContextTypes.DEFAULT_TYPE) -> bo
         message_id=replyToID,
         text=generatingText,
         reply_markup=None,
+        parse_mode="HTML",
     )
 
     try:
@@ -589,7 +631,7 @@ async def handleFeedbackRetry(message, context: ContextTypes.DEFAULT_TYPE) -> bo
         )
     except Exception as e:
         # 恢复审核卡片（带按钮）；ValueError（反馈过长等用户可纠正错误）用友好 ⚠️，其余用 ❌
-        prefix = f"⚠️ {e}" if isinstance(e, ValueError) else f"❌ 生成失败喵：{e}"
+        prefix = f"⚠️ {escapeHtml(str(e))}" if isinstance(e, ValueError) else f"❌ 生成失败喵：{escapeHtml(str(e))}"
         recoverText, recoverMarkup = _renderReviewCard(
             originalMsg, currentReply, chatIDRetry, suffix=f"\n\n{prefix}",
         )
@@ -598,6 +640,7 @@ async def handleFeedbackRetry(message, context: ContextTypes.DEFAULT_TYPE) -> bo
             message_id=replyToID,
             text=recoverText,
             reply_markup=recoverMarkup,
+            parse_mode="HTML",
         )
         if not isinstance(e, ValueError):
             await logSystemEvent(
@@ -610,7 +653,7 @@ async def handleFeedbackRetry(message, context: ContextTypes.DEFAULT_TYPE) -> bo
 
     # 成功：memoryFailedCount 由 reviewRetryWithFeedback 写回
     failedCount = newItem.get("memoryFailedCount", 0)
-    warningText = f"\n\n⚠️ {failedCount} 个记忆操作校验失败，已丢弃" if failedCount > 0 else ""
+    warningText = _MEMORY_FAILED_WARNING.format(failedCount) if failedCount > 0 else ""
     textFb, markupFb = _renderReviewCard(
         originalMsg, newItem["reply"], chatIDRetry, suffix=warningText,
     )
@@ -619,6 +662,7 @@ async def handleFeedbackRetry(message, context: ContextTypes.DEFAULT_TYPE) -> bo
         message_id=replyToID,
         text=textFb,
         reply_markup=markupFb,
+        parse_mode="HTML",
     )
     context.bot_data[reviewKey]["reply"] = newItem["reply"]
     await message.delete()
@@ -626,7 +670,7 @@ async def handleFeedbackRetry(message, context: ContextTypes.DEFAULT_TYPE) -> bo
     await logAction(
         "System",
         "LLM Telegram 审核：补充反馈重试",
-        f"反馈：{feedback[:100]}",
+        f"反馈：{feedback[:_LOG_LEN]}",
         LogLevel.INFO,
         LogChildType.WITH_ONE_CHILD,
     )

@@ -24,6 +24,10 @@ from utils.llm.review import (
 from utils.llm.state import getReviewQueue
 
 
+# 编辑提示中当前内容的预览长度（截断展示）
+_CONTENT_PREVIEW_LEN = 100
+
+
 
 
 async def handleConsoleReview(bot):
@@ -88,7 +92,7 @@ end=""
 
         if kind == "memory":
             currentContent = item.get("action", {}).get("content") or ""
-            print(f"编辑记忆内容（当前：{currentContent[:100]}）：")
+            print(f"编辑记忆内容（当前：{currentContent[:_CONTENT_PREVIEW_LEN]}）：")
         else:
             print("编辑回复（Alt+Enter 提交，:q 取消）：")
 

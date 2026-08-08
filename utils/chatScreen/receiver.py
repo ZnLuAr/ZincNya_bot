@@ -17,6 +17,10 @@ from .formatter import getSenderName, extractDisplayText
 from .statusBar import getReviewQueueStatus
 
 
+# receiverLoop 单次 queue.get() 轮询超时，超时后顺带检查关机信号与审核队列
+_POLL_TIMEOUT_SECONDS = 0.5
+
+
 
 
 async def startReceiver(state, targetChatID: str, ui, queue: asyncio.Queue,
@@ -34,7 +38,7 @@ async def startReceiver(state, targetChatID: str, ui, queue: asyncio.Queue,
             while state.isInteractive():
                 try:
                     try:
-                        msg = await asyncio.wait_for(queue.get(), timeout=0.5)
+                        msg = await asyncio.wait_for(queue.get(), timeout=_POLL_TIMEOUT_SECONDS)
                     except asyncio.TimeoutError:
                         # 检测外部关机信号，强制退出 UI
                         if shutdownEvent.is_set():

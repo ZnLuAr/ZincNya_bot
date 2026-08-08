@@ -4,14 +4,10 @@ import random
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 
+import config
 from utils.core.errorDecorators import handleTelegramErrors
 from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.nyaQuoteManager.data import getRandomQuote
-
-
-# 多条消息之间的发送间隔范围（秒）
-MESSAGE_DELAY_MIN = 1
-MESSAGE_DELAY_MAX = 3
 
 
 
@@ -44,7 +40,7 @@ async def sendNya(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # 如果还有后续消息，等待一段时间再发送
             if i < len(messages) - 1:
-                delay = round(random.uniform(MESSAGE_DELAY_MIN , MESSAGE_DELAY_MAX) , 2)
+                delay = round(random.uniform(config.NYA_MESSAGE_DELAY_MIN , config.NYA_MESSAGE_DELAY_MAX) , 2)
                 await asyncio.sleep(delay)
 
 

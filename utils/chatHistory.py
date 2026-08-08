@@ -89,6 +89,7 @@ from typing import List, Optional
 
 from config import (
     DB_PATH,
+    DB_TIMESTAMP_FORMAT,
     CHAT_BACKUP_DIR,
     CHAT_HISTORY_LIMIT,
 )
@@ -100,7 +101,7 @@ from utils.core.logger import logSystemEvent, LogLevel
 
 
 TIMESTAMP_FORMAT_DATE = "%Y%m%d"                # 归档文件名日期格式
-TIMESTAMP_FORMAT_DATETIME = "%Y-%m-%d %H:%M:%S" # 数据库时间戳格式
+TIMESTAMP_FORMAT_DATETIME = DB_TIMESTAMP_FORMAT  # 数据库时间戳格式（复用 config）
 TIMESTAMP_FORMAT_DISPLAY = "%Y/%m/%d"           # 日期分隔符显示格式
 
 

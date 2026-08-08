@@ -103,6 +103,11 @@ _TOOLS_DIR_REL = os.path.join("utils", "afc", "tools")
 _TESTS_TOOLS_DIR_REL = os.path.join("tests", "utils", "afc", "tools")
 _TOOL_ID_RE = re.compile(r"^[a-z0-9_]+$")
 
+# ── 显示/网络相关阈值 ────────────────────────────────
+_PREVIEW_ITEM_COUNT = 3                # list --full 触发词预览上限（关键词/正则各显示前 N 个）
+_HTTP_TIMEOUT_SECONDS = 15             # GitHub API / raw 抓取超时（urlopen）
+_RESPONSE_MAX_BYTES = 1024 * 1024      # 单次响应读取上限（commits API 等）
+
 
 
 
@@ -253,8 +258,8 @@ def _printFullDetail(toolName, info):
         if items is None:
             print(f"      {label}：(无法静态解析)")
             return
-        shown = ", ".join(items[:3])
-        suffix = f" ... (共 {len(items)} 个)" if len(items) > 3 else f" (共 {len(items)} 个)"
+        shown = ", ".join(items[:_PREVIEW_ITEM_COUNT])
+        suffix = f" ... (共 {len(items)} 个)" if len(items) > _PREVIEW_ITEM_COUNT else f" (共 {len(items)} 个)"
         print(f"      {label}：{shown}{suffix}")
 
     if parseable:
@@ -742,7 +747,7 @@ def _downloadWithLimit(url, destPath, maxBytes):
     ok = False
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "ZincNya-afc-tools"})
-        with urllib.request.urlopen(req, timeout=15) as response:
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_SECONDS) as response:
             with open(destPath, "wb") as f:
                 total = 0
                 while True:
@@ -786,7 +791,7 @@ def _fetchRemoteManifest(user, repo, branches):
         manifestUrl = f"{_RAW_BASE_URL}/{user}/{repo}/{tryBranch}/afcTool.json"
         try:
             req = urllib.request.Request(manifestUrl, headers={"User-Agent": "ZincNya-afc-tools"})
-            with urllib.request.urlopen(req, timeout=15) as response:
+            with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_SECONDS) as response:
                 raw = response.read(_MANIFEST_MAX_BYTES + 1)
         except Exception:
             continue  # 分支不存在或网络错误，尝试下一分支
@@ -1112,8 +1117,8 @@ def _fetchRemoteSha(user, repo, branch):
             "Accept": "application/vnd.github+json",
         })
         # 响应含 files 数组，大 commit 可能超百 KB——放宽到 1MB 防快车道误不命中
-        with urllib.request.urlopen(req, timeout=15) as response:
-            data = json.loads(response.read(1024 * 1024).decode("utf-8"))
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_SECONDS) as response:
+            data = json.loads(response.read(_RESPONSE_MAX_BYTES).decode("utf-8"))
         sha = data.get("sha") if isinstance(data, dict) else None
         return sha if isinstance(sha, str) else None
     except Exception:

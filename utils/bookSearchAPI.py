@@ -163,6 +163,10 @@ from config import (
 from utils.core.resourceManager import getResourceManager
 
 
+# 详情页主题标签的最大保留数量（限制输出条数）
+_MAX_SUBJECTS = 5
+
+
 # ============================================================================
 # 全局 aiohttp Session（复用连接池）
 # ============================================================================
@@ -465,7 +469,7 @@ async def getBookDetail(workId: str) -> Optional[dict]:
     coverId = covers[0] if covers else None
 
     # 解析主题标签（限制数量）
-    subjects = data.get("subjects" , [])[:5]
+    subjects = data.get("subjects" , [])[:_MAX_SUBJECTS]
 
     return {
         "id": workId,

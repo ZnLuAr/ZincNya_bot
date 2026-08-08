@@ -7,6 +7,7 @@ utils/command/llm/knowledgeCmd.py
 
 
 
+from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.llm import (
     getKnowledgeEnabled,
     getKnowledgeEntries,
@@ -19,7 +20,10 @@ from utils.llm import (
     setKnowledgeMaxResults,
     setKnowledgeMinScore,
 )
-from utils.core.logger import logAction, LogLevel, LogChildType
+
+
+_TAG_DISPLAY_LIMIT = 5
+_CONTENT_PREVIEW_LEN = 100
 
 
 
@@ -67,9 +71,9 @@ async def _handleKnowledgeCommand(args):
                     return
                 print(f"[Knowledge] 条目列表{f'（分类：{category}）' if category else ''}：")
                 for entry in entries:
-                    tags = ", ".join(entry["tags"][:5]) if entry["tags"] else "-"
-                    if len(entry["tags"]) > 5:
-                        tags += f" +{len(entry['tags']) - 5}"
+                    tags = ", ".join(entry["tags"][:_TAG_DISPLAY_LIMIT]) if entry["tags"] else "-"
+                    if len(entry["tags"]) > _TAG_DISPLAY_LIMIT:
+                        tags += f" +{len(entry['tags']) - _TAG_DISPLAY_LIMIT}"
                     print(f"  #{entry['id']} [{entry['category']}] p={entry['priority']} {'ON' if entry['enabled'] else 'OFF'}")
                     print(f"     {entry['title']}")
                     print(f"     tags: {tags}")
@@ -108,8 +112,8 @@ async def _handleKnowledgeCommand(args):
                 print(f"[Knowledge] 检索结果（查询：{query}）：\n")
                 for i, entry in enumerate(results, 1):
                     print(f"{i}. [{entry['category']}] {entry['title']} (分数: {entry['score']:.2f})")
-                    content = entry["content"][:100].replace("\n", " ")
-                    if len(entry["content"]) > 100:
+                    content = entry["content"][:_CONTENT_PREVIEW_LEN].replace("\n", " ")
+                    if len(entry["content"]) > _CONTENT_PREVIEW_LEN:
                         content += "..."
                     print(f"   {content}")
                     print()

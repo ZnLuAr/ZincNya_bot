@@ -16,6 +16,7 @@ from config import (
     DELETE_DELAY,
     GIF_QUEUE_ALERT_THRESHOLD,
     GIF_ALERT_COOLDOWN,
+    STICKER_MAX_CACHE,
     Permission,
 )
 
@@ -33,7 +34,6 @@ from utils.operators import getOperatorsWithPermission, hasPermission
 # 贴纸缓存（模块内管理，带 TTL）
 # ============================================================================
 
-_MAX_STICKER_CACHE = 50
 _stickerCache: dict[str, tuple[Any, float]] = {}
 _stickerLock = threading.RLock()
 
@@ -65,7 +65,7 @@ def setCachedSticker(setName: str, stickerSet: Any):
             del _stickerCache[k]
 
         # 超过上限时移除最旧的条目
-        if len(_stickerCache) >= _MAX_STICKER_CACHE:
+        if len(_stickerCache) >= STICKER_MAX_CACHE:
             oldest = min(_stickerCache, key=lambda k: _stickerCache[k][1])
             del _stickerCache[oldest]
 

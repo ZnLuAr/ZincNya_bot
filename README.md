@@ -683,6 +683,7 @@ python scripts/merge_data.py --source /path/to/other/data --apply
 - [**TUI 框架**](docs/tui.md) — 会话契约 `TUISession` + 开放范式库（listMenu/fullScreen/textEditor）总纲
 - [**chatScreen 聊天界面**](docs/chatScreen.md) — 控制台全屏交互式聊天界面技术文档（fullScreen 范式实例）
 - [**测试体系**](tests/README.md) — pytest 配置、fixture 使用、测试命令
+- [**常量归属指南**](docs/constant-guidelines.md) — config/模块级/函数内三层归属判据、命名约定、scripts 与基础设施边界
 
 ---
 

@@ -18,7 +18,7 @@ import json
 from datetime import datetime
 from typing import Any, Optional
 
-from config import LLM_MEMORY_DB_PATH
+from config import LLM_MEMORY_DB_PATH, DB_TIMESTAMP_FORMAT
 
 from utils.core.database import Database
 from utils.core.schema import loadSchema
@@ -27,7 +27,7 @@ from utils.core.logger import logSystemEvent, LogLevel
 from utils.llm.promptSafety import neutralizePromptDelimiters
 
 
-TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+TIMESTAMP_FORMAT = DB_TIMESTAMP_FORMAT  # 数据库时间戳格式（复用 config）
 MEMORY_SCOPE_GLOBAL = "global"
 MEMORY_SCOPE_CHAT = "chat"
 MEMORY_SCOPE_USER = "user"

@@ -163,6 +163,16 @@ def _buildSecretPattern():
 _SECRET_RE = _buildSecretPattern()
 
 
+# 错误聚合 key 的消息截取长度（避免微小差异导致无法聚合）
+_ERROR_KEY_LEN = 50
+# 终端摘要的消息截取长度
+_ERROR_SUMMARY_LEN = 60
+# 日志文件分隔线宽度
+_SEPARATOR_WIDTH = 70
+# unraisable hook 中 object 字符串截取长度
+_UNRAISABLE_LEN = 120
+
+
 def _redactSecrets(text: str) -> str:
     if _SECRET_RE is None:
         return text
@@ -220,8 +230,8 @@ class ErrorHandler:
 
     def getErrorKey(self , errorType: str , message: str) -> str:
         """生成错误的唯一标识（用于计数）"""
-        # 截取消息前 50 个字符作为 key，避免微小差异导致无法聚合
-        shortMessage = message[:50] if message else ""
+        # 截取消息前若干字符作为 key，避免微小差异导致无法聚合
+        shortMessage = message[:_ERROR_KEY_LEN] if message else ""
         return f"{errorType}:{shortMessage}"
 
 
@@ -250,7 +260,7 @@ class ErrorHandler:
             count = self.errorCounts[errorKey]
 
         # 终端显示简洁摘要（在锁外执行 I/O）
-        shortMessage = message[:60] + "..." if len(message) > 60 else message
+        shortMessage = message[:_ERROR_SUMMARY_LEN] + "..." if len(message) > _ERROR_SUMMARY_LEN else message
         if count > 1:
             safePrint(f"记录了 {errorType}: {shortMessage} 喵 (今日第 {count} 次喵)\n")
         else:
@@ -279,7 +289,7 @@ class ErrorHandler:
 
         lines = [
             "",
-            "═" * 70,
+            "═" * _SEPARATOR_WIDTH,
             f"[{timestamp}] {errorType}",
             message,
         ]
@@ -288,11 +298,11 @@ class ErrorHandler:
             lines.append(f"Context: {context}")
 
         if exception:
-            lines.append("─" * 70)
+            lines.append("─" * _SEPARATOR_WIDTH)
             tbLines = traceback.format_exception(type(exception) , exception , exception.__traceback__)
             lines.extend([_redactSecrets(line.rstrip()) for line in tbLines])
 
-        lines.append("═" * 70)
+        lines.append("═" * _SEPARATOR_WIDTH)
 
         try:
             with open(logPath , "a" , encoding="utf-8") as f:
@@ -325,7 +335,7 @@ class ErrorHandler:
         # 从 object 提取来源信息作为 context
         objStr = ""
         if unraisable.object is not None:
-            objStr = str(unraisable.object)[:120]
+            objStr = str(unraisable.object)[:_UNRAISABLE_LEN]
 
         self.logError(
             errorType=excType,

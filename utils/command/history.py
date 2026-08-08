@@ -52,14 +52,23 @@ from config import CHAT_EXPORT_DIR, CHAT_PREVIEW_LIMIT
 
 from handlers.cli import parseArgsTokens
 
+from utils.core.logger import logAction, LogLevel, LogChildType, logSystemEvent
 from utils.chatHistory import (
     loadHistory,
     getChatList,
     getMessageCount,
     iterMessagesWithDateMarkers,
 )
-from utils.core.logger import logAction, LogLevel, LogChildType, logSystemEvent
 from utils.whitelistManager.data import loadWhitelistFile
+
+
+# 会话列表表格布局常量族
+_COL_WIDTH_CHAT_ID    = 20  # Chat ID 列宽
+_COL_WIDTH_COMMENT    = 12  # 备注列宽
+_COL_WIDTH_MSG_COUNT  = 8   # 消息数列宽
+_COMMENT_TRUNCATE_LEN = 10  # 备注截断长度（超出加省略号）
+_SEPARATOR_WIDTH      = 70  # 表格分隔线长度
+
 
 
 
@@ -146,11 +155,11 @@ async def _listChats():
         for uid, obj in wl.get(section, {}).items():
             comment = obj.get("comment", "")
             if comment:
-                commentMap[uid] = comment[:10] + ("…" if len(comment) > 10 else "")
+                commentMap[uid] = comment[:_COMMENT_TRUNCATE_LEN] + ("…" if len(comment) > _COMMENT_TRUNCATE_LEN else "")
 
-    print(f"{'─' * 70}")
-    print(f"  {'Chat ID':<20}  {'备注':<12}  {'消息数':>8}  {'最后消息时间'}")
-    print(f"{'─' * 70}")
+    print(f"{'─' * _SEPARATOR_WIDTH}")
+    print(f"  {'Chat ID':<_COL_WIDTH_CHAT_ID}  {'备注':<_COL_WIDTH_COMMENT}  {'消息数':>_COL_WIDTH_MSG_COUNT}  {'最后消息时间'}")
+    print(f"{'─' * _SEPARATOR_WIDTH}")
 
     for chat in chats:
         cid   = chat["chat_id"]
@@ -158,9 +167,9 @@ async def _listChats():
         ts    = chat["last_message_time"]
         ts_str = ts.strftime("%Y-%m-%d %H:%M:%S") if ts else "未知"
         name  = commentMap.get(cid, "")
-        print(f"  {cid:<20}  {name:<12}  {count:>8}  {ts_str}")
+        print(f"  {cid:_COL_WIDTH_CHAT_ID}  {name:_COL_WIDTH_COMMENT}  {count:>_COL_WIDTH_MSG_COUNT}  {ts_str}")
 
-    print(f"{'─' * 70}")
+    print(f"{'─' * _SEPARATOR_WIDTH}")
     print(f"  共 {len(chats)} 个会话，使用 -c <chatID> 预览消息喵\n")
 
 

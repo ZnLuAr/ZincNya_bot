@@ -4,9 +4,24 @@ utils/telegramHelpers.py
 Telegram 消息操作的公共工具函数。
 """
 
+from html import escape as _htmlEscape
+
 from telegram.error import BadRequest
 
+from config import TG_MESSAGE_MAX_LEN
+
 from utils.markdownToHtml import convertMarkdownToHtml
+
+
+
+
+def escapeHtml(text: str) -> str:
+    """转义 HTML 特殊字符（& < >），用于 TG HTML parse_mode 的动态文本拼接。
+
+    封装标准库 html.escape(quote=False)——只转义 & < >，不转义引号（卡片正文用，
+    非属性值）。emoji 等普通 Unicode 字符不受影响，原样保留。
+    """
+    return _htmlEscape(text, quote=False)
 
 
 
@@ -92,7 +107,7 @@ def truncateText(text: str, limit: int, *, suffix: str = "…") -> str:
 
 
 
-def prepareMarkdownReply(reply: str, maxLength: int = 4096) -> tuple[str, str]:
+def prepareMarkdownReply(reply: str, maxLength: int = TG_MESSAGE_MAX_LEN) -> tuple[str, str]:
     """
     准备 LLM 回复文本：转换 Markdown → HTML
 
@@ -124,7 +139,7 @@ async def sendLLMReply(
     chatID: str | int,
     reply: str,
     replyToMessageID: int | None = None,
-    maxLength: int = 4096,
+    maxLength: int = TG_MESSAGE_MAX_LEN,
 ) -> None:
     """
     发送 LLM 回复：转换 Markdown → HTML + 自动错误降级

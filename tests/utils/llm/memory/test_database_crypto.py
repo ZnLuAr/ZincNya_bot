@@ -16,13 +16,13 @@ import pytest
 from unittest.mock import patch
 
 import utils.core.crypto as crypto
+from utils.core.crypto import decryptText
 from utils.llm.memory.database import (
     addMemory,
     getMemoryByID,
     getMemories,
     updateMemory,
 )
-from utils.core.crypto import decryptText
 
 
 @pytest.fixture

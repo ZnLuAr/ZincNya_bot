@@ -11,8 +11,9 @@ LLM 审核共享操作。
     - kind == "memory"：LLM 自主记忆操作审核
 """
 
-from config import LLM_REVIEW_FEEDBACK_MAX_LENGTH
+from config import LLM_REVIEW_FEEDBACK_MAX_LENGTH, LLM_MEMORY_MAX_ACTIONS
 
+from utils.core.logger import logAction, LogLevel, LogChildType, logSystemEvent
 from utils.llm.client import generateReply
 from utils.llm.config import getMemoryAutoApprove
 from utils.llm.memory.action import (
@@ -21,12 +22,15 @@ from utils.llm.memory.action import (
     executeAction,
     formatActionDetail,
     parseMemoryActions,
-    LLM_MEMORY_MAX_ACTIONS,
     validateAction,
 )
 from utils.llm.state import addMemoryReviewItem
-from utils.core.logger import logAction, LogLevel, LogChildType, logSystemEvent
 from utils.telegramHelpers import sendLLMReply
+
+
+_DISPLAY_LIMIT = 200  # 展示用文本截断长度（memory 内容 / reply / 编辑后预览）
+_LOG_FEEDBACK_LEN = 100  # 日志中反馈补充文本的预览长度
+_LOG_CONTENT_LEN = 80  # 日志中记忆操作 content 的预览长度
 
 
 
@@ -94,7 +98,7 @@ def formatReviewItemText(item: dict) -> str:
         if f["memoryID"] is not None:
             lines.append(f"  目标 ID: #{f['memoryID']}")
         if f["content"]:
-            displayContent = f["content"] if len(f["content"]) <= 200 else f["content"][:200] + "..."
+            displayContent = f["content"] if len(f["content"]) <= _DISPLAY_LIMIT else f["content"][:_DISPLAY_LIMIT] + "..."
             lines.append(f"  内容: {displayContent}")
         if f["tags"]:
             lines.append(f"  标签: {', '.join(f['tags'])}")
@@ -107,7 +111,7 @@ def formatReviewItemText(item: dict) -> str:
 
     # kind == "reply"
     reply = item.get("reply", "")
-    displayReply = reply if len(reply) <= 200 else reply[:200] + "..."
+    displayReply = reply if len(reply) <= _DISPLAY_LIMIT else reply[:_DISPLAY_LIMIT] + "..."
     return (
         f"[回复审核]\n"
         f"  原始消息: {item.get('originalMsg', '?')}\n"
@@ -207,7 +211,6 @@ async def dispatchMemoryActionsToConsole(actions, *, chatID, originalMsg, opsID,
             f"{len(actions)} 个操作已加入 console 审核队列",
             LogLevel.INFO,
         )
-
 
 
 async def dispatchMemoryActions(
@@ -383,7 +386,7 @@ async def reviewRetryWithFeedback(
     await logAction(
         "System",
         "LLM 控制台审核：补充反馈重试",
-        f"补充：{trimmed[:100]}", LogLevel.INFO, LogChildType.WITH_CHILD,
+        f"补充：{trimmed[:_LOG_FEEDBACK_LEN]}", LogLevel.INFO, LogChildType.WITH_CHILD,
     )
     await logAction(
         "System", "",
@@ -401,7 +404,7 @@ async def _approveMemoryReview(item: dict) -> bool:
     if action.memoryID is not None:
         detail += f", id=#{action.memoryID}"
     if action.content:
-        detail += f", content={action.content[:80]}"
+        detail += f", content={action.content[:_LOG_CONTENT_LEN]}"
     await logAction(
         "System", f"LLM 控制台审核：记忆操作 {action.action} {status}",
         detail,
@@ -514,7 +517,7 @@ async def reviewEditSubmit(item: dict, editedText: str) -> dict:
         await logAction(
             "System",
             "LLM 控制台审核：记忆操作编辑完成",
-            f"编辑后：{editedText[:200]}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
+            f"编辑后：{editedText[:_DISPLAY_LIMIT]}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
         )
         return editedItem
 
@@ -526,6 +529,6 @@ async def reviewEditSubmit(item: dict, editedText: str) -> dict:
     )
     await logAction(
         "System", "",
-        f"编辑后：{editedText[:200]}", LogLevel.INFO, LogChildType.LAST_CHILD,
+        f"编辑后：{editedText[:_DISPLAY_LIMIT]}", LogLevel.INFO, LogChildType.LAST_CHILD,
     )
     return editedItem

@@ -129,9 +129,6 @@ _renderListView(query , searchResult) -> tuple[str , InlineKeyboardMarkup]
 _hashQuery(query) -> str
     生成搜索词的 MD5 短哈希（BOOK_QUERY_HASH_LENGTH 位）
 
-_escapeHtml(text) -> str
-    转义 HTML 特殊字符（& < >）
-
 safeEditMessage(message , text , **kwargs) -> bool
     安全地编辑消息，忽略"消息未修改"错误
 
@@ -153,9 +150,16 @@ from telegram.ext import (
 
 from config import BOOK_ITEMS_PER_PAGE, BOOK_QUERY_HASH_LENGTH
 
-from utils.bookSearchAPI import searchBooks
 from utils.core.errorDecorators import handleTelegramErrors
-from utils.telegramHelpers import safeEditMessage, truncateText
+from utils.bookSearchAPI import searchBooks
+from utils.telegramHelpers import escapeHtml, safeEditMessage, truncateText
+
+
+# 字段截断长度（搜索结果列表显示用）
+_QUERY_LEN = 20
+_TITLE_LEN = 40
+_AUTHORS_LEN = 25
+_MAX_AUTHORS_SHOWN = 2
 
 
 
@@ -163,16 +167,6 @@ from utils.telegramHelpers import safeEditMessage, truncateText
 def _hashQuery(query: str) -> str:
     """生成搜索词的短哈希"""
     return hashlib.md5(query.encode()).hexdigest()[:BOOK_QUERY_HASH_LENGTH]
-
-
-def _escapeHtml(text: str) -> str:
-    """转义 HTML 特殊字符"""
-    return (text
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;"))
-
-
 
 
 def _renderListView(query: str , searchResult: dict) -> tuple[str , InlineKeyboardMarkup]:
@@ -192,7 +186,7 @@ def _renderListView(query: str , searchResult: dict) -> tuple[str , InlineKeyboa
 
     # 处理错误
     if error:
-        text = f"⚠️ 搜索出错了喵：{_escapeHtml(error)}"
+        text = f"⚠️ 搜索出错了喵：{escapeHtml(error)}"
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("✖ 关闭" , callback_data="book:close")
         ]])
@@ -200,28 +194,28 @@ def _renderListView(query: str , searchResult: dict) -> tuple[str , InlineKeyboa
 
     # 处理无结果
     if total == 0:
-        text = f"📭 没有找到「{_escapeHtml(query)}」相关的书籍喵……\n\n试试换个关键词？"
+        text = f"📭 没有找到「{escapeHtml(query)}」相关的书籍喵……\n\n试试换个关键词？"
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("✖ 关闭" , callback_data="book:close")
         ]])
         return text , keyboard
 
     # 构建列表文本（HTML 格式）
-    lines = [f"📚 搜索「{_escapeHtml(truncateText(query, 20))}」- 找到 {total} 本喵\n"]
+    lines = [f"📚 搜索「{escapeHtml(truncateText(query, _QUERY_LEN))}」- 找到 {total} 本喵\n"]
 
     for book in results:
-        title = truncateText(book["title"], 40)
-        authors = " , ".join(book["authors"][:2]) if book["authors"] else "Unknown"
-        authors = truncateText(authors, 25)
+        title = truncateText(book["title"], _TITLE_LEN)
+        authors = " , ".join(book["authors"][:_MAX_AUTHORS_SHOWN]) if book["authors"] else "Unknown"
+        authors = truncateText(authors, _AUTHORS_LEN)
         year = book["year"] or "?"
         lang = book["language"] or "?"
 
         # 生成 Open Library 链接（转义 URL 中的特殊字符）
-        bookUrl = f"https://openlibrary.org/works/{_escapeHtml(book['id'])}"
+        bookUrl = f"https://openlibrary.org/works/{escapeHtml(book['id'])}"
 
         # 使用 HTML 超链接格式
-        lines.append(f"📖 <a href=\"{bookUrl}\">{_escapeHtml(title)}</a>")
-        lines.append(f"   {_escapeHtml(authors)} · {year} · {lang}\n")
+        lines.append(f"📖 <a href=\"{bookUrl}\">{escapeHtml(title)}</a>")
+        lines.append(f"   {escapeHtml(authors)} · {year} · {lang}\n")
 
     lines.append(f"第 {page}/{totalPages} 页")
 

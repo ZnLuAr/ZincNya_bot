@@ -84,6 +84,7 @@ VALID_MEMORY_SCOPE_TYPES = {"global", "chat", "user", "session"}
 VALID_MEMORY_SOURCES = {"manual", "inferred"}
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 TIMESTAMP_SHORT_FORMAT = "%Y%m%d%H%M%S"
+_BUSY_TIMEOUT_MS = 5000  # SQLite busy_timeout（ms），与 utils/core/database.py 同源（script 不 import config 避免触发 BOT_TOKEN 检查）
 
 SCHEMA_DIR = PROJECT_ROOT / "utils" / "core" / "schema"
 
@@ -233,7 +234,7 @@ def build_context(args: argparse.Namespace) -> ScriptContext:
 def connect_readonly(db_path: Path) -> sqlite3.Connection:
     uri = f"{db_path.resolve().as_uri()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -242,7 +243,7 @@ def connect_readonly(db_path: Path) -> sqlite3.Connection:
 
 def connect_writable(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
     return conn

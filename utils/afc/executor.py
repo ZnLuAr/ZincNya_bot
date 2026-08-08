@@ -11,13 +11,13 @@ import json
 import asyncio
 import inspect
 
+from config import AFC_TOOL_TIMEOUT_SECONDS
+
 from utils.core.logger import logSystemEvent, LogLevel
 
 from utils.afc.registry import getToolsSchema, getToolCallable, getAllToolNames
 
 
-# 单次工具执行的超时（秒）；防止某个 skill 卡死整条回复链
-_TOOL_TIMEOUT_SECONDS = 15
 
 
 def _resolveFuncName(toolName: str, action: dict) -> str:
@@ -99,12 +99,12 @@ async def execute(actionJSON: str) -> str:
     # ── 5. 执行（带超时）──
     try:
         if inspect.iscoroutinefunction(func):
-            result = await asyncio.wait_for(func(**params), timeout=_TOOL_TIMEOUT_SECONDS)
+            result = await asyncio.wait_for(func(**params), timeout=AFC_TOOL_TIMEOUT_SECONDS)
         else:
             # 同步函数丢到线程池，避免阻塞事件循环
             result = await asyncio.wait_for(
                 asyncio.to_thread(func, **params),
-                timeout=_TOOL_TIMEOUT_SECONDS,
+                timeout=AFC_TOOL_TIMEOUT_SECONDS,
             )
     except asyncio.TimeoutError:
         await logSystemEvent("AFC 执行超时", f"{toolName}.{funcName}", LogLevel.WARNING)

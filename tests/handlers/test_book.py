@@ -13,8 +13,8 @@ from handlers.book import (
     handleBookCallback,
     register,
     _hashQuery,
-    _escapeHtml,
 )
+from utils.telegramHelpers import escapeHtml
 
 
 # ============================================================================
@@ -295,9 +295,9 @@ class TestBookHelpers:
 
     def test_escape_html_special_chars(self):
         """HTML 转义特殊字符"""
-        assert _escapeHtml("<script>") == "&lt;script&gt;"
-        assert _escapeHtml("A & B") == "A &amp; B"
-        assert _escapeHtml("5 > 3") == "5 &gt; 3"
+        assert escapeHtml("<script>") == "&lt;script&gt;"
+        assert escapeHtml("A & B") == "A &amp; B"
+        assert escapeHtml("5 > 3") == "5 &gt; 3"
 
     def test_hash_query_consistency(self):
         """相同搜索词生成相同哈希"""

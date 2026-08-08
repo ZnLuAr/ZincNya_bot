@@ -7,6 +7,8 @@ LLM 回复生成编排逻辑：
     - 通过 urlContexts 透传低信任 URL 内容到 contextBuilder
 """
 
+import config
+
 from utils.core.logger import logSystemEvent, LogLevel, LogChildType
 
 from ..config import getForceFallbackPrompt, loadPrompts, loadLLMConfig, _FALLBACK_PROMPTS
@@ -17,9 +19,10 @@ from ._request import requestWithRetry
 from ._router import getProvider
 
 
-_VISION_MAX_TOKENS = 4096
-_VISION_TEMPERATURE = 0.2
-_VISION_MIN_DESCRIPTION_LEN = 150  # 低于此长度视为描述异常（正常描述 200-800+ 字符）
+# 日志预览截断长度
+_LOG_DESC_LEN = 80
+# 日志详情截断长度
+_LOG_DESC_DETAIL = 200
 
 
 
@@ -86,15 +89,15 @@ async def _describeImages(
             systemMessages=VISION_DESCRIBE_PROMPT,
             userContent=userContent,
             model=model,
-            maxTokens=_VISION_MAX_TOKENS,
-            temperature=_VISION_TEMPERATURE,
+            maxTokens=config.LLM_VISION_MAX_TOKENS,
+            temperature=config.LLM_VISION_TEMPERATURE,
         )
 
         # 正常图片描述通常 200-800+ 字符，过短大概率是服务异常（如中转丢图片数据）
-        if len(description) < _VISION_MIN_DESCRIPTION_LEN:
+        if len(description) < config.LLM_VISION_MIN_DESCRIPTION_LEN:
             await logSystemEvent(
                 "LLM 图片描述异常短",
-                f"仅 {len(description)} 字符，重试 | {description[:80]}",
+                f"仅 {len(description)} 字符，重试 | {description[:_LOG_DESC_LEN]}",
                 LogLevel.WARNING,
                 LogChildType.WITH_ONE_CHILD,
             )
@@ -103,10 +106,10 @@ async def _describeImages(
                 systemMessages=VISION_DESCRIBE_PROMPT,
                 userContent=userContent,
                 model=model,
-                maxTokens=_VISION_MAX_TOKENS,
-                temperature=_VISION_TEMPERATURE,
+                maxTokens=config.LLM_VISION_MAX_TOKENS,
+                temperature=config.LLM_VISION_TEMPERATURE,
             )
-            if len(description) < _VISION_MIN_DESCRIPTION_LEN:
+            if len(description) < config.LLM_VISION_MIN_DESCRIPTION_LEN:
                 await logSystemEvent(
                     "LLM 图片描述重试仍异常",
                     f"仅 {len(description)} 字符，放弃",
@@ -124,7 +127,7 @@ async def _describeImages(
         )
         return ""
 
-    preview = description[:200] if description else "(空)"
+    preview = description[:_LOG_DESC_DETAIL] if description else "(空)"
     await logSystemEvent(
         "LLM 图片描述完成",
         f"生成描述: {len(description)} 字符 | {preview}",

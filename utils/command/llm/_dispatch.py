@@ -9,6 +9,7 @@ memory / knowledge / review 三个 case 委托给同包的子处理器。
 
 from config import LLM_RATE_LIMIT_SECONDS
 
+from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.llm import (
     addGroupTriggerKeyword,
     getAutoMode,
@@ -29,7 +30,6 @@ from utils.llm import (
     setVisionModel,
 )
 from utils.llm.state import getReviewQueue
-from utils.core.logger import logAction, LogLevel, LogChildType
 
 from .knowledgeCmd import _handleKnowledgeCommand
 from .memoryCmd import _handleMemoryCommand

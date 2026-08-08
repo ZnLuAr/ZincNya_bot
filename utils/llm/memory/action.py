@@ -13,6 +13,12 @@ import asyncio
 from typing import Optional
 from dataclasses import dataclass
 
+from config import (
+    LLM_MEMORY_PRIORITY_CAP,
+    LLM_MEMORY_MAX_CONTENT_LEN,
+    LLM_MEMORY_MAX_TAGS,
+)
+
 from utils.core.logger import logSystemEvent, logAction, LogLevel, LogChildType
 
 # fire-and-forget task 引用持有，避免被 GC 回收
@@ -40,10 +46,6 @@ from .database import (
 )
 
 
-LLM_MEMORY_PRIORITY_CAP = 3
-LLM_MEMORY_MAX_CONTENT_LEN = 500
-LLM_MEMORY_MAX_ACTIONS = 3
-LLM_MEMORY_MAX_TAGS = 10            # 单条记忆最多标签数，防止 LLM 输出超长 tags 撑爆条目
 _VALID_ACTIONS = {"add", "update", "delete"}
 _VALID_SCOPE_TYPES = {
     MEMORY_SCOPE_GLOBAL,
@@ -54,6 +56,10 @@ MEMORY_ACTION_PATTERN = re.compile(
     r"<MEMORY_ACTION>(.*?)</MEMORY_ACTION>",
     re.DOTALL,
 )
+
+_LOG_CONTENT_LEN = 100
+_LOG_BLOCK_LEN = 300
+_LOG_PREVIEW_LEN = 200
 
 
 
@@ -163,7 +169,7 @@ def formatActionDetail(act: MemoryAction) -> str:
     if act.memoryID is not None:
         detail += f" | id=#{act.memoryID}"
     if act.content:
-        detail += f" | {act.content[:100]}"
+        detail += f" | {act.content[:_LOG_CONTENT_LEN]}"
     return detail
 
 
@@ -197,7 +203,7 @@ def parseMemoryActions(text: str) -> tuple[str, list[MemoryAction]]:
         try:
             raw = json.loads(block)
         except Exception as e:
-            details = block if len(block) <= 300 else block[:300] + "……"
+            details = block if len(block) <= _LOG_BLOCK_LEN else block[:_LOG_BLOCK_LEN] + "……"
             try:
                 _fireAndForget(
                     logSystemEvent(
@@ -218,7 +224,7 @@ def parseMemoryActions(text: str) -> tuple[str, list[MemoryAction]]:
             try:
                 act = _parseActionDict(item)
             except Exception as e:
-                preview = json.dumps(item, ensure_ascii=False)[:200] if isinstance(item, dict) else str(item)[:200]
+                preview = json.dumps(item, ensure_ascii=False)[:_LOG_PREVIEW_LEN] if isinstance(item, dict) else str(item)[:_LOG_PREVIEW_LEN]
                 try:
                     _fireAndForget(
                         logSystemEvent(

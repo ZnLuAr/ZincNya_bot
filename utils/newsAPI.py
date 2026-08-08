@@ -45,6 +45,7 @@ from config import (
 from utils.core.resourceManager import getResourceManager
 from utils.core.logger import logSystemEvent, LogLevel
 from utils.core.errorDecorators import handleErrors
+from utils.telegramHelpers import escapeHtml
 
 
 # ============================================================================
@@ -53,6 +54,9 @@ from utils.core.errorDecorators import handleErrors
 
 _session: Optional[aiohttp.ClientSession] = None
 _sessionLock = asyncio.Lock()
+
+# 已推送 URL 记录的容量上限（markAsPushed 中截断用）
+_MAX_PUSHED_URLS = 1000
 
 
 
@@ -199,9 +203,9 @@ async def pushToTelegram(bot: Bot, chat_id: str, article: NewsArticle) -> bool:
         是否推送成功
     """
     # 构建消息内容（使用 HTML 解析模式，避免用户内容中的 *_` 导致解析失败）
-    caption = f"<b>{html.escape(article.title)}</b>"
+    caption = f"<b>{escapeHtml(article.title)}</b>"
     if article.summary:
-        caption += f"\n\n{html.escape(article.summary)}"
+        caption += f"\n\n{escapeHtml(article.summary)}"
     caption += f'\n\n<a href="{html.escape(article.url, quote=True)}">阅读原文</a>'
 
     try:
@@ -303,5 +307,5 @@ def markAsPushed(url: str, record: dict) -> None:
         record["pushed_urls"].append(url)
 
     # 只保留最近 1000 条记录，避免文件过大
-    if len(record["pushed_urls"]) > 1000:
-        record["pushed_urls"] = record["pushed_urls"][-1000:]
+    if len(record["pushed_urls"]) > _MAX_PUSHED_URLS:
+        record["pushed_urls"] = record["pushed_urls"][-_MAX_PUSHED_URLS:]

@@ -53,6 +53,8 @@ def _buildProviders() -> dict[str, LLMProvider]:
     """构建所有 provider 实例。SDK 缺失时跳过，不阻塞启动。"""
     from config import (
         ANTHROPIC_API_KEY,
+        ANTHROPIC_AUTH_TOKEN,
+        ANTHROPIC_BASE_URL,
         GEMINI_API_KEY,
         OPENAI_API_KEY,
         DEEPSEEK_API_KEY,
@@ -65,7 +67,12 @@ def _buildProviders() -> dict[str, LLMProvider]:
 
     try:
         from .anthropic import AnthropicProvider
-        providers["anthropic"] = AnthropicProvider(ANTHROPIC_API_KEY, proxy=LLM_PROXY)
+        providers["anthropic"] = AnthropicProvider(
+            ANTHROPIC_API_KEY,
+            proxy=LLM_PROXY,
+            authToken=ANTHROPIC_AUTH_TOKEN,
+            baseUrl=ANTHROPIC_BASE_URL,
+        )
     except ImportError:
         pass
 

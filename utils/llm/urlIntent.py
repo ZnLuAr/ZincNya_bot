@@ -16,6 +16,8 @@ URL 读取意图判断：
 import re
 import unicodedata
 
+import config
+
 
 
 
@@ -329,8 +331,6 @@ _GLOBAL_SUPPRESS_EN = [
 _NEGATION_PREFIX_ZH = ["不要", "别", "不用", "无需", "不必", "先别", "暂时别"]
 _NEGATION_PREFIX_EN = ["do not", "don't", "dont", "no need to", "no need", "needn't"]
 
-_NEGATION_WINDOW = 32
-
 
 
 
@@ -372,7 +372,7 @@ def _hasGlobalSuppress(textNorm: str, textLower: str) -> bool:
 
 def _hasNegationNearIntent(textNorm: str, textLower: str) -> bool:
     """
-    只在否定词后 _NEGATION_WINDOW 字符内出现 intent 词时才拦截。
+    只在否定词后 config.LLM_URL_INTENT_NEGATION_WINDOW 字符内出现 intent 词时才拦截。
 
     避免误杀 "不要只总结，帮我分析一下"。
     """
@@ -383,7 +383,7 @@ def _hasNegationNearIntent(textNorm: str, textLower: str) -> bool:
             idx = textNorm.find(neg, start)
             if idx < 0:
                 break
-            nearby = textNorm[idx: idx + _NEGATION_WINDOW]
+            nearby = textNorm[idx: idx + config.LLM_URL_INTENT_NEGATION_WINDOW]
             if _hasZhKeyword(nearby, _INTENT_KEYWORDS_ZH):
                 return True
             start = idx + len(neg)
@@ -391,7 +391,7 @@ def _hasNegationNearIntent(textNorm: str, textLower: str) -> bool:
     # 英文
     for pattern in _EN_NEGATION_PATTERNS:
         for m in pattern.finditer(textLower):
-            nearby = textLower[m.start(): m.start() + _NEGATION_WINDOW]
+            nearby = textLower[m.start(): m.start() + config.LLM_URL_INTENT_NEGATION_WINDOW]
             if _hasEnPattern(nearby, _EN_INTENT_PATTERNS):
                 return True
 

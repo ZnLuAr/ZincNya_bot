@@ -13,9 +13,8 @@ from utils.whitelistManager.data import (
     userOperation,
     handleStart,
     _lastNotifyTime,
-    _NOTIFY_COOLDOWN,
-    _MAX_NOTIFY_CACHE,
 )
+from config import WHITELIST_NOTIFY_COOLDOWN, WHITELIST_MAX_NOTIFY_CACHE
 
 
 # ============================================================================
@@ -335,7 +334,7 @@ async def test_handle_start_unauthorized_cooldown():
 async def test_handle_start_unauthorized_expired_cleanup():
     """未授权用户（清理过期条目）"""
     # 设置过期的通知时间（fixture 已清理，这里设置测试数据）
-    _lastNotifyTime["888"] = time.monotonic() - _NOTIFY_COOLDOWN - 1
+    _lastNotifyTime["888"] = time.monotonic() - WHITELIST_NOTIFY_COOLDOWN - 1
 
     mockUpdate = MagicMock()
     mockUpdate.effective_user.id = 999
@@ -361,7 +360,7 @@ async def test_handle_start_unauthorized_expired_cleanup():
 async def test_handle_start_unauthorized_cache_limit():
     """未授权用户（缓存上限兜底）"""
     # 填满缓存（fixture 已清理，这里设置测试数据）
-    for i in range(_MAX_NOTIFY_CACHE):
+    for i in range(WHITELIST_MAX_NOTIFY_CACHE):
         _lastNotifyTime[str(i)] = time.monotonic()
 
     mockUpdate = MagicMock()
@@ -379,7 +378,7 @@ async def test_handle_start_unauthorized_cache_limit():
                 await handleStart(mockUpdate, mockContext)
 
                 # 缓存应该被限制在上限
-                assert len(_lastNotifyTime) <= _MAX_NOTIFY_CACHE
+                assert len(_lastNotifyTime) <= WHITELIST_MAX_NOTIFY_CACHE
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from unittest.mock import patch, AsyncMock
 
+from utils.core.crypto import decryptText
 from utils.todos.database import (
     _rowToTodoDict,
     addTodo,
@@ -23,7 +24,6 @@ from utils.todos.database import (
     getPendingReminders,
     TIMESTAMP_FORMAT,
 )
-from utils.core.crypto import decryptText
 
 
 # ============================================================================

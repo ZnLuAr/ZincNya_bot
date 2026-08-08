@@ -36,6 +36,10 @@ from utils.core.stateManager import getStateManager
 from utils.core.tui.paradigms.fullScreen import FullScreenTUIApp
 
 
+# receiver 启动后首刷前的等待时长（秒）：让 receiver 就绪再画首轮 transcript
+_INITIAL_REFRESH_DELAY = 0.1
+
+
 
 
 class ChatScreenApp(FullScreenTUIApp):
@@ -195,7 +199,7 @@ class ChatScreenApp(FullScreenTUIApp):
         shutdownEvent = self._shutdownEvent or getStateManager().getShutdownEvent()
         task = await startReceiver(self._stateManager, self._targetChatID, self, queue, shutdownEvent)
         self.addBackgroundTask(task)
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(_INITIAL_REFRESH_DELAY)
         # ③ 初次刷新（画 __init__ 已灌入 _allLines 的内容）
         self._refreshTranscript()
 

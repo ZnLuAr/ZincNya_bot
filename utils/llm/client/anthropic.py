@@ -18,20 +18,34 @@ from ._base import LLMProvider
 class AnthropicProvider(LLMProvider):
     """Anthropic Claude 提供商。"""
 
-    def __init__(self, apiKey: str | None, *, proxy: str | None = None):
+    def __init__(self, apiKey: str | None, *, proxy: str | None = None, authToken: str | None = None, baseUrl: str | None = None):
         super().__init__(apiKey)
         self._proxy = proxy
+        self._authToken = authToken
+        self._baseUrl = baseUrl
         self._client: AsyncAnthropic | None = None
 
 
     def _getClient(self) -> AsyncAnthropic:
         if self._client is None:
-            kwargs = {"api_key": self._apiKey}
+            kwargs = {}
+            # auth_token（Bearer）与 api_key（x-api-key）二选一；auth_token 优先（自定义端点常用）
+            if self._authToken:
+                kwargs["auth_token"] = self._authToken
+            else:
+                kwargs["api_key"] = self._apiKey
+            if self._baseUrl:
+                kwargs["base_url"] = self._baseUrl
             if self._proxy:
                 import httpx
                 kwargs["http_client"] = httpx.AsyncClient(proxy=self._proxy)
             self._client = AsyncAnthropic(**kwargs)
         return self._client
+
+
+    def isAvailable(self) -> bool:
+        """auth_token（自定义端点）或 api_key 任一存在即视为已配置。"""
+        return bool(self._apiKey) or bool(self._authToken)
 
 
     async def requestReply(

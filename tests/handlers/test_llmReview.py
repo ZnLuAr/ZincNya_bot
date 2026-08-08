@@ -36,7 +36,9 @@ class TestRenderReviewCard:
 
     def test_card_contains_label_and_content(self):
         text, _ = _renderReviewCard("用户的提问", "锌酱的回答", 1)
-        assert "[待审核]" in text
+        assert "待审核" in text
+        assert "<b>" in text  # HTML 化：标题加粗
+        assert "<blockquote>" in text  # 原始消息走 blockquote
         assert "用户的提问" in text
         assert "锌酱的回答" in text
 
@@ -53,6 +55,29 @@ class TestRenderReviewCard:
     def test_overlong_reply_within_tg_limit(self):
         text, _ = _renderReviewCard("msg", "x" * 10000, 1)
         assert len(text) <= 4096
+
+    def test_original_msg_splits_into_two_blockquotes_when_reply_to(self):
+        """originalMsg 含 [引用的消息]/[当前用户消息] 标记（_injectReplyTextContext 输出）→ 拆两个 blockquote"""
+        originalMsg = (
+            "[引用的消息]\n<@zincnya_test_bot> 原引用内容\n\n"
+            "[当前用户消息]\n<@ZincPhos> 当前用户说的"
+        )
+        text, _ = _renderReviewCard(originalMsg, "回复", 1)
+        assert text.count("<blockquote>") == 2  # 引用 + 当前各一个
+        assert "原引用内容" in text
+        assert "当前用户说的" in text
+
+    def test_original_msg_single_blockquote_when_plain(self):
+        """普通消息（无引用标记）→ 单个 blockquote"""
+        text, _ = _renderReviewCard("普通用户消息", "回复", 1)
+        assert text.count("<blockquote>") == 1
+
+    def test_dynamic_content_escaped(self):
+        """originalMsg/reply 含 < >& → 转义为 HTML 实体，防 BotBadRequest"""
+        text, _ = _renderReviewCard("<script>x</script>", "a & b < c", 1)
+        assert "<script>" not in text  # 原始 < 已转义
+        assert "&lt;script&gt;" in text
+        assert "&amp;" in text  # & 转义
 
     def test_keyboard_callback_data_is_4_segments(self):
         """callback_data 4 段 llm:review:{action}:{chatID}（msgID 不编码进 data）"""
