@@ -98,14 +98,14 @@ async def testFetch():
         articles = await fetchLatestNews(limit=NEWS_MAX_ARTICLES)
 
         if not articles:
-            print("❌ 没有抓取到任何文章喵\n")
+            print("❌ 没有抓取到任何文章\n")
             print("可能原因：")
             print("  1. 网页结构与解析逻辑不匹配")
             print("  2. 网络连接问题")
             print("  3. 需要配置代理 NEWS_HTTP_PROXY\n")
             return
 
-        print(f"✅ 成功抓取到 {len(articles)} 篇文章：\n")
+        print(f"成功抓取到 {len(articles)} 篇文章：\n")
 
         for i, article in enumerate(articles, 1):
             print(f"  [{i}] {article.title}")
@@ -131,7 +131,7 @@ async def fetchAndPush(bot: Bot, targetChatID: str):
     """抓取并推送新闻"""
 
     if not targetChatID:
-        print("❌ 未指定推送目标喵！")
+        print("❌ 还没有指定推送目标哦")
         print("请使用 -id 参数指定，或在 .env 中配置 NEWS_TARGET_CHAT_ID\n")
         return
 
@@ -141,7 +141,7 @@ async def fetchAndPush(bot: Bot, targetChatID: str):
         articles = await fetchLatestNews(limit=NEWS_MAX_ARTICLES)
 
         if not articles:
-            print("❌ 没有抓取到任何文章喵\n")
+            print("❌ 没有抓取到任何文章\n")
             return
 
         record = loadPushedRecord()
@@ -157,14 +157,14 @@ async def fetchAndPush(bot: Bot, targetChatID: str):
             if success:
                 markAsPushed(article.url, record)
                 pushed_count += 1
-                print(f"  ✅ 已推送: {article.title}")
+                print(f"  已推送: {article.title}")
             else:
                 print(f"  ❌ 推送失败: {article.title}")
 
         savePushedRecord(record)
 
         print()
-        print(f"推送完成喵！新推送 {pushed_count} 篇，跳过 {skipped_count} 篇（已推送过）\n")
+        print(f"推送完成……！\n新推送 {pushed_count} 篇，跳过 {skipped_count} 篇（已推送过）\n")
 
     except Exception as e:
         await logSystemEvent(
@@ -184,7 +184,7 @@ def showPushedList():
     last_check = record.get("last_check")
 
     if not urls:
-        print("还没有推送过任何文章喵\n")
+        print("还没有推送过任何文章……\n")
         return
 
     print(f"已推送 {len(urls)} 篇文章")
@@ -209,7 +209,7 @@ def clearPushedList():
         "last_check": None
     }
     savePushedRecord(record)
-    print("✅ 已清空推送记录喵\n")
+    print("已清空推送记录\n")
 
 
 

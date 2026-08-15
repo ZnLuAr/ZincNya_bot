@@ -30,7 +30,7 @@ async def consoleListener(app):
     返回:
         "SHUTDOWN" - 收到关机命令
     """
-    print("控制台命令可用喵。输入 /help 查看帮助。\n")
+    print("控制台命令可用。输入 /help 查看帮助。\n")
     state = getStateManager()
 
     try:
@@ -56,7 +56,7 @@ async def consoleListener(app):
             except EOFError:
                 return "SHUTDOWN"
             except Exception as e:
-                print(f"控制台读取出错喵：{e}\n")
+                print(f"❌ 控制台读取出错：{e}\n")
                 continue
 
     except asyncio.CancelledError:

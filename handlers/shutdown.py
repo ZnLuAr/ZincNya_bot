@@ -31,13 +31,13 @@ _START_TIME = time.time()
 
 
 
-@handleTelegramErrors(errorReply="就不关喵w ——")
+@handleTelegramErrors(errorReply="就不关w ——")
 async def shutdown(update: Update , _: ContextTypes.DEFAULT_TYPE):
     """关闭 bot（仅 operators）"""
     userID = update.effective_user.id
 
     if not hasPermission(userID , Permission.SHUTDOWN):
-        await update.message.reply_text("❌ もー、只有ご主人才有权限执行这个操作喵")
+        await update.message.reply_text("❌ 只有管理员才有权限执行这个操作的说——")
         return
 
     await logSystemEvent(
@@ -54,13 +54,13 @@ async def shutdown(update: Update , _: ContextTypes.DEFAULT_TYPE):
 
 
 
-@handleTelegramErrors(errorReply="就不关喵w ——")
+@handleTelegramErrors(errorReply="就不关w ——")
 async def restart(update: Update , _: ContextTypes.DEFAULT_TYPE):
     """重启 bot（仅 operators）"""
     userID = update.effective_user.id
 
     if not hasPermission(userID , Permission.RESTART):
-        await update.message.reply_text("❌ もー、只有ご主人才有权限执行这个操作喵")
+        await update.message.reply_text("❌ 只有管理员才有权限执行这个操作的说……")
         return
 
     await logSystemEvent(
@@ -83,7 +83,7 @@ async def status(update: Update , _: ContextTypes.DEFAULT_TYPE):
     userID = update.effective_user.id
 
     if not hasPermission(userID , Permission.STATUS):
-        await update.message.reply_text("❌ もー、只有ご主人才有权限执行这个操作喵")
+        await update.message.reply_text("❌ 只有管理员才有权限执行这个操作的说……")
         return
 
     # 计算运行时长

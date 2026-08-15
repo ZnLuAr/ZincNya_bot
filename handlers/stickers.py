@@ -100,7 +100,7 @@ async def findSticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sticker = update.message.reply_to_message.sticker
     setName = sticker.set_name
     if not setName:
-        await update.message.reply_text("ごめんなさいニャー……\n😭没有找到所属的表情包呢……")
+        await update.message.reply_text("抱歉喵……\n但是真的没有找到所属的表情包呢……")
         await logAction(
             "System",
             "",
@@ -175,7 +175,7 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 解析 callback_data，防止 ValueError
     parts = query.data.split(":" , 2)
     if len(parts) != 3:
-        await query.edit_message_text("无效的回调数据喵……")
+        await query.edit_message_text("这次的回调数据是无效的说……？")
         return
 
     _ , setName , action = parts
@@ -192,8 +192,8 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         count = await cancelAllStickerTasks()
         await query.edit_message_text(
-            f"收到啦，已中止 {count} 个下载任务……" if count > 0
-            else "诶——？晚了 w\n任务已经完成了，不需要中止啦……"
+            f"收到啦，已中止 {count} 个下载任务……" if count > 0 else 
+            "诶——？晚了 w\n任务已经完成了，不需要中止啦……"
         )
         return
 
@@ -239,7 +239,7 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 校验 action 合法性
     _VALID_FORMATS = {"webp", "gif"}
     if action not in _VALID_FORMATS:
-        await query.edit_message_text("无效的格式喵……")
+        await query.edit_message_text("……？这是无效的格式哦？")
         return
 
 

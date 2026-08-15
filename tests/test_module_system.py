@@ -191,7 +191,10 @@ class TestModuleCLI(unittest.TestCase):
             [sys.executable, "scripts/module.py", "list"],
             cwd=PROJECT_ROOT,
             capture_output=True,
-            text=True
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
         self.assertEqual(result.returncode, 0)
         # 应该包含至少一个模块
@@ -204,7 +207,10 @@ class TestModuleCLI(unittest.TestCase):
             [sys.executable, "scripts/module.py", "show", "llm"],
             cwd=PROJECT_ROOT,
             capture_output=True,
-            text=True
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
         self.assertEqual(result.returncode, 0)
         # 应该包含版本信息
@@ -217,7 +223,10 @@ class TestModuleCLI(unittest.TestCase):
             [sys.executable, "scripts/module.py", "validate"],
             cwd=PROJECT_ROOT,
             capture_output=True,
-            text=True
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
         self.assertEqual(result.returncode, 0)
 

@@ -49,7 +49,7 @@ class TestSendNya:
             await sendNya(mockUpdate, mockContext)
 
         call_args = mockUpdate.message.reply_text.call_args[0][0]
-        assert "ご主人" in call_args or "语录库" in call_args or "呜" in call_args
+        assert "戳不到" in call_args or "语录库" in call_args or "呜" in call_args
 
 
 class TestNyaRegister:

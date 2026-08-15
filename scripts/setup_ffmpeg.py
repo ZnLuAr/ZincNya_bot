@@ -82,12 +82,12 @@ def setup_windows():
                     target = FFMPEG_DIR / "ffmpeg.exe"
                     with open(target, 'wb') as f:
                         shutil.copyfileobj(source, f)
-                    print(f"✓ 已提取：{target}")
+                    print(f"已提取：{target}")
                     break
 
         # 删除临时文件
         temp_zip.unlink()
-        print("✓ 清理完成")
+        print("清理完成")
         return True
 
     except Exception as e:
@@ -117,11 +117,11 @@ def setup_linux():
                     tar.extract(member, FFMPEG_DIR)
                     target = FFMPEG_DIR / "ffmpeg"
                     target.chmod(0o755)
-                    print(f"✓ 已提取：{target}")
+                    print(f"已提取：{target}")
                     break
 
         temp_tar.unlink()
-        print("✓ 清理完成")
+        print("清理完成")
         return True
 
     except Exception as e:
@@ -155,13 +155,13 @@ def verify_ffmpeg():
     ffmpeg_exe = FFMPEG_DIR / ("ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg")
 
     if ffmpeg_exe.exists():
-        print(f"✓ 找到 FFmpeg：{ffmpeg_exe}")
+        print(f"找到 FFmpeg：{ffmpeg_exe}")
         return True
 
     # 检查系统 PATH
     ffmpeg_cmd = "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg"
     if shutil.which(ffmpeg_cmd):
-        print(f"✓ 系统 PATH 中存在 FFmpeg")
+        print(f"系统 PATH 中存在 FFmpeg")
         return True
 
     print("❌ 未找到 FFmpeg")

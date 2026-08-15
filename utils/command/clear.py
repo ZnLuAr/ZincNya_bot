@@ -56,7 +56,7 @@ async def execute(app , args: list[str]):
                 print("❌ 行数必须是正整数喵——\n")
                 return
         except ValueError:
-            print(f"❌ 无效的行数喵：{linesCount}\n")
+            print(f"这个 {linesCount}，是无效的行数的说……\n")
             return
 
 
@@ -84,7 +84,7 @@ def clearLines(n: int):
 def printStartupBanner():
     """打印启动信息"""
     print("ZincNya Bot——\n喵的一声，就启动啦——\n")
-    print("控制台命令可用喵。输入 /help 查看帮助。\n")
+    print("控制台命令可用。输入 /help 查看帮助。\n")
 
 
 

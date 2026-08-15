@@ -412,7 +412,7 @@ def _makeTelegramDispatcher(context, *, autoMode: str):
 
 
 
-@handleTelegramErrors(errorReply="……诶、操作好像出了点问题喵……")
+@handleTelegramErrors(errorReply="……诶、操作好像出了点问题……")
 async def handleReviewCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理审核按钮点击无权用户点击时静默忽略"""
     query = update.callback_query

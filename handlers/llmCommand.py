@@ -59,13 +59,13 @@ _MODE_NAMES = {"on": "直接发送", "off": "Telegram 审核", "console": "控�
 
 
 
-@handleTelegramErrors(errorReply="呜哇……是奇奇怪怪的指令结果，朝咱冲过来喵……！")
+@handleTelegramErrors(errorReply="呜哇……是奇奇怪怪的指令结果，正朝咱冲过来喵……！")
 async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/llm [子命令] — LLM 控制（仅 ops）"""
     userID = update.effective_user.id
 
     if not hasPermission(userID, Permission.LLM):
-        await update.message.reply_text("❌ もー、只有ご主人才有权限执行这个操作喵")
+        await update.message.reply_text("👀 你在动，对吧 w……\n只有管理员才有权限执行这个操作哦……")
         return
 
     args = context.args or []
@@ -79,12 +79,12 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         case "-on" | "on":
             setLLMEnabled(True)
-            await update.message.reply_text("LLM 已开启喵")
+            await update.message.reply_text("LLM 、启动——！")
             await logAction("System", "Telegram 端开启 LLM", f"操作者：{operatorName}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
 
         case "-off" | "off":
             setLLMEnabled(False)
-            await update.message.reply_text("LLM 已关闭喵")
+            await update.message.reply_text("LLM 、关闭……！")
             await logAction("System", "Telegram 端关闭 LLM", f"操作者：{operatorName}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
 
         case "fade":
@@ -135,7 +135,7 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"模型已切换为：{newModel}")
                 await logAction("System", "Telegram 端切换 LLM 模型", f"操作者：{operatorName}，模型：{newModel}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             else:
-                await update.message.reply_text("用法：/llm model 或 /llm model switch <模型名称>")
+                await update.message.reply_text("model 的用法应该是：/llm model [{switch <模型名称>}]")
 
         case "visionmodel":
             if len(args) == 1:
@@ -150,27 +150,27 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await logAction("System", "Telegram 端切换 LLM 视觉模型", f"操作者：{operatorName}，模型：{newVisionModel}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             elif len(args) == 2 and args[1].lower() == "reset":
                 setVisionModel(getModel())
-                await update.message.reply_text(f"视觉模型已和主模型 {getModel()} 同步喵")
+                await update.message.reply_text(f"视觉模型已经和主模型 {getModel()} 同步")
                 await logAction("System", "Telegram 端同步 LLM 视觉模型", f"操作者：{operatorName}，模型：{getModel()}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             else:
-                await update.message.reply_text("应该是 /llm visionmodel (reset) 或 /llm visionmodel switch <模型名称> 哦……")
+                await update.message.reply_text("visionmodel 的用法应该是：/llm visionmodel [{switch <模型名称>|reset}]")
 
         case "trigger":
             modeNames = {"mention": "群聊触发需要 @", "keyword": "群聊触发需要 @ 或关键词"}
             if len(args) == 1:
                 mode = getGroupTriggerMode()
-                await update.message.reply_text(f"当前群聊触发模式是 {mode}（{modeNames.get(mode, mode)}） 喵")
+                await update.message.reply_text(f"当前群聊触发模式是 {mode}（{modeNames.get(mode, mode)}）")
             elif len(args) == 2:
                 mode = args[1].lower()
                 try:
                     setGroupTriggerMode(mode)
                 except ValueError:
-                    await update.message.reply_text("应该是 /llm trigger mention 或 /llm trigger keyword 的……")
+                    await update.message.reply_text("trigger 的用法应该是：/llm trigger [{mention|keyword}]")
                     return
                 await update.message.reply_text(f"群聊触发模式已切换为：{modeNames.get(mode, mode)}")
                 await logAction("System", "Telegram 端切换 LLM 群聊触发模式", f"操作者：{operatorName}，模式：{mode}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             else:
-                await update.message.reply_text("应该是 /llm trigger 或 /llm trigger mention|keyword 的……")
+                await update.message.reply_text("trigger 的用法应该是：/llm trigger [{mention|keyword}]")
 
         case "keyword":
             keywords = getGroupTriggerKeywords()
@@ -191,7 +191,7 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except ValueError as e:
                     await update.message.reply_text(f"❌ {e}")
             else:
-                await update.message.reply_text("应该是 /llm keyword 或 /llm keyword add <关键词> 或 /llm keyword del <关键词> 的喵")
+                await update.message.reply_text("keyword 的用法应该是：/llm keyword [{add <关键词>|del <关键词>}]")
 
         case "memory":
             if len(args) == 1:
@@ -208,7 +208,7 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text("记忆模式已关闭喵")
                     await logAction("System", "Telegram 端关闭记忆模式", f"操作者：{operatorName}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
                 else:
-                    await update.message.reply_text("用法喵——\n/llm memory -on 或 /llm memory -off")
+                    await update.message.reply_text("memory 的用法应该是：/llm memory [{-on|-off}]")
 
         case "url":
             if len(args) == 1:
@@ -225,7 +225,7 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text("URL 读取功能已关闭喵")
                     await logAction("System", "Telegram 端关闭 URL 读取", f"操作者：{operatorName}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
                 else:
-                    await update.message.reply_text("用法喵——\n/llm url -on 或 /llm url -off")
+                    await update.message.reply_text("url 的用法应该是：/llm url [{-on|-off}]")
 
         case _:
             await update.message.reply_text(

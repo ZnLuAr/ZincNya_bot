@@ -106,12 +106,12 @@ async def execute(app, args: list[str]):
         remindTime, content = parseTime(content)
 
         if not content.strip():
-            print("添加失败：内容不能为空喵\n")
+            print("❌ 添加失败……待办的内容是不能为空的……\n")
             return
 
         todoID = await addTodo(targetChatID, targetUserID, content, remindTime, priority)
         if todoID is None:
-            print("添加失败，数据库写入出错了喵\n")
+            print("❌ 添加失败……是数据库写入出错了\n")
             return
 
         remindStr = f"  ⏰ {formatRemindTime(remindTime)}" if remindTime else ""
@@ -125,22 +125,22 @@ async def execute(app, args: list[str]):
         try:
             doneID = int(doneID)
         except ValueError:
-            print(f"标记失败：ID 必须是数字喵（收到 {doneID!r}）\n")
+            print(f"❌ 标记失败：ID 必须是数字（收到 {doneID!r}）\n")
             return
 
         todo = await getTodoByID(doneID)
         if not todo:
-            print(f"标记失败：找不到 ID={doneID} 的 todo 喵\n")
+            print(f"❌ 标记失败：找不到 ID={doneID} 的待办条目\n")
             return
         if todo['user_id'] != targetUserID:
-            print(f"标记失败：ID={doneID} 不属于 {targetLabel} 喵\n")
+            print(f"❌ 标记失败：ID={doneID} 并不属于 {targetLabel}\n")
             return
 
         ok = await markDone(doneID)
         if ok:
-            print(f"\n已标记完成 [ID {doneID}]：{todo['content']}\n")
+            print(f"\n标记完成 [ID {doneID}]：{todo['content']}\n")
         else:
-            print(f"标记失败，数据库出错了喵\n")
+            print(f"❌ 标记失败……是数据库出错了\n")
         return
 
     # ── -reopen：重新打开 ──
@@ -149,22 +149,22 @@ async def execute(app, args: list[str]):
         try:
             reopenID = int(reopenID)
         except ValueError:
-            print(f"重新打开失败：ID 必须是数字喵（收到 {reopenID!r}）\n")
+            print(f"❌ 重新打开失败：ID 必须是数字（收到 {reopenID!r}）\n")
             return
 
         todo = await getTodoByID(reopenID)
         if not todo:
-            print(f"重新打开失败：找不到 ID={reopenID} 的 todo 喵\n")
+            print(f"❌ 重新打开失败：找不到 ID={reopenID} 的待办条目\n")
             return
         if todo['user_id'] != targetUserID:
-            print(f"重新打开失败：ID={reopenID} 不属于 {targetLabel} 喵\n")
+            print(f"❌ 重新打开失败：ID={reopenID} 不属于 {targetLabel}\n")
             return
 
         ok = await reopenTodo(reopenID)
         if ok:
             print(f"\n已重新打开 [ID {reopenID}]：{todo['content']}\n")
         else:
-            print(f"重新打开失败，数据库出错了喵\n")
+            print(f"❌ 重新打开失败……是数据库出错了\n")
         return
 
     # ── -d / --del：删除 ──
@@ -173,108 +173,108 @@ async def execute(app, args: list[str]):
         try:
             delID = int(delID)
         except ValueError:
-            print(f"删除失败：ID 必须是数字喵（收到 {delID!r}）\n")
+            print(f"❌ 删除失败：ID 必须是数字（收到 {delID!r}）\n")
             return
 
         todo = await getTodoByID(delID)
         if not todo:
-            print(f"删除失败：找不到 ID={delID} 的 todo 喵\n")
+            print(f"❌ 删除失败：找不到 ID={delID} 的待办条目\n")
             return
         if todo['user_id'] != targetUserID:
-            print(f"删除失败：ID={delID} 不属于 {targetLabel} 喵\n")
+            print(f"❌ 删除失败：ID={delID} 不属于 {targetLabel}\n")
             return
 
         ok = await deleteTodo(delID)
         if ok:
             print(f"\n已删除 [ID {delID}]：{todo['content']}\n")
         else:
-            print(f"删除失败，数据库出错了喵\n")
+            print(f"❌ 删除失败……是数据库出错了\n")
         return
 
     # ── -edit：修改内容 ──
     editTokens = parsed["edit"]
     if editTokens:
         if len(editTokens) < 2:
-            print("修改失败：格式应为 -edit <id> <新内容> 喵\n")
+            print("❌ 修改失败：格式应为 -edit <id> <新内容>\n")
             return
 
         try:
             editID = int(editTokens[0])
         except ValueError:
-            print(f"修改失败：ID 必须是数字喵（收到 {editTokens[0]!r}）\n")
+            print(f"❌ 修改失败：ID 必须是数字（收到 {editTokens[0]!r}）\n")
             return
 
         newContent = ' '.join(editTokens[1:])
 
         todo = await getTodoByID(editID)
         if not todo:
-            print(f"修改失败：找不到 ID={editID} 的 todo 喵\n")
+            print(f"❌ 修改失败：找不到 ID={editID} 的待办条目\n")
             return
         if todo['user_id'] != targetUserID:
-            print(f"修改失败：ID={editID} 不属于 {targetLabel} 喵\n")
+            print(f"❌ 修改失败：ID={editID} 不属于 {targetLabel}\n")
             return
 
         ok = await updateTodo(editID, content=newContent)
         if ok:
             print(f"\n已修改 [ID {editID}]：\n  旧：{todo['content']}\n  新：{newContent}\n")
         else:
-            print(f"修改失败，数据库出错了喵\n")
+            print(f"❌ 修改失败……是数据库出错了\n")
         return
 
     # ── -pri：修改优先级 ──
     priTokens = parsed["pri"]
     if priTokens:
         if len(priTokens) < 2:
-            print("修改失败：格式应为 -pri <id> <P0|P1|P2|P3|P_> 喵\n")
+            print("❌ 修改失败：格式应为 -pri <id> <{P0|P1|P2|P3|P_}>\n")
             return
 
         try:
             priID = int(priTokens[0])
         except ValueError:
-            print(f"修改失败：ID 必须是数字喵（收到 {priTokens[0]!r}）\n")
+            print(f"❌ 修改失败：ID 必须是数字（收到 {priTokens[0]!r}）\n")
             return
 
         newPri = priTokens[1]
         if newPri not in ('P0', 'P1', 'P2', 'P3', 'P_'):
-            print(f"修改失败：无效优先级 {newPri!r}，可选：P0 / P1 / P2 / P3 / P_\n")
+            print(f"❌ 提供的这个优先级 {newPri!r} 是无效的说……\n可选的优先级有：P0 / P1 / P2 / P3 / P_\n")
             return
 
         todo = await getTodoByID(priID)
         if not todo:
-            print(f"修改失败：找不到 ID={priID} 的 todo 喵\n")
+            print(f"❌ 修改失败：找不到 ID={priID} 的待办条目\n")
             return
         if todo['user_id'] != targetUserID:
-            print(f"修改失败：ID={priID} 不属于 {targetLabel} 喵\n")
+            print(f"❌ 修改失败：ID={priID} 不属于 {targetLabel}\n")
             return
 
         ok = await updateTodo(priID, priority=newPri)
         if ok:
             oldPri = PRIORITY_EMOJI.get(todo['priority'], '[P_]')
             newPriStr = PRIORITY_EMOJI.get(newPri, '[P_]')
-            print(f"\n已修改 [ID {priID}] 优先级：{oldPri} → {newPriStr}\n")
+            print(f"\n已修改 [ID {priID}]，优先级：{oldPri} → {newPriStr}\n")
         else:
-            print(f"修改失败，数据库出错了喵\n")
+            print(f"❌ 修改失败……是数据库出错了\n")
         return
 
     # ── -time：修改提醒时间 ──
     timeTokens = parsed["time"]
     if timeTokens:
         if len(timeTokens) < 2:
-            print("修改失败：格式应为 -time <id> <时间表达式> 或 -time <id> clear 喵\n")
+            print("❌ 修改失败：格式应该是 -time <id> <{时间表达式|clear}>\n")
             return
 
         try:
             timeID = int(timeTokens[0])
         except ValueError:
-            print(f"修改失败：ID 必须是数字喵（收到 {timeTokens[0]!r}）\n")
+            print(f"❌ 修改失败：ID 必须是数字（收到 {timeTokens[0]!r}）\n")
             return
 
         todo = await getTodoByID(timeID)
         if not todo:
-            print(f"修改失败：找不到 ID={timeID} 的 todo 喵\n")
+            print(f"❌ 修改失败：找不到 ID={timeID} 的 todo\n")
             return
         if todo['user_id'] != targetUserID:
-            print(f"修改失败：ID={timeID} 不属于 {targetLabel} 喵\n")
+            print(f"❌ 修改失败：ID={timeID} 不属于 {targetLabel}\n")
             return
 
         timeExpr = ' '.join(timeTokens[1:])
@@ -284,19 +284,19 @@ async def execute(app, args: list[str]):
             if ok:
                 print(f"\n已清除 [ID {timeID}] 的提醒时间\n")
             else:
-                print(f"修改失败，数据库出错了喵\n")
+                print(f"❌ 修改失败……是数据库出错了\n")
             return
 
         newTime, _ = parseTime(timeExpr)
         if newTime is None:
-            print(f"修改失败：无法识别时间表达式 {timeExpr!r} 喵\n")
+            print(f"❌ 修改失败：无法识别时间表达式 {timeExpr!r}\n")
             return
 
         ok = await updateTodo(timeID, remind_time=newTime, reminded=0)
         if ok:
             print(f"\n已修改 [ID {timeID}] 提醒时间：{formatRemindTime(newTime)}\n")
         else:
-            print(f"修改失败，数据库出错了喵\n")
+            print(f"❌ 修改失败……是数据库出错了\n")
         return
 
     # ── -l / --list 或无参数：列出 ──
@@ -304,7 +304,7 @@ async def execute(app, args: list[str]):
     if listStatus is None or listStatus == "NoValue":
         listStatus = "pending"
     if listStatus not in ("pending", "done", "all"):
-        print(f"无效状态 {listStatus!r}，可选：pending / done / all\n")
+        print(f"❌ 无效状态 {listStatus!r}，可选：pending / done / all\n")
         return
 
     total = await getTodosCount(targetChatID, targetUserID, status=listStatus)

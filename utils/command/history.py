@@ -122,10 +122,10 @@ async def execute(app, args: list[str]):
             try:
                 limit = int(countArg)
                 if limit <= 0:
-                    print("预览条数必须是正整数喵——\n")
+                    print("❌ 预览条数必须是正整数的说——\n")
                     return
             except ValueError:
-                print(f"无效的条数喵：{countArg}\n")
+                print(f"❌ 这个 {countArg} 是无效的条数哦——\n")
                 return
         await _previewChat(chatID, limit)
         return
@@ -170,7 +170,7 @@ async def _listChats():
         print(f"  {cid:_COL_WIDTH_CHAT_ID}  {name:_COL_WIDTH_COMMENT}  {count:>_COL_WIDTH_MSG_COUNT}  {ts_str}")
 
     print(f"{'─' * _SEPARATOR_WIDTH}")
-    print(f"  共 {len(chats)} 个会话，使用 -c <chatID> 预览消息喵\n")
+    print(f"  共 {len(chats)} 个会话，使用 -c <chatID> 预览消息\n")
 
 
 def _sanitizeChatID(chatID: str) -> str:
@@ -184,13 +184,13 @@ async def _previewChat(chatID: str, limit: int):
     total = await getMessageCount(chatID)
 
     if total == 0:
-        print(f"（Chat {chatID} 暂无任何聊天记录喵……）\n")
+        print(f"（Chat {chatID} 暂无任何聊天记录…）\n")
         return
 
     messages = await loadHistory(chatID, limit=limit)
 
     if not messages:
-        print(f"（ChatID {chatID} 有 {total} 条记录但全部解密失败了喵……密钥可能已更换）\n")
+        print(f"❌ （ChatID {chatID} 有 {total} 条记录但全部解密失败了……可能是密钥已更换）\n")
         return
 
     showing = len(messages)

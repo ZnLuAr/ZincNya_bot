@@ -75,7 +75,7 @@ def initializeApp(app):
                 initFunc()
                 calledFunctions.add(funcPath)
             except Exception as e:
-                print(f"  初始化 {funcPath} 失败：{e}")
+                print(f"  ❌ 初始化 {funcPath} 失败：{e}")
 
     loadHandlers(app)
     setupAsyncioErrorHandler(loop)
@@ -164,7 +164,7 @@ async def runBackgroundTasks(app, consoleTask):
                 backgroundTasks.append(task)
                 startedTasks.add(taskPath)
             except Exception as e:
-                print(f"  启动后台任务 {taskPath} 失败：{e}")
+                print(f"  ❌ 启动后台任务 {taskPath} 失败：{e}")
 
     # 等待控制台任务结束或远程关机信号
     _, pending = await asyncio.wait(

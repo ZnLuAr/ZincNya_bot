@@ -92,7 +92,7 @@ async def execute(app , args):
     # 当独立使用 -c/--comment 参数时
     if commentUID and not any(x and x != "NoValue" for x in [addUID, delUID, susUID]):
         if commentText is None:
-            print("ムリー，备注内容不能为空喵——\n")
+            print("❌ ムリー，备注内容不能为空喵——\n")
             return
         ok = userOperation("setComment" , commentUID , commentText)
         action = f"为 {commentUID} 添加备注 '{commentText}' ……"
@@ -172,7 +172,7 @@ async def execute(app , args):
         )
         return
 
-    print("やばいー、参数错误喵——")
+    print("❌ 填的这个参数不对的说……")
     print("使用 '/help whitelist' 查看 /whitelist 的详细用法哦——\n")
 
 

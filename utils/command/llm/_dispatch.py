@@ -85,7 +85,7 @@ async def execute(app, args):
 
         case "auto":
             if not rest:
-                print(f"❌ 需要子参数哦：-on | -off | -console（当前：{getAutoMode()}）\n")
+                print(f"❌ 需要子参数哦：{{-on|-off|-console}}（当前：{getAutoMode()}）\n")
                 return
             mode = rest[0].lstrip("-").lower()
             try:
@@ -135,12 +135,14 @@ async def execute(app, args):
                 setGroupTriggerMode(mode)
                 await logAction("System", "LLM 群聊触发模式切换", f"已切换为：{modeNames.get(mode, mode)}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             except ValueError:
-                print("❌ 无效的触发模式喵……目前只支持 mention / keyword\n")
+                print("❌ 这样的触发方式是无效的哦……目前只支持 mention 或关键词触发\n")
 
         case "keyword":
             keywords = getGroupTriggerKeywords()
             if not rest:
-                print(f"群聊触发关键词：{', '.join(keywords) if keywords else '(……ないですニャー w)'}\n")
+                print(f"群聊有触发关键词：\n"
+                      f"    {', '.join(keywords) if keywords else '(……诶？原来没有呢…… w)'}\n"
+                )
                 return
             action = rest[0].lower()
             if action in ("add", "del") and len(rest) > 1:
@@ -155,7 +157,7 @@ async def execute(app, args):
                 except ValueError as e:
                     print(f"❌ {e}\n")
             else:
-                print("用法：/llm keyword | /llm keyword add <关键词> | /llm keyword del <关键词>\n")
+                print("keyword 的用法应该是：/llm keyword [{add <关键词>|del <关键词>}]")
 
         case "memory":
             await _handleMemoryCommand(rest, app)
@@ -170,8 +172,8 @@ async def execute(app, args):
             await _handleKnowledgeCommand(rest)
 
         case _:
-            print(f"❌ 是未知的子命令 {cmd} 喵")
-            print("用法：/llm [on|off|auto|model|visionmodel|trigger|keyword|memory|knowledge|status|review]\n")
+            print(f"❌ 这个 {cmd} 不是锌酱认识的命令的说……？")
+            print("/llm 可用的子命令：{on|off|status|fade|model|visionmodel|trigger|keyword|memory|url|knowledge|review}")
 
 
 

@@ -52,7 +52,7 @@ async def _handleMemoryCommand(args, app=None):
             newState = "开启" if not current else "关闭"
             await logAction("System", f"LLM 记忆自动批准{newState}", "OK", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
         else:
-            print(f"❌ 无效的参数 {val} 喵（-on | -off | -once | -autoapprove）\n")
+            print(f"❌ 给出的参数 {val} 是无效的（{{-on|-off|-once|-autoapprove}}）\n")
         return
 
     match action:
@@ -74,7 +74,7 @@ async def _handleMemoryCommand(args, app=None):
                 scopeID = "global"
             items = await getMemories(scopeType=scopeType, scopeID=scopeID, enabledOnly=enabledOnly, limit=limit)
             if not items:
-                print("[memory] 没有找到条目喵\n")
+                print("[memory] 没有找到条目\n")
                 return
             print("[memory] 条目列表：")
             for item in items:
@@ -94,7 +94,7 @@ async def _handleMemoryCommand(args, app=None):
             scopeType = parsed["scope"]
             content = parsed["text"]
             if not scopeType or scopeType == "NoValue" or not content or content == "NoValue":
-                print("❌ 用法：/llm memory add -scope <global|chat|user|session> [-id <scopeID>] -text <content>\n")
+                print("memory add 的用法应该是：\n    /llm memory add -scope <{global|chat|user|session}> [-id <scopeID>] -text <content>")
                 return
             scopeID = parsed["id"]
             if scopeID == "NoValue":
@@ -109,9 +109,9 @@ async def _handleMemoryCommand(args, app=None):
                 enabled=parsed["off"] == None,
             )
             if memoryID is None:
-                print("❌ memory 添加失败喵\n")
+                print("❌ memory 添加失败\n")
                 return
-            print(f"✅ memory #{memoryID} 已添加\n")
+            print(f"memory #{memoryID} 已添加\n")
 
         case "edit":
             parsed = parseArgsTokens(
@@ -121,13 +121,13 @@ async def _handleMemoryCommand(args, app=None):
             )
             memoryID = parsed["mid"]
             if not memoryID or memoryID == "NoValue":
-                print("❌ 用法：/llm memory edit -mid <id> [-text ...] [-tags ...] [-priority n] [-enabled on|off]\n")
+                print("memory edit 的用法应该是：\n    /llm memory edit -mid <id> [-text <内容>] [-tags <标签...>] [-priority <n>] [-enabled <on|off>]")
                 return
             enabled = None
             if parsed["enabled"] and parsed["enabled"] != "NoValue":
                 enabled = parsed["enabled"].lower() == "on"
             if not await getMemoryByID(int(memoryID)):
-                print("❌ memory 不存在喵\n")
+                print("❌ 记忆不存在喵\n")
                 return
             ok = await updateMemory(
                 int(memoryID),
@@ -137,22 +137,22 @@ async def _handleMemoryCommand(args, app=None):
                 enabled=enabled,
                 source=parsed["source"] if parsed["source"] and parsed["source"] != "NoValue" else None,
             )
-            print("✅ memory 已更新\n" if ok else "❌ memory 更新失败喵\n")
+            print("memory 已更新\n" if ok else "❌ memory 更新失败\n")
 
         case "del":
             target = rest[0] if rest else None
             if not target:
-                print("❌ 用法：/llm memory del <id>\n")
+                print("memory del 的用法应该是：\n    /llm memory del <id>")
                 return
             if not await getMemoryByID(int(target)):
-                print("❌ memory 不存在喵\n")
+                print("❌ 记忆不存在喵\n")
                 return
             ok = await deleteMemory(int(target))
-            print("✅ memory 已删除\n" if ok else "❌ memory 删除失败喵\n")
+            print("memory 已删除\n" if ok else "❌ memory 删除失败\n")
 
         case "ui":
             from utils.llm.memory.ui import memoryMenuController
             await memoryMenuController(app)
 
         case _:
-            print("❌ 用法：/llm memory [-on|-off|-once|list|add|edit|del|ui]\n")
+            print("/llm memory 可用的子命令有：{-on|-off|-once|list|add|edit|del|ui}")

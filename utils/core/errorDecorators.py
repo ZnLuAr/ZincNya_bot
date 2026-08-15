@@ -199,7 +199,7 @@ def handleTelegramErrors(func: Callable = None, *, errorReply: str = None):
             ...
 
         # 出错时回复用户
-        @handleTelegramErrors(errorReply="呜……出错了喵……")
+        @handleTelegramErrors(errorReply="咦……？哪里出问题了呢……")
         async def onCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ...
     """

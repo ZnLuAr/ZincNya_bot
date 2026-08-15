@@ -65,7 +65,7 @@ def loadHandlers(app: Application):
     skippedModules = []
     totalHandlers = 0
 
-    print("正在加载 Telegram 处理器喵……\n")
+    print("现在加载 Telegram 处理器……\n")
 
     allModules = getAllModules()
 
@@ -152,7 +152,7 @@ def loadHandlers(app: Application):
                 print(f"  {metadata['name']} ({handlerCount} 个)")
 
         except Exception as e:
-            print(f"  加载 {moduleName} 失败喵：{e}")
+            print(f"  加载 {moduleName} 失败：{e}")
 
     # 输出统计信息
     print()

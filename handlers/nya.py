@@ -19,11 +19,7 @@ async def sendNya(update: Update, context: ContextTypes.DEFAULT_TYPE):
     messages: list = getRandomQuote()
 
     if not messages:
-        await update.message.reply_text(
-            "呜喵……？说不出话来……\n"
-            "ご主人様——快来修修锌酱……\n"
-            "@ZincPhos"
-        )
+        await update.message.reply_text("戳不到——的说……？\n好像有哪里出了问题喵？……")
         await logAction(
             update.effective_user,
             "来自 Telegram 的 /nya",

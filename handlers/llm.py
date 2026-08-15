@@ -696,7 +696,7 @@ async def _dispatchLLMReply(
 
 
 
-@handleTelegramErrors(errorReply="……呜、刚才这条消息没能处理好喵……")
+@handleTelegramErrors(errorReply="……抱歉、刚才这条消息没能处理好呢……")
 async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     LLM 消息处理器（私聊 / 群聊被 @）
@@ -744,7 +744,7 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if isRateLimited(userID):
-        await message.reply_text("……发得太快啦，锌酱的笨脑要跟不上了喵💦")
+        await message.reply_text("……发得太快啦，锌酱要跟不上了喵💦")
         return
 
     # 提取图片 Refs

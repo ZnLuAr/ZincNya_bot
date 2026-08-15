@@ -37,7 +37,7 @@ async def execute(app , args):
             for info in sorted(commandsList , key=lambda x: x["name"]):
                 print(f"{info['name']:<15}      {info.get('description' , '')}")
             print("\n" , "—" * 61)
-            print("使用 /help <command> 查看详细说明喵——\n\n")
+            print("使用 /help <command> 查看详细说明——\n\n")
             return
         
         # 有参数，打印对应命令信息
@@ -54,9 +54,9 @@ async def execute(app , args):
                     print(f"{info['example']}")
                     print("—" * 87 , "\n\n")
             else:
-                print(f"❌ 命令 /{command} 没有定义 getHelp() 函数喵……")
+                print(f"命令 /{command} 好像并没有定义 getHelp() 函数……")
         except ModuleNotFoundError:
-            print(f"\n❌ 没找到 /{command} 命令喵。")
+            print(f"\n没有找到 /{command} 命令喵……")
             print("提示：输入 /help 查看所有可用命令\n\n")
     except Exception as e:
         await logAction(

@@ -100,7 +100,7 @@ async def handleTodosCommand(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # 接收到来自于 Telegram 的帮助请求时发出
     if rawText in ['help', '-help', '--help', '-h']:
         await update.message.reply_text(
-            "📋 todos 命令用法\n\n"
+            "todos 命令用法\n\n"
             "<pre>"
             "/todos                            显示待办列表\n"
             "/todos 买牛奶                      快速添加\n"
@@ -110,7 +110,7 @@ async def handleTodosCommand(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "/todos P1 买牛奶                   指定优先级\n"
             "/todos P0 20时26分 关大门          优先级 + 时间"
             "</pre>\n\n"
-            "ご主人说咱不像是很聪明的样子，\n"
+            "大家都说锌酱不像是很聪明的样子，\n"
             "如果优先级和时间没说清楚的话，咱可能会读错喵……",
             parse_mode="HTML",
         )
@@ -147,12 +147,12 @@ async def handleTodosCommand(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # 3. 验证
     if not content.strip():
-        await update.message.reply_text("……待办内容不能为空喵", parse_mode="HTML")
+        await update.message.reply_text("……待办内容是不能为空的喵", parse_mode="HTML")
         return
 
     if len(content) > TODOS_CONTENT_MAX_LENGTH:
         await update.message.reply_text(
-            f"……内容太长了喵，最多 {TODOS_CONTENT_MAX_LENGTH} 字哦",
+            f"❌ ……内容太长了喵，单条 todo 最多就只能写 {TODOS_CONTENT_MAX_LENGTH} 字哦",
             parse_mode="HTML",
         )
         return
@@ -160,7 +160,7 @@ async def handleTodosCommand(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # 4. 写入数据库
     todoID = await addTodo(chatID, userID, content, remindTime, priority)
     if todoID is None:
-        await update.message.reply_text("添加失败了喵，请稍后再试……", parse_mode="HTML")
+        await update.message.reply_text("❌ 添加失败了喵，请稍后再试……", parse_mode="HTML")
         return
 
     # 5. 回复确认
@@ -205,7 +205,7 @@ async def handleTodosCommand(update: Update, context: ContextTypes.DEFAULT_TYPE)
 #   todos:del:{todoID}              确认后删除
 #
 
-@handleTelegramErrors(errorReply="待办消息貌似发生了点什么事喵……锌酱碰不到它……")
+@handleTelegramErrors(errorReply="待办消息貌似发生了点什么事……锌酱碰不到它……")
 async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 InlineKeyboard 回调，路由表见上方注释"""
 
@@ -221,7 +221,7 @@ async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
     # 统一解析 callback_data，防止 ValueError
     parts = query.data.split(':')
     if len(parts) < 2:
-        await safeEditMessage(query.message, "无效的回调数据喵", parse_mode="HTML")
+        await safeEditMessage(query.message, "这次的回调数据是无效的呢……", parse_mode="HTML")
         return
 
     action = parts[1]
@@ -232,7 +232,7 @@ async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
         try:
             todoID = int(parts[2])
         except ValueError:
-            await safeEditMessage(query.message, "无效的待办 ID 喵", parse_mode="HTML")
+            await safeEditMessage(query.message, "诶？这个待办 ID 是无效的呢……", parse_mode="HTML")
             return
 
     # ── 关闭（删除消息） ──
@@ -276,12 +276,12 @@ async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
     # ── 修改优先级 ──
     if action == 'pri':
         if len(parts) < 4:
-            await safeEditMessage(query.message, "无效的回调数据喵", parse_mode="HTML")
+            await safeEditMessage(query.message, "这次的回调数据是无效的呢……", parse_mode="HTML")
             return
 
         newPriority = parts[3]
         if newPriority not in PRIORITY_EMOJI:
-            await safeEditMessage(query.message, "无效的优先级喵", parse_mode="HTML")
+            await safeEditMessage(query.message, "填的这个优先级是无效的喵——", parse_mode="HTML")
             return
         todo = await getTodoByID(todoID)
 
@@ -315,7 +315,7 @@ async def handleTodosCallback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await markDone(todoID)
         await safeEditMessage(
             query.message,
-            f"✅ 那么就完成了喵——\n\n{escapeHtml(todo['content'])}",
+            f"那么就完成了喵——\n\n{escapeHtml(todo['content'])}",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("↩️ 返回列表", callback_data="todos:list:1")
             ]]),

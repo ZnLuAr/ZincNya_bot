@@ -63,7 +63,7 @@ def printTodoList(todos: list, total: int, targetLabel: str, status: str):
     """将待办列表格式化输出到控制台。"""
     print(f"\n── {targetLabel} 的待办（{status}，共 {total} 条）──")
     if not todos:
-        print("  （空）")
+        print("   (……ないです)")
     else:
         for todo in todos:
             pri = PRIORITY_EMOJI.get(todo['priority'], '[P_]')

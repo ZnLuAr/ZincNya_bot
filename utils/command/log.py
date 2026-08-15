@@ -70,7 +70,7 @@ def _listLogs():
     files = _getLogFiles()
 
     if not files:
-        print("…… …… ないですニャー\n")
+        print("…… …… ないです\n")
         return
 
     print("\n日志文件列表：")
@@ -95,11 +95,11 @@ def _viewLog(index: int):
     files = _getLogFiles()
 
     if not files:
-        print("没有找到任何日志文件喵……\n")
+        print("没有找到任何日志文件……\n")
         return
 
     if index < 1 or index > len(files):
-        print(f"序号无效喵！请输入 1 到 {len(files)} 之间的数字\n")
+        print(f"❌ 这个序号是无效的说……应该输入 1 到 {len(files)} 之间的数字\n")
         return
 
     filename = files[index - 1][0]
@@ -113,7 +113,7 @@ def _viewLog(index: int):
         print(content)
         print(f"\n═══ EOF ═══\n")
     except Exception as e:
-        print(f"读取日志失败喵：{e}\n")
+        print(f"❌ 读取日志失败：{e}\n")
 
 
 def _cleanEmptyLogs():
@@ -131,15 +131,15 @@ def _cleanEmptyLogs():
                 pass
 
     if deleted > 0:
-        print(f"已清理 {deleted} 个空日志文件喵——\n")
+        print(f"已清理 {deleted} 个空日志文件——\n")
     else:
-        print("没有找到空日志文件喵……\n")
+        print("没有找到空日志文件……\n")
 
 
 def _clearAllLogs(confirmed: bool = False):
     """清空所有日志"""
     if not confirmed:
-        print("⚠️ 这将删除所有日志文件！")
+        print("所有的日志文件都将会被清除——")
         print("如果确定要清空，请输入：/log -c --all --confirm\n")
         return
 
@@ -154,7 +154,7 @@ def _clearAllLogs(confirmed: bool = False):
         except Exception:
             pass
 
-    print(f"清空 {deleted} 个日志文件喵……\n")
+    print(f"清空 {deleted} 个日志文件…\n")
 
 
 def _deleteLog(index: int):
@@ -166,7 +166,7 @@ def _deleteLog(index: int):
         return
 
     if index < 1 or index > len(files):
-        print(f"序号无效喵——\n要输入 1 到 {len(files)} 之间的数字——\n")
+        print(f"❌ 这个序号是无效的说……\n要输入 1 到 {len(files)} 之间的数字——\n")
         return
 
     filename = files[index - 1][0]
@@ -174,9 +174,9 @@ def _deleteLog(index: int):
 
     try:
         os.remove(path)
-        print(f"已删除 {filename} 喵——\n")
+        print(f"已删除 {filename} \n")
     except Exception as e:
-        print(f"删除失败喵：{e}\n")
+        print(f"❌ 删除失败：{e}\n")
 
 
 
@@ -206,7 +206,7 @@ async def execute(app, args):
             index = int(parsed["type"])
             _viewLog(index)
         except ValueError:
-            print("请提供有效的日志序号喵……就像 /log -t 1 这样的啦……\n")
+            print("请提供有效的日志序号……像是 /log -t 1 这样的啦……\n")
         return
 
     # 删除指定日志
@@ -215,7 +215,7 @@ async def execute(app, args):
             index = int(parsed["del"])
             _deleteLog(index)
         except ValueError:
-            print("请提供有效的日志序号喵……就像 /log -d 1 这样的啦……\n")
+            print("请提供有效的日志序号……像是 /log -d 1 这样的啦……\n")
         return
 
     # 清理日志

@@ -137,7 +137,7 @@ async def execute(app , args):
 
             # 用户未选择或 whitelist 为空
             if not screenChatID:
-                print("没有可用的聊天对象喵（whitelist 为空或未选择）\n")
+                print("没有可用的聊天对象……大概是因为 whitelist 为空或未选择\n")
                 return
 
         if screenChatID:
@@ -164,16 +164,16 @@ async def execute(app , args):
                 break
 
             # 退出 chatScreen 循环后打印提示
-            print("\n退出聊天界面喵——\n")
+            print("\n退出聊天界面喵\n")
 
         return
 
     if not text or text == "NoValue":
-        print("❌ もー、参数 [-t/--text <text>] 要加上才可以发得出文字啦——！\n")
+        print("❌ 参数 <-t/--text <text>> 要加上才可以发得出文字的说\n")
         return
     
     if not idList or idList == "NoValue":
-        print("❌ もー、参数 [-id/--id <chatID>] 得加上才对啦——！\n")
+        print("❌ 参数 <-id/--id <chatID>> 得加上才对的说\n")
         return
     
     await sendMsg(bot , idList , atUser , text)
@@ -199,7 +199,7 @@ async def sendMsg(bot: Bot , idList , atUser , text):
             if atUser:
                 msg = f"@{atUser} {text}"
             await bot.send_message(chat_id=chatID , text=msg)
-            result = f"✅ 已发送给 {chatID} 喵——"
+            result = f"已发送给 {chatID}"
 
         except Exception as e:
             result = f"❌ 向 {chatID} 发送失败了喵：{e}"

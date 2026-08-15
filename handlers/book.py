@@ -56,13 +56,13 @@ book_query_{hash}: str
 注册的 Handlers
 ================================================================================
 
-CommandHandler("book" , handleBookCommand)
+CommandHandler("book", handleBookCommand)
     处理 /book <query> 命令
 
-MessageHandler(filters.Regex(...) , handleBookTrigger)
+MessageHandler(filters.Regex(...), handleBookTrigger)
     使用正则处理 "找书 xxx" / "搜书 xxx" 触发词
 
-CallbackQueryHandler(handleBookCallback , pattern=r'^book:')
+CallbackQueryHandler(handleBookCallback, pattern=r'^book:')
     处理所有 book: 开头的回调
 
 
@@ -70,7 +70,7 @@ CallbackQueryHandler(handleBookCallback , pattern=r'^book:')
 主要函数
 ================================================================================
 
-handleBookCommand(update , context) -> None
+handleBookCommand(update, context) -> None
 ────────────────────────────────────────
     处理 Telegram 端的 /book 命令。
 
@@ -83,14 +83,14 @@ handleBookCommand(update , context) -> None
     无参数时显示用法提示。
 
 
-handleBookTrigger(update , context) -> None
+handleBookTrigger(update, context) -> None
 ────────────────────────────────────────
     处理触发词消息（找书/搜书）。
 
     从消息文本中提取搜索词，然后复用 handleBookCommand 逻辑。
 
 
-handleBookCallback(update , context) -> None
+handleBookCallback(update, context) -> None
 ────────────────────────────────────────
     处理按钮回调。
 
@@ -103,7 +103,7 @@ handleBookCallback(update , context) -> None
 渲染函数
 ================================================================================
 
-_renderListView(query , searchResult) -> tuple[str , InlineKeyboardMarkup]
+_renderListView(query, searchResult) -> tuple[str, InlineKeyboardMarkup]
 ────────────────────────────────────────
     渲染搜索结果列表视图。
 
@@ -112,7 +112,7 @@ _renderListView(query , searchResult) -> tuple[str , InlineKeyboardMarkup]
         searchResult: dict      searchBooks 返回的结果
 
     返回:
-        (消息文本 , 键盘布局)
+        (消息文本, 键盘布局)
 
     消息格式:
         使用 HTML 格式，书名为可点击的超链接（跳转 Open Library）
@@ -129,7 +129,7 @@ _renderListView(query , searchResult) -> tuple[str , InlineKeyboardMarkup]
 _hashQuery(query) -> str
     生成搜索词的 MD5 短哈希（BOOK_QUERY_HASH_LENGTH 位）
 
-safeEditMessage(message , text , **kwargs) -> bool
+safeEditMessage(message, text, **kwargs) -> bool
     安全地编辑消息，忽略"消息未修改"错误
 
 """
@@ -169,36 +169,36 @@ def _hashQuery(query: str) -> str:
     return hashlib.md5(query.encode()).hexdigest()[:BOOK_QUERY_HASH_LENGTH]
 
 
-def _renderListView(query: str , searchResult: dict) -> tuple[str , InlineKeyboardMarkup]:
+def _renderListView(query: str, searchResult: dict) -> tuple[str, InlineKeyboardMarkup]:
     """
     渲染搜索结果列表视图
 
-    返回: (消息文本 , 键盘)
+    返回: (消息文本, 键盘)
 
     注意: 返回的文本使用 HTML 格式，发送时需要 parse_mode="HTML"
     """
 
-    total = searchResult.get("total" , 0)
-    page = searchResult.get("page" , 1)
-    totalPages = searchResult.get("totalPages" , 0)
-    results = searchResult.get("results" , [])
+    total = searchResult.get("total", 0)
+    page = searchResult.get("page", 1)
+    totalPages = searchResult.get("totalPages", 0)
+    results = searchResult.get("results", [])
     error = searchResult.get("error")
 
     # 处理错误
     if error:
-        text = f"⚠️ 搜索出错了喵：{escapeHtml(error)}"
+        text = f"❌ 搜索出错了喵：{escapeHtml(error)}"
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✖ 关闭" , callback_data="book:close")
+            InlineKeyboardButton("❌ 关闭", callback_data="book:close")
         ]])
-        return text , keyboard
+        return text, keyboard
 
     # 处理无结果
     if total == 0:
         text = f"📭 没有找到「{escapeHtml(query)}」相关的书籍喵……\n\n试试换个关键词？"
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✖ 关闭" , callback_data="book:close")
+            InlineKeyboardButton("❌ 关闭", callback_data="book:close")
         ]])
-        return text , keyboard
+        return text, keyboard
 
     # 构建列表文本（HTML 格式）
     lines = [f"📚 搜索「{escapeHtml(truncateText(query, _QUERY_LEN))}」- 找到 {total} 本喵\n"]
@@ -228,15 +228,15 @@ def _renderListView(query: str , searchResult: dict) -> tuple[str , InlineKeyboa
     navButtons = []
     if page > 1:
         navButtons.append(
-            InlineKeyboardButton(f"<< 上页 ({page - 1})" , callback_data=f"book:list:{queryHash}:{page - 1}")
+            InlineKeyboardButton(f"<< 上页 ({page - 1})", callback_data=f"book:list:{queryHash}:{page - 1}")
         )
     if page < totalPages:
         navButtons.append(
-            InlineKeyboardButton(f"下页 ({page + 1}) >>" , callback_data=f"book:list:{queryHash}:{page + 1}")
+            InlineKeyboardButton(f"下页 ({page + 1}) >>", callback_data=f"book:list:{queryHash}:{page + 1}")
         )
 
     # 关闭按钮
-    closeButton = [InlineKeyboardButton("❌ 取消搜索喵" , callback_data="book:close")]
+    closeButton = [InlineKeyboardButton("❌ 取消搜索喵", callback_data="book:close")]
 
     # 组装键盘
     keyboard_rows = []
@@ -246,13 +246,13 @@ def _renderListView(query: str , searchResult: dict) -> tuple[str , InlineKeyboa
 
     keyboard = InlineKeyboardMarkup(keyboard_rows)
 
-    return text , keyboard
+    return text, keyboard
 
 
 
 
-@handleTelegramErrors(errorReply="啊、搜索出错了……请稍后再试喵")
-async def handleBookCommand(update: Update , context: ContextTypes.DEFAULT_TYPE):
+@handleTelegramErrors(errorReply="啊、搜索出错了……稍后再试试呢？")
+async def handleBookCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 /book <query> 命令"""
 
     # 提取搜索词
@@ -276,17 +276,17 @@ async def handleBookCommand(update: Update , context: ContextTypes.DEFAULT_TYPE)
     context.user_data[f"book_query_{queryHash}"] = query
 
     # 搜索
-    result = await searchBooks(query , page=1 , limit=BOOK_ITEMS_PER_PAGE)
+    result = await searchBooks(query, page=1, limit=BOOK_ITEMS_PER_PAGE)
 
     # 渲染并发送
-    text , keyboard = _renderListView(query , result)
-    await update.message.reply_text(text , reply_markup=keyboard , parse_mode="HTML")
+    text, keyboard = _renderListView(query, result)
+    await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 
 
-@handleTelegramErrors(errorReply="啊、搜索出错了……请稍后再试喵")
-async def handleBookTrigger(update: Update , context: ContextTypes.DEFAULT_TYPE):
+@handleTelegramErrors(errorReply="啊、搜索出错了……稍后再试试呢？")
+async def handleBookTrigger(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 "找书 xxx" / "搜书 xxx" 触发词"""
 
     if not update.message or not update.message.text:
@@ -294,7 +294,7 @@ async def handleBookTrigger(update: Update , context: ContextTypes.DEFAULT_TYPE)
     message = update.message.text.strip()
 
     # 提取搜索词（去掉触发词）
-    for trigger in ["找书" , "搜书"]:
+    for trigger in ["找书", "搜书"]:
         if message.startswith(trigger):
             query = message[len(trigger):].strip()
             break
@@ -307,13 +307,13 @@ async def handleBookTrigger(update: Update , context: ContextTypes.DEFAULT_TYPE)
 
     # 复用命令处理逻辑
     context.args = query.split()
-    await handleBookCommand(update , context)
+    await handleBookCommand(update, context)
 
 
 
 
-@handleTelegramErrors(errorReply="啊、搜索出错了……请稍后再试喵")
-async def handleBookCallback(update: Update , context: ContextTypes.DEFAULT_TYPE):
+@handleTelegramErrors(errorReply="啊、搜索出错了……稍后再试试呢？")
+async def handleBookCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理按钮回调"""
 
     query = update.callback_query
@@ -339,22 +339,22 @@ async def handleBookCallback(update: Update , context: ContextTypes.DEFAULT_TYPE
         try:
             page = int(parts[3])
         except ValueError:
-            await safeEditMessage(query.message, "👀 无效的页码喵")
+            await safeEditMessage(query.message, "👀 这个页码是无效的喵")
             return
 
         # 从 user_data 获取搜索词
-        query_text = context.user_data.get(f"book_query_{queryHash}" , "")
+        query_text = context.user_data.get(f"book_query_{queryHash}", "")
 
         if not query_text:
-            await safeEditMessage(query.message , "搜索已过期，请重新搜索喵……？")
+            await safeEditMessage(query.message, "❌ 搜索过期啦，再重新搜一次呢……？")
             return
 
         # 重新搜索
-        result = await searchBooks(query_text , page=page , limit=BOOK_ITEMS_PER_PAGE)
+        result = await searchBooks(query_text, page=page, limit=BOOK_ITEMS_PER_PAGE)
 
         # 渲染并更新消息
-        text , keyboard = _renderListView(query_text , result)
-        await safeEditMessage(query.message , text , reply_markup=keyboard , parse_mode="HTML")
+        text, keyboard = _renderListView(query_text, result)
+        await safeEditMessage(query.message, text, reply_markup=keyboard, parse_mode="HTML")
         return
 
 
@@ -364,12 +364,12 @@ def register():
     """注册 handlers"""
     return {
         "handlers": [
-            CommandHandler("book" , handleBookCommand),
+            CommandHandler("book", handleBookCommand),
             MessageHandler(
                 filters.Regex(r'^(找书|搜书)\s+.+') & ~filters.COMMAND,
                 handleBookTrigger
             ),
-            CallbackQueryHandler(handleBookCallback , pattern=r'^book:'),
+            CallbackQueryHandler(handleBookCallback, pattern=r'^book:'),
         ],
         "name": "书籍搜索",
         "description": "搜索 Open Library 书籍数据库",

@@ -11,7 +11,7 @@ from utils.memoryMonitor import cancelAllStickerTasks
 
 async def execute(app, args):
     count = await cancelAllStickerTasks()
-    print(f"已中止 {count} 个下载任务喵——" if count > 0 else "没有正在进行的下载任务喵——")
+    print(f"已中止 {count} 个下载任务喵——" if count > 0 else "👀 没有正在进行的下载任务喵——")
     return None
 
 

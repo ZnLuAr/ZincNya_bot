@@ -433,11 +433,9 @@ def cmdCheck():
 
         # 通过项的简要回显
         if not errors:
-            keywords, patterns, parseable = _extractToolTriggers(toolName)
+            _, _, parseable = _extractToolTriggers(toolName)
             if parseable:
-                kw = len(keywords or [])
-                pt = len(patterns or [])
-                print(f"  {Color.GREEN}✓{Color.RESET} triggers.py 可解析，KEYWORDS({kw}) + PATTERNS({pt})")
+                print(f"  triggers.py 可解析，KEYWORDS 已配置")
 
         for w in warnings:
             print(f"  {Color.YELLOW}⚠{Color.RESET} {w}")

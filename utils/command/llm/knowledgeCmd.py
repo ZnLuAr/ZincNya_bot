@@ -53,7 +53,7 @@ async def _handleKnowledgeCommand(args):
             print(f"[Knowledge] 重建索引中{'（强制模式）' if force else ''}……")
             try:
                 result = await reindexKnowledgeBase(force=force)
-                print(f"✅ 索引重建完成：")
+                print(f"索引重建完成：")
                 print(f"   新增：{result['added']}")
                 print(f"   更新：{result['updated']}")
                 print(f"   删除：{result['removed']}")
@@ -67,7 +67,7 @@ async def _handleKnowledgeCommand(args):
             try:
                 entries = await getKnowledgeEntries(category=category)
                 if not entries:
-                    print("[Knowledge] 没有找到条目喵……\n")
+                    print("[Knowledge] 没有找到条目……\n")
                     return
                 print(f"[Knowledge] 条目列表{f'（分类：{category}）' if category else ''}：")
                 for entry in entries:
@@ -99,7 +99,7 @@ async def _handleKnowledgeCommand(args):
 
         case "search":
             if not rest:
-                print("❌ 用法：/llm knowledge search <查询内容>\n")
+                print("knowledge search 的用法应该是：/llm knowledge search <查询内容>")
                 return
             query = " ".join(rest)
             try:
@@ -144,4 +144,4 @@ async def _handleKnowledgeCommand(args):
                 print(f"❌ {e}\n")
 
         case _:
-            print("❌ 用法：/llm knowledge [on|off|reindex|list|stats|search|maxresults|minscore]\n")
+            print("/llm knowledge 可用的子命令有：{on|off|reindex|list|stats|search|maxresults|minscore}")

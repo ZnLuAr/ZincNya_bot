@@ -59,7 +59,7 @@ def test_render_list_view_empty():
 
     # 键盘只有关闭按钮
     assert len(keyboard.inline_keyboard) == 1
-    assert keyboard.inline_keyboard[0][0].text == "✖ 关闭"
+    assert keyboard.inline_keyboard[0][0].text == "❌ 关闭"
 
 
 def test_render_list_view_single_page():

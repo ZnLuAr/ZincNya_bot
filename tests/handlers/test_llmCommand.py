@@ -54,7 +54,7 @@ class TestLLMCommand:
 
             mock_set.assert_called_once_with(True)
             call_args = mockUpdate.message.reply_text.call_args[0][0]
-            assert "开启" in call_args
+            assert "启动" in call_args
 
     @pytest.mark.asyncio
     async def test_off_disables_llm(self, mockUpdate, mockContext):

@@ -53,7 +53,7 @@ def renderListView(
             "那就键入 /todos help 吧——"
         )
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✖ 关闭", callback_data="todos:close")
+            InlineKeyboardButton("❌ 关闭", callback_data="todos:close")
         ]])
         return text, keyboard
 
@@ -92,14 +92,14 @@ def renderListView(
     # 翻页按钮
     navRow = []
     if page > 1:
-        navRow.append(InlineKeyboardButton("<< 上一页喵", callback_data=f"todos:list:{page - 1}"))
+        navRow.append(InlineKeyboardButton("<< 上一页", callback_data=f"todos:list:{page - 1}"))
     if page < totalPages:
-        navRow.append(InlineKeyboardButton("下一页喵 >>", callback_data=f"todos:list:{page + 1}"))
+        navRow.append(InlineKeyboardButton("下一页 >>", callback_data=f"todos:list:{page + 1}"))
     if navRow:
         rows.append(navRow)
 
     # 关闭按钮
-    rows.append([InlineKeyboardButton("✖ 关闭", callback_data="todos:close")])
+    rows.append([InlineKeyboardButton("❌ 关闭", callback_data="todos:close")])
 
     return text, InlineKeyboardMarkup(rows)
 

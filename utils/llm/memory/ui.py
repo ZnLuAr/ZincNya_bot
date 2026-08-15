@@ -305,7 +305,7 @@ class MemoryTUIController(ListMenuController):
             confirm = await asyncInput(f"真的要删除 memory #{entry['id']} 吗？(y/N): ")
             if confirm.strip().lower() == "y":
                 ok = await deleteMemory(entry["id"])
-                print("✅ 已删除喵\n" if ok else "❌ 删除失败喵\n")
+                print("已删除\n" if ok else "❌ 删除失败\n")
                 await asyncio.sleep(_ACTION_NOTICE_DELAY)
                 await self.refreshEntries()
                 self.selected = min(self.selected, len(self.entries) - 1)
@@ -315,7 +315,7 @@ class MemoryTUIController(ListMenuController):
             scopeType = scopeInput.strip().lower() or "global"
 
             if scopeType not in VALID_SCOPE_TYPES:
-                print(f"❌ 这个 scope 是无效的: {scopeType}\n")
+                print(f"❌ 这个 {scopeType} 的 scope 是无效的说\n")
                 await asyncio.sleep(_ACTION_NOTICE_DELAY)
                 return True
 
@@ -323,7 +323,7 @@ class MemoryTUIController(ListMenuController):
             if scopeType != "global":
                 scopeID = (await asyncInput(f"Scope ID ({scopeType}): ")).strip()
                 if not scopeID:
-                    print("❌ scope ID 是不能为空的喵\n")
+                    print("❌ scope ID 是不能为空的\n")
                     await asyncio.sleep(_ACTION_NOTICE_DELAY)
                     return True
 
@@ -334,7 +334,7 @@ class MemoryTUIController(ListMenuController):
             content, tags, priority = result
             memoryID = await addMemory(scopeType, scopeID, content, tags=tags, priority=priority)
 
-            print(f"✅ memory #{memoryID} 成功添加喵\n" if memoryID else "❌ 添加失败喵\n")
+            print(f"memory #{memoryID} 成功添加\n" if memoryID else "❌ 添加失败\n")
             await asyncio.sleep(_ACTION_NOTICE_DELAY)
             await self.refreshEntries()
 
@@ -361,7 +361,7 @@ class MemoryTUIController(ListMenuController):
 
             if updateKwargs:
                 ok = await updateMemory(entry["id"], **updateKwargs)
-                print("✅ 更新成功喵\n" if ok else "❌ 更新失败喵\n")
+                print("更新成功\n" if ok else "❌ 更新失败\n")
                 await asyncio.sleep(_ACTION_NOTICE_DELAY)
 
             await self.refreshEntries()

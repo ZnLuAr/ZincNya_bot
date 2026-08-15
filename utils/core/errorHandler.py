@@ -210,7 +210,7 @@ class ErrorHandler:
         # 配置 logging 拦截器，捕获 httpx/telegram 库的网络错误
         self.setupLoggingInterceptor()
 
-        print("错误处理系统已初始化喵——")
+        print("错误处理系统已初始化——")
 
 
     def getErrorLogPath(self) -> str:

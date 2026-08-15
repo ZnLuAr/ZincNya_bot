@@ -72,7 +72,7 @@ from utils.core.logger import logAction, LogLevel, LogChildType
 
 
 
-async def handleConsoleCommand(app , commandLine: str):
+async def handleConsoleCommand(app, commandLine: str):
     '''
     解析自主文件 bot.py 传来的控制台输入。
     如若是有效的命令，则分发给对应模块。
@@ -93,28 +93,28 @@ async def handleConsoleCommand(app , commandLine: str):
     commandArgs = args[1:]
 
     if not commandName or not commandName.replace("_", "").isalnum():
-        print(f"\n/{commandName}……喵？\n锌酱……还没见过这条指令喵……？\n\n")
+        print(f"\n❌ '{commandName}' 不是锌酱认识的指令的说……？\n\n")
         return
     
     # 加载对应命令模块
     moudlePath = f"{COMMAND_MODULE}.{commandName}"
-    filePath = os.path.join(COMMAND_DIR , f"{commandName}.py")
+    filePath = os.path.join(COMMAND_DIR, f"{commandName}.py")
     commandDir = os.path.join(COMMAND_DIR, commandName)
 
     # 接受单文件命令（name.py）或包命令（name/ 目录）
     if not (os.path.exists(filePath) or os.path.isdir(commandDir)):
-        print(f"\n/{commandName}……喵？\n锌酱……还没见过这条指令喵……？\n\n")
+        print(f"\n❌ '{commandName}' 不是锌酱认识的指令的说……？\n\n")
         return
     
     try:
         module = importlib.import_module(moudlePath)
     except Exception as e:
-        print(f"导入 /{commandName} 时发生错误喵：{e}\n")
+        print(f"❌ 导入 /{commandName} 时出错：{e}\n")
         return
     
 
     # 最终执行命令
-    if hasattr(module , "execute"):
+    if hasattr(module, "execute"):
 
         # -h / --help：统一拦截，打印帮助后不执行 execute()
         if commandArgs and commandArgs[0] in ("-h", "--help"):
@@ -125,11 +125,11 @@ async def handleConsoleCommand(app , commandLine: str):
                 if info.get("example"):
                     print(f"{info['example']}\n\n")
             else:
-                print(f"/{commandName} 没有提供帮助信息喵……\n")
+                print(f"❌ /{commandName} 没有提供帮助信息……\n")
             return
 
         try:
-            result = await module.execute(app , commandArgs)
+            result = await module.execute(app, commandArgs)
             if result == "SHUTDOWN":
                 return "SHUTDOWN"
             if inspect.isawaitable(result):
@@ -143,12 +143,12 @@ async def handleConsoleCommand(app , commandLine: str):
                 LogChildType.WITH_ONE_CHILD
             )
     else:
-            print(f"❌ やばいー/{commandName} 模块中没有定义 execute(app, args) 函数喵！\n")
+            print(f"❌ {commandName} 模块缺少 execute(app, args) 函数……\n")
 
 
 
 
-def parseArgsTokens(parsed: dict , tokens: list[str] , aliasMap: dict|None=None):
+def parseArgsTokens(parsed: dict, tokens: list[str], aliasMap: dict|None=None):
 
     '''
     通用参数解析函数
@@ -187,7 +187,7 @@ def parseArgsTokens(parsed: dict , tokens: list[str] , aliasMap: dict|None=None)
 
         # 处理 --key=value 形式：先从 key 中分离值
         if "=" in key:
-            key , eqValue = key.split("=" , 1)
+            key, eqValue = key.split("=", 1)
         else:
             eqValue = None
 
@@ -221,7 +221,7 @@ def parseArgsTokens(parsed: dict , tokens: list[str] , aliasMap: dict|None=None)
 
 
         # 将解析出的参数分别写入 parsed
-        if isinstance(parsed[key] , list):
+        if isinstance(parsed[key], list):
             parsed[key].extend(values)
         else:
             # 若存在非 list 参数，则只接收第一个值
