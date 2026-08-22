@@ -1,12 +1,15 @@
 """
 tests/utils/test_telegramHelpers.py
 
-测试 utils.telegramHelpers.truncateText——按码点截断 + 可参数化 suffix。
-该函数统一了原 llmReview._truncate / book._truncate / telegramHelpers 内联三处截断，
-边界行为（limit ≤ len(suffix)）在此守护。
+测试 utils.telegramHelpers：
+    - truncateText——按码点截断 + 可参数化 suffix；统一了原 llmReview._truncate /
+      book._truncate / telegramHelpers 内联三处截断，边界行为（limit ≤ len(suffix)）在此守护
+    - isMentionedByEntity——mention entity 精确匹配（不做子串匹配，@notmybot 不误中）
 """
 
-from utils.telegramHelpers import truncateText
+from types import SimpleNamespace
+
+from utils.telegramHelpers import isMentionedByEntity, truncateText
 
 
 
@@ -56,3 +59,50 @@ class TestTruncateText:
         """limit 恰好等于 suffix 长度：走 ≤ 分支，返回整个 suffix"""
         result = truncateText("abc", 1, suffix="…")
         assert result == "…"
+
+
+
+# ===========================================================================
+# isMentionedByEntity（mention entity 精确匹配，不做子串匹配）
+# ===========================================================================
+
+def _entity(etype, text, offset=0, length=None):
+    if length is None:
+        length = len(text)
+    return SimpleNamespace(type=etype, offset=offset, length=length)
+
+
+def _msg(text="", caption=None, entities=None, captionEntities=None):
+    return SimpleNamespace(
+        text=text,
+        caption=caption,
+        entities=entities or [],
+        caption_entities=captionEntities or [],
+    )
+
+
+class TestIsMentionedByEntity:
+    def test_exact_mention_hits(self):
+        msg = _msg(text="@ZincNyaBot", entities=[_entity("mention", "@ZincNyaBot")])
+        assert isMentionedByEntity(msg, "ZincNyaBot") is True
+
+    def test_case_insensitive(self):
+        msg = _msg(text="@zincnyabot", entities=[_entity("mention", "@zincnyabot")])
+        assert isMentionedByEntity(msg, "ZincNyaBot") is True
+
+    def test_prefix_bot_not_hit(self):
+        """@notmybot 不命中——entity 精确匹配的关键差异"""
+        msg = _msg(text="@ZincNyaBotOther", entities=[_entity("mention", "@ZincNyaBotOther")])
+        assert isMentionedByEntity(msg, "ZincNyaBot") is False
+
+    def test_no_entities_not_hit(self):
+        msg = _msg(text="提到 @ZincNyaBot 但没有 entity")
+        assert isMentionedByEntity(msg, "ZincNyaBot") is False
+
+    def test_caption_entity_hits(self):
+        msg = _msg(caption="@ZincNyaBot 看图", captionEntities=[_entity("mention", "@ZincNyaBot")])
+        assert isMentionedByEntity(msg, "ZincNyaBot") is True
+
+    def test_non_mention_entity_ignored(self):
+        msg = _msg(text="@ZincNyaBot", entities=[_entity("bold", "@ZincNyaBot")])
+        assert isMentionedByEntity(msg, "ZincNyaBot") is False

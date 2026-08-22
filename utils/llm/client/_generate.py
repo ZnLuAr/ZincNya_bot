@@ -22,7 +22,7 @@ from ._router import getProvider
 # 日志预览截断长度
 _LOG_DESC_LEN = 80
 # 日志详情截断长度
-_LOG_DESC_DETAIL = 200
+_LOG_DESC_DETAIL = 1024
 
 
 
@@ -189,7 +189,7 @@ async def generateReply(
     # 未覆盖（有意保持独立读取，见各自说明）：
     #   - _request.requestWithRetry 内的 getModel()：仅 fallback 重决策时用，
     #     此刻重读反而能拿到运维刚改的救场配置，故不传快照。
-    #   - handlers/llm.py _dispatchGeneratedOutput 的 getAutoMode()：属回复
+    #   - handlers/llm.py _runLLMPipeline 的 getAutoMode()：属回复
     #     已生成后的分发阶段，与生成逻辑解耦，单独读一次即可。
     cfg = loadLLMConfig()
     model = cfg["model"]

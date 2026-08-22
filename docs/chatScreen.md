@@ -742,7 +742,8 @@ if stripped == ":help":
 | `utils/chatHistory.py` | 聊天记录加密存储与读取 |
 | `utils/core/stateManager.py` | 全局状态管理(interactiveMode / messageQueue) |
 | `utils/command/llm/review/chatScreenReview.py` | LLM 审核命令处理(`handleChatScreenReviewCommand` 等) |
-| `utils/llm/state.py` | 审核队列管理(`getReviewQueue` / `peekReviewHint`) |
+| `utils/llm/state.py` | 审核队列容器(`getReviewQueue`)、防抖缓冲 |
+| `utils/llm/review.py` | 审核队列 item 契约(`peekReviewHint` / 入队操作)、审核动作 |
 
 ---
 

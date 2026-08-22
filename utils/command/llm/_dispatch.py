@@ -93,7 +93,7 @@ async def execute(app, args):
                 modeNames = {"on": "直接发送", "off": "Telegram 审核", "console": "控制台审核"}
                 await logAction("System", f"LLM 审核模式切换", f"已切换为 {modeNames.get(mode, mode)}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             except ValueError:
-                print(f"❌ 无效的审核模式：{mode}（可选：on / off / console）\n\n")
+                print(f"❌ 无效的审核模式：{mode}（可选：on / off / console）\n")
 
         case "model":
             if not rest:
@@ -104,7 +104,7 @@ async def execute(app, args):
                 setModel(newModel)
                 await logAction("System", f"LLM 模型切换", f"已切换为：{newModel}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             else:
-                print(f"当前模型：{getModel()}\n\n")
+                print(f"当前模型：{getModel()}\n")
 
         case "visionmodel":
             if not rest:
@@ -122,7 +122,7 @@ async def execute(app, args):
                 setVisionModel(getModel())
                 await logAction("System", f"LLM 视觉模型重置", f"已重置为主模型（单调用）", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             else:
-                print(f"视觉模型：{getVisionModel()}\n\n")
+                print(f"视觉模型：{getVisionModel()}\n")
 
         case "trigger":
             modeNames = {"mention": "群聊触发需要 @", "keyword": "群聊触发需要 @ 或关键词"}

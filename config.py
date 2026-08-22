@@ -185,7 +185,6 @@ LLM_DEBOUNCE_SECONDS = 1.5                                     # 防抖等待时
 LLM_PENDING_MSG_LIMIT = 10                                     # 每用户防抖缓冲最大条数
 LLM_REVIEW_TTL_SECONDS = 86400                                 # 审核条目 TTL（秒，默认 24h）
 LLM_REVIEW_FEEDBACK_MAX_LENGTH = 2048                          # :fb 补充反馈长度上限（字符）
-LLM_REVIEW_REPLY_PREVIEW_LEN = 1800                            # 审核卡片 reply 预览长度（正文+框架后留余量）
 LLM_MEMORY_DB_PATH = os.path.join(DATA_DIR, "llm", "llmMemory.db")    # structured memory 数据库
 LLM_IMAGE_MAX_BYTES = 20 * 1024 * 1024                         # 图片大小上限（20 MB）
 LLM_IMAGE_SUPPORTED_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}

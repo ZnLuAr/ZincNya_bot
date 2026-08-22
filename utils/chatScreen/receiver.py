@@ -11,7 +11,8 @@ import asyncio
 from datetime import datetime
 
 from utils.chatHistory import saveMessage
-from utils.llm.state import getReviewQueue, peekReviewHint
+from utils.llm.review import peekReviewHint
+from utils.llm.state import getReviewQueue
 
 from .formatter import getSenderName, extractDisplayText
 from .statusBar import getReviewQueueStatus

@@ -299,7 +299,7 @@ data/llm/
 ```
 Telegram update
   └─ handlers/llm.py: handleLLMMessage
-       └─ _dispatchLLMReply  (asyncio.create_task, 防抖后)
+       └─ _runLLMPipeline  (asyncio.create_task, 防抖后)
             └─ utils/llm/client/_generate.py: generateReply
                  └─ buildConversationContext(
                         userMessage=...,

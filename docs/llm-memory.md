@@ -1,6 +1,6 @@
 # LLM Structured Memory 设计文档
 
-> 最后更新：2026-07-10
+> 最后更新：2026-08-22
 > Written by ZincNya~ ❤
 ---
 
@@ -164,7 +164,7 @@ Memory 只在以下情况下被检索并注入：
 3. 首生成路径按 `memoryAutoApprove` 配置决定执行方式：
    - `memoryAutoApprove = True`：直接执行写入，标记来源 inferred；
    - `False` 且 `autoMode == "console"`，推入控制台待审队列；
-   - `False` 且非 console，则发 Telegram memory review（卡片由 `handlers/llmReview.py` 渲染）；
+   - `False` 且非 console，则发 Telegram memory review（卡片由 `utils/llm/review.py` 渲染、`handlers/llmReview.py` 发送）；
    - 若不存在管理员账号，则仅记录 `Warning` 日志，直接丢弃本次操作。
 
 > retry / `:fb` 路径产出的记忆操作**不经过 `memoryAutoApprove` 而始终走审核**（统一 dispatcher 的 `respectAutoApprove=False`），这是因为管理员需要看过新回复才能定夺新产出的记忆是否能够通过。

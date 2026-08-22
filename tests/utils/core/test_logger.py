@@ -165,13 +165,15 @@ def test_extract_user_name_telegram_user(mockUser):
 # 测试 TreeLogger._formatConsoleText() — 7 种 childType 分支
 # ============================================================================
 
+# 尾部换行约定：块末格式串只出一个 \n（结束行），空行分隔由消费端补
+#（CLI 的 print 自动补、TUI 的 _appendConsoleOutput 显式补）——见 logger.py docstring
 @pytest.mark.parametrize("child_type,expected_pattern", [
-    (LogChildType.NONE, r"\[12:00:00\] \[INFO\] @TestUser: Event\n\n"),
+    (LogChildType.NONE, r"\[12:00:00\] \[INFO\] @TestUser: Event\n"),
     (LogChildType.WITH_CHILD, r"\[12:00:00\] \[INFO\] @TestUser: Event\n\s+└─┤ Details"),
-    (LogChildType.WITH_ONE_CHILD, r"\[12:00:00\] \[INFO\] @TestUser: Event\n\s+└─┤ Details\n\n"),
+    (LogChildType.WITH_ONE_CHILD, r"\[12:00:00\] \[INFO\] @TestUser: Event\n\s+└─┤ Details\n"),
     (LogChildType.CHILD_WITH_CHILD, r"\s+└─┤ Event\n\s+└─┤ Details"),
-    (LogChildType.LAST_CHILD_WITH_CHILD, r"\s+└─┤ Event\n\s+└─┤ Details\n\n"),
-    (LogChildType.LAST_CHILD, r"\s+└─┤ Details\n\n"),
+    (LogChildType.LAST_CHILD_WITH_CHILD, r"\s+└─┤ Event\n\s+└─┤ Details\n"),
+    (LogChildType.LAST_CHILD, r"\s+└─┤ Details\n"),
     (LogChildType.ONLY_RESULT, r"\s+└─┤ Details"),
 ])
 def test_format_console_text(child_type, expected_pattern):

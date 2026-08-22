@@ -246,8 +246,11 @@ class ListMenuController(TUISession):
     async def mainLoop(self):
         isManageMode = (self.mode == "manage")
 
-        # 空列表短路（选择模式）：打提示直接退
+        # 空列表短路（选择模式）：打提示直接退。
+        # self._skipExitSpacing = True 告知 onExit 跳过装饰空行与退出消息——
+        # 空列表场景没进过全屏渲染，onEnter 的占位空行已提供与后续提示的分隔
         if not self.entries and not isManageMode:
+            self._skipExitSpacing = True
             print(self.getEmptyMessage())
             return None
 
@@ -289,8 +292,11 @@ class ListMenuController(TUISession):
         # 切回主屏幕缓冲区（session.runSession 已 try/except 兜住，rmcup 抛 OSError 不阻断收尾）
         rmcup()
         sys.stdout.flush()
-        # manage 操作（修改备注/删除确认等）的输入提示写在主屏会残留，留一个空行与控制台提示分隔
-        print()
+        # 空列表短路场景（mainLoop 设置 _skipExitSpacing）没进过全屏，跳过收尾输出；
+        # 其余场景在主屏补退出消息 + 空行（manage 操作的输入提示写在主屏会残留，
+        # 空行负责与后续控制台输出分隔）。退出消息原先打在 _esc（备用屏上，rmcup 即丢）
+        if not getattr(self, "_skipExitSpacing", False):
+            print(self.getExitMessage())
 
 
     # ========================================================================
@@ -325,7 +331,6 @@ class ListMenuController(TUISession):
         @kb.add("escape")
         def _esc(event):
             self.selected = -1
-            print(self.getExitMessage())
             event.app.exit()
 
         # 数字键 0-9：实时拼接并跳转到对应显示序号。

@@ -2,7 +2,7 @@ from utils.core.logger import logAction, LogLevel, LogChildType
 
 async def execute(app, args):
     await logAction(
-        "锌酱",
+        "System",
         "/shutdown",
         "收到关机指令喵——",
         LogLevel.INFO,
@@ -24,6 +24,6 @@ def getHelp():
     
     "usage": "直接输入 /shutdown 就好了哦",
 
-    "example": "もー、ご主人様又在装傻了……"
+    "example": "もー、又在装傻了……"
 
     }

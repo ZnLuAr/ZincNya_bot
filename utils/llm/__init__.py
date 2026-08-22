@@ -3,13 +3,15 @@ utils/llm/
 
 LLM 集成模块：
     - config: 配置管理（开关、模式、模型、视觉模型、提示词、记忆自动批准）
-    - state: 运行时状态（审核队列、速率限制、防抖缓冲、one-shot context）
+    - state: 运行时状态容器（审核队列容器、速率限制、防抖缓冲与批次聚合、one-shot context）
     - client: 多模型 LLM 客户端（按模型前缀路由至各 provider，双调用视觉架构）
     - memory: structured memory 存储、检索与 LLM 自主操作
     - knowledge: 知识库（Markdown 文件管理、BM25 检索、上下文注入）
-    - contextBuilder: 统一上下文组装
+    - contextBuilder: 统一上下文组装（背景侧）
+    - messagePrep: 消息文本准备（当下侧：prompt 清洗 / reply 注入 / URL 意图切分）
+    - trigger: 群聊触发判断（私聊 / @entity / 关键词）
     - vision: 图片提取（photo/document/reply）与下载编码
-    - review: console / chatScreen 共用审核动作（reply + memory 双类型）
+    - review: 审核域（首生成分发三分流、审核队列 item 契约、console / chatScreen / TG 共用审核动作）
 """
 
 from .config import (
@@ -62,11 +64,11 @@ from .config import (
 )
 from .state import (
     getReviewQueue,
-    addReviewItem,
     isRateLimited,
     addRateLimit,
     appendPendingMessage,
     popPendingMessages,
+    collectDebouncedBatch,
     getPendingTask,
     setPendingTask,
     clearPendingTask,

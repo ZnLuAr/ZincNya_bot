@@ -49,25 +49,9 @@ async def handleConsoleReview(bot):
     kind = item.get("kind", "reply")
     actionsHint = getReviewItemActions(item)
 
-    if kind == "memory":
-        print(f"\n{formatReviewItemText(item)}\n")
-        print(f"操作：{actionsHint} > ", end="")
-    else:
-        print(
-            f"""
-[消息待审核喵]
-原始消息：{item['originalMsg']}
-
-生成的回复：
-{'-' * 30}
-
-{item['reply']}
-
-{'-' * 30}
-
-操作：{actionsHint} > """,
-end=""
-        )
+    # reply / memory 两类均走 formatReviewItemText——console 侧展示的统一归属在 review.py
+    print(f"\n{formatReviewItemText(item)}\n")
+    print(f"操作：{actionsHint} > ", end="")
 
     sys.stdout.flush()
 
@@ -81,7 +65,7 @@ end=""
         try:
             await reviewSend(bot, item)
         except Exception as e:
-            print(f"[审核] 操作失败：{e}\n\n")
+            print(f"[审核] 操作失败：{e}\n")
             queue.put_nowait(item)
 
     elif choice in ("e", "edit"):
@@ -124,9 +108,9 @@ end=""
         try:
             newQueueItem = await reviewRetry(item)
             queue.put_nowait(newQueueItem)
-            print("[审核] 已重新生成，再次输入 /llm review 就可以查看了\n\n")
+            print("[审核] 已重新生成，再次输入 /llm review 就可以查看了\n")
         except Exception as e:
-            print(f"[审核] 重试失败：{e}\n\n")
+            print(f"[审核] 重试失败：{e}\n")
             queue.put_nowait(item)
 
     elif choice in ("f", "feedback"):
@@ -142,9 +126,9 @@ end=""
             try:
                 newQueueItem = await reviewRetryWithFeedback(item, feedback.rstrip('\n'))
                 queue.put_nowait(newQueueItem)
-                print("[审核] 已重新生成，再次输入 /llm review 就可以查看了\n\n")
+                print("[审核] 已重新生成，再次输入 /llm review 就可以查看了\n")
             except Exception as e:
-                print(f"[审核] 重试失败：{e}\n\n")
+                print(f"[审核] 重试失败：{e}\n")
                 queue.put_nowait(item)
         else:
             print("[审核] 取消喵\n")

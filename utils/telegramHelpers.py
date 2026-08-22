@@ -6,6 +6,7 @@ Telegram 消息操作的公共工具函数。
 
 from html import escape as _htmlEscape
 
+from telegram.constants import MessageEntityType
 from telegram.error import BadRequest
 
 from config import TG_MESSAGE_MAX_LEN
@@ -48,24 +49,26 @@ async def safeEditMessage(message, text: str, **kwargs) -> bool:
 
 
 
-def isMentioned(message, botUsername: str) -> bool:
+def isMentionedByEntity(message, botUsername: str) -> bool:
     """
-    检测消息是否 @ 了 bot（纯 Telegram 语义）。
+    按 Telegram mention entity 精确匹配 @botUsername。
 
-    同时检查 message.text 和 message.caption，
-    以支持图片消息在 caption 中 @bot 的场景。
-
-    参数:
-        message: telegram.Message 对象
-        botUsername: bot 的用户名（如 "MyZincNyaBot"）
-
-    返回:
-        True 如果消息中包含 @botUsername
+    只认 MessageEntityType.MENTION 实体且实体文本与 @botUsername 完全相等
+    （子串匹配会让 @notmybot 之类同前缀名误中），同时检查 text 与 caption
+    （支持图片 caption @bot 场景）。
     """
-    mention = f"@{botUsername}".lower()
-    text = message.text or ""
-    caption = message.caption or ""
-    return mention in text.lower() or mention in caption.lower()
+    expected = f"@{botUsername}".lower()
+    for text, entities in (
+        (message.text or "", message.entities or []),
+        (message.caption or "", message.caption_entities or []),
+    ):
+        for entity in entities:
+            if entity.type != MessageEntityType.MENTION:
+                continue
+            mention = text[entity.offset:entity.offset + entity.length].lower()
+            if mention == expected:
+                return True
+    return False
 
 
 

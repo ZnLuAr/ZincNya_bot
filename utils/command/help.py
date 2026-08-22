@@ -27,7 +27,7 @@ async def execute(app , args):
                     info = mod.getHelp()
                     commandsList.append(info)
             except Exception as e:
-                print(f"\n❌ 加载 {fileName} 时出错了喵：{e}\n\n")
+                print(f"\n❌ 加载 {fileName} 时出错了喵：{e}\n")
 
         # 无参数，即列出命令列表
         if not args:
@@ -37,7 +37,7 @@ async def execute(app , args):
             for info in sorted(commandsList , key=lambda x: x["name"]):
                 print(f"{info['name']:<15}      {info.get('description' , '')}")
             print("\n" , "—" * 61)
-            print("使用 /help <command> 查看详细说明——\n\n")
+            print("使用 /help <command> 查看详细说明——\n")
             return
         
         # 有参数，打印对应命令信息
@@ -52,12 +52,12 @@ async def execute(app , args):
                 print(f"\n{info.get('usage' , 'ないです（即答')}\n\n")
                 if info.get("example"):
                     print(f"{info['example']}")
-                    print("—" * 87 , "\n\n")
+                    print("—" * 87 + "\n")
             else:
                 print(f"命令 /{command} 好像并没有定义 getHelp() 函数……")
         except ModuleNotFoundError:
             print(f"\n没有找到 /{command} 命令喵……")
-            print("提示：输入 /help 查看所有可用命令\n\n")
+            print("提示：输入 /help 查看所有可用命令\n")
     except Exception as e:
         await logAction(
             "Console",

@@ -1,6 +1,6 @@
 # LLM Handler 架构文档
 
-> 最后更新：2026-07-10
+> 最后更新：2026-08-22
 > Written by ZincNya~ ❤
 
 ---
@@ -20,14 +20,16 @@
 
 - [设计决策](#设计决策)
   - [为什么拆成大量小 helper](#为什么拆成大量小-helper)
-  - [为什么 `_dispatchLLMReply` 要做成后台任务](#为什么-_dispatchllmreply-要做成后台任务)
+  - [为什么 `_runLLMPipeline` 要做成后台任务](#为什么-_runllmpipeline-要做成后台任务)
   - [为什么 URL 读取必须满足触发条件且能读取到存在意图才执行](#为什么-url-读取必须满足触发条件且能读取到存在意图才执行)
   - [为什么 reply-to 只贡献 URL 候选，不贡献意图](#为什么-reply-to-只贡献-url-候选不贡献意图)
   - [为什么三种 auto mode 不合并](#为什么三种-auto-mode-不合并)
 - [文件结构](#文件结构)
 - [处理流水线总览](#处理流水线总览)
+- [四个数据载体](#四个数据载体)
+- [变量生命周期（谁在哪一步、叫什么名字）](#变量生命周期谁在哪一步叫什么名字)
 - [同步阶段：`handleLLMMessage`](#同步阶段handlellmmessage)
-- [后台阶段：`_dispatchLLMReply`](#后台阶段_dispatchllmreply)
+- [后台阶段：`_runLLMPipeline`](#后台阶段_runllmpipeline)
 - [触发判断](#触发判断)
 - [防抖聚合](#防抖聚合)
 - [URL 读取集成](#url-读取集成)
@@ -55,7 +57,7 @@
 
 要是不拆分，后续新增功能会不断膨胀主函数，同一段代码里混杂网络请求、权限、上下文构造、记忆解析，排查问题会格外费劲。哪怕现在多了一堆小工具，可维护性都要好很多。
 
-### 为什么 `_dispatchLLMReply` 要做成后台任务
+### 为什么 `_runLLMPipeline` 要做成后台任务
 
 用户连续刷屏发送多条消息时，不能每条都立刻发起 LLM 请求，需要短暂窗口做消息聚合合并。所以同步 handler 只负责校验消息、存入缓冲、拉起后台任务，真实的模型调用，则全部延后到防抖窗口结束后一起执行。
 
@@ -99,23 +101,25 @@ URL 抓取不能单独作为唤醒客户端的入口，裸发链接不能主动�
 ```
 handlers/
 ├── llm.py              # 本文档主体：LLM 消息处理入口
-├── llmReview.py        # Telegram 审核消息与 callback（inline keyboard）
+├── llmReview.py        # Telegram 审核消息发送、按钮 callback、:edit / :fb（卡片渲染在 utils/llm/review.py）
 └── llmCommand.py       # /llm ops 命令
 
 utils/
 ├── markdownToHtml.py   # Markdown → Telegram HTML 转换工具
-├── telegramHelpers.py  # Telegram 消息操作公共工具（含 sendLLMReplyWithMarkdown）
+├── telegramHelpers.py  # Telegram 消息操作公共工具（含 sendLLMReply）
 ├── chatHistory.py      # 聊天历史持久化
 └── operators.py        # ops 权限管理
 
 utils/llm/
 ├── __init__.py         # 统一导出
 ├── config.py           # 配置：开关、模式、模型、触发、记忆、URL
-├── state.py            # 运行时状态：审核队列、速率限制、防抖、one-shot
-├── contextBuilder.py   # 上下文组装（memory + history + URL + 当前消息）
+├── state.py            # 运行时状态容器：审核队列容器、速率限制、防抖缓冲与批次聚合、one-shot
+├── contextBuilder.py   # 上下文组装（背景侧：memory + history + URL）
+├── messagePrep.py      # 消息文本准备（当下侧：prompt 清洗 / reply 注入 / URL 意图切分）
+├── trigger.py          # 群聊触发判断（私聊 / @entity / 关键词）
 ├── urlReader.py        # URL 提取、意图判断、安全抓取、内容提取
-├── review.py           # 审核共享层（TG/chatScreen/CLI 三入口共用）
-├── vision.py           # 图片提取与下载
+├── review.py           # 审核域：首生成分发三分流 + 审核队列 item 契约 + 三入口共用原语 + TG 审核卡片渲染
+├── vision.py           # 图片提取（含 prompt 回退）与下载
 ├── client/
 │   ├── _generate.py    # generateReply：主 LLM 调用
 │   ├── _guardrails.py  # SYSTEM_GUARDRAILS 安全规则
@@ -146,20 +150,21 @@ utils/llm/
 │  3. 获取 raw 文本                                       │
 │  4. 命令排除（/foo）                                    │
 │  5. :edit 反向索引拦截                                  │
-│  6. raw 文本非空                                        │
-│  7. 白名单授权                                          │
-│  8. 触发判断（私聊 / @ / 关键词）                       │
-│  9. 速率限制                                            │
-│ 10. 提取图片 refs                                       │
-│ 11. 构造 pureText / urlIntentText / urlCandidateText    │
-│ 12. 下载图片 + 补充 prompt 说明                         │
-│ 13. appendPendingMessage + 起/替换后台任务              │
+│  6. :fb 补充反馈拦截                                    │
+│  7. raw 文本非空                                        │
+│  8. 白名单授权                                          │
+│  9. 触发判断（私聊 / @ / 关键词）                       │
+│ 10. 速率限制                                            │
+│ 11. 提取图片 refs                                       │
+│ 12. 构造 pureText / urlIntentText / urlCandidateText    │
+│ 13. 下载图片 + 补充 prompt 说明                         │
+│ 14. appendPendingMessage + 起/替换后台任务              │
 │                                                         │
 └──────────────────────────┬──────────────────────────────┘
                            │ asyncio.create_task
                            ▼
 ┌─────────────────────────────────────────────────────────┐
-│                _dispatchLLMReply (后台任务)              │
+│                _runLLMPipeline (后台任务)              │
 │                                                         │
 │  1. sleep LLM_DEBOUNCE_SECONDS                          │
 │  2. 聚合 batch（合并多条 pending）                      │
@@ -176,12 +181,81 @@ utils/llm/
 
 ---
 
+## 四个数据载体
+
+一条消息从入口到分发，全程经由四个 frozen dataclass 传递（PTB-free，定义随域模块）：
+
+| 载体 | 定义处 | 产出阶段 | 消费方 |
+|------|--------|----------|--------|
+| `PromptPayload` | `utils/llm/messagePrep.py` | 入口（handleLLMMessage） | `_enqueueLLMDebounce` 拆字段入防抖缓冲 |
+| `DispatchTarget` | `utils/llm/review.py` | 入口（handleLLMMessage） | 全链定位（enqueue → pipeline → dispatch 闭包） |
+| `DebouncedBatch` | `utils/llm/state.py` | 防抖窗口结束（collectDebouncedBatch） | `_runLLMPipeline` 生成输入 |
+| `GeneratedOutput` | `utils/llm/review.py` | 生成完成（_runLLMPipeline 组装） | `dispatchGeneratedOutput`（文字 / 记忆分流） |
+
+为什么拆成四个而不是一个大对象：字段实际上是分阶段出现的——入口阶段只有消息文本（PromptPayload）与定位（DispatchTarget），在防抖窗口结束时聚合出批次（DebouncedBatch），直到生成完成才有产出（GeneratedOutput）。如果把这些都塞进一个大对象里，「哪些字段何时有效」这一点就变成隐性契约了。
+
+四个载体均为 `@dataclass(frozen=True, kw_only=True)`：kw_only 与项目 keyword-only 函数调用风格一脉相承、防字段顺序调整引发位置构造错位；frozen 防 in-flight 改写（需要更新字段时用 `dataclasses.replace`）。
+
+**引用/当前的结构化拆分**（Design B，展示侧）：`ReplyContext`（messagePrep）在入口切分引用行/当前文本，`PromptPayload.replyLine/currentText` → 防抖缓冲 → `DebouncedBatch.displayPairs` → `GeneratedOutput.displayBlocks`（DisplayBlocks：prefix 标注行 + pairs 配对）→ 审核卡结构化渲染（渲染函数在 `utils/llm/review.py`：每条消息一个 blockquote，引用与当前消息**合并在同一块内**、以粗体小节「引用消息」「当前消息」区分——分块会在内容长短悬殊时右边缘参差，合块只留一条边缘）。prompt 字符串（含 marker 的 combinedText）**不动**；displayBlocks 为 None 时渲染层走退化路径（对 originalMsg 做 marker 解析，同样合并为双小节块）。TODO（Design A 预留）：prompt 组装未来改用 ReplyContext 结构化注入（引用可独立进上下文 tier / 针对性指令），见 messagePrep 模块 docstring。
+
+**字段明细以各模块 docstring 为准，本文档只描述流转**——docstring 是单一事实源，避免双处维护漂移。
+
+---
+
+## 变量生命周期（谁在哪一步、叫什么名字）
+
+一条用户消息的文本从 Telegram update 进来到审核卡出去，要换好几手名字。这一节是全链的变量对照表——在这里就可以查到哪个名字是谁在哪个环节的产物。
+
+### prompt 线与展示线
+
+先立一个总纲：文本有**两条线**，在 `preparePurePromptText` 分岔、在 `GeneratedOutput` 汇合——
+
+- **prompt 线**（给 LLM 看的）：`rawText` → `pureText` → 防抖缓冲 `text` → `combinedText` → `generateReply` 的 userMessage；
+- **展示线**（给 ops 看的）分两支：结构化支 `replyLine`/`currentText` → `displayPairs` → `DisplayBlocks.pairs` → blockquote 小节；字符串支 `combinedText` → `header`/`displayOriginalMsg` → 审核卡退化路径、console item、日志。
+
+prompt 线的 `combinedText` 会被复用进展示线的 `displayOriginalMsg`（它含 marker，恰好是退化路径解析的原料）——这是两条线唯一的交叉点，除此之外**不混用**。
+
+### 全链对照表
+
+| 环节 | 位置 | 变量 | 从哪来 | 经过什么 | 到哪去 |
+|------|------|------|--------|----------|--------|
+| 入口取文本 | `handleLLMMessage` | `rawText` | `message.text or message.caption` | 无处理 | 命令排除、判空、`preparePurePromptText` |
+| 清洗 | `preparePurePromptText` | `pureText` | `rawText` | 去 `@bot`、剥 `#context`；有引用时拼 marker（`[引用的消息]`/`[当前用户消息]`） | `PromptPayload.pureText`（图片 notes 在下一行才前置） |
+| URL 意图（安全边界） | 同上 | `urlIntentText` | `pureText`（**reply 注入前**取值） | 无处理，仅当前消息 | `PromptPayload.urlIntentText` → URL 意图判定 |
+| URL 候选 | 同上 | `urlCandidateText` | `pureText` + 被回复消息文本 | 换行拼接 | `PromptPayload.urlCandidateText` → URL 提取 |
+| 引用切分（展示线） | `extractReplyTextContext` | `replyLine` / `currentText` | 被回复消息 / 当前 `pureText` | replyLine 拼 `"<@发送者> "`、300 字截断 | `PromptPayload` 同名字段 |
+| 图片说明 | `_downloadImagesAndAnnotatePrompt` / `handleLLMMessage` | `annotatedText` / `annotatedCurrent` | `payload.pureText` / `payload.currentText` | helper 内前置 notes 得 `annotatedText`；handler 拼接 `annotatedCurrent` | `replace()` 写回新 `payload` |
+| 防抖缓冲 | `appendPendingMessage` | 缓冲 dict 的 `text` 等 7 键 | `payload` 拆字段 | 无变换（`pureText` 改名 `text`） | `collectDebouncedBatch` |
+| 批次聚合 | `collectDebouncedBatch` | `combinedText` / `displayPairs` 等 | 各条缓冲 `text` / `replyLine`+`currentText` | 文本换行 join；pairs 双空过滤 | `DebouncedBatch` 同名字段 |
+| 展示原文 | `_runLLMPipeline` | `header` → `displayOriginalMsg` | `target.username` + `batch.combinedText` | 拼用户名/图片标注前缀，可追加 URL 摘要 | `GeneratedOutput.displayOriginalMsg` |
+| 展示块 | 同上 | `displayBlocks` | `batch.displayPairs` + 标注行 | 组装 `DisplayBlocks(prefix, pairs)` | `GeneratedOutput.displayBlocks` |
+| 生成 | `_generateReplyOrNotify` → `_runLLMPipeline` | `reply` | `combinedText` + 上下文 | LLM 生成；includeContext 时由调用方 `_runLLMPipeline` 剥离校验 `<MEMORY_ACTION>` | `GeneratedOutput.reply` |
+| 审核（TG） | `sendReviewMessage` | `originalMsg` 参数 | `generated.displayOriginalMsg` | 无变换 | `renderReviewCard` → bot_data 条目 `originalMsg` 键 |
+| 审核（console/chatScreen） | `addReviewItem` | item `originalMsg` 键 | 同上 | 无变换 | 队列 item；retry 时直接当 prompt 重生成 |
+| 卡片渲染 | `renderOriginalMsgBlock` | blockquote 内容 | `displayBlocks`（结构化）或 `originalMsg`（退化） | 逐段**截断→转义→拼**（铁律）；引用/当前合并同块 | 审核卡 HTML |
+
+两条注意：缓冲 dict 的键名是 `text` 而不是 `pureText`——别在 state.py 里找 pureText，它在那儿改了名；`GeneratedOutput.displayOriginalMsg` 不是 messagePrep 的产物，是管线里由 `formatDisplayOriginalMsg` 拼出来的。
+
+### `originalMsg` 的语义随端点变化
+
+同一个名字 `originalMsg`，在不同容器里指的东西略有差别，排查问题时容易混——
+
+| 容器 | `originalMsg` 是什么 |
+|------|---------------------|
+| reply 审核项（队列 item / bot_data 条目） | 用户原始消息 = `displayOriginalMsg`（含用户名前缀 + 标注 + URL 摘要） |
+| memory 审核项 | **触发该记忆操作的用户消息**（不是 LLM 回复） |
+| `renderReviewCard(originalMsg, reply, ...)` 的参数 | 上面 reply 项的 originalMsg；有 `displayBlocks` 时只当退化兜底用 |
+
+retry 语义跟着第二行走：`_retryReplyReview` 直接拿 item 的 `originalMsg` 当 prompt 重新生成——对 reply 项这就是当时的 `displayOriginalMsg`（marker 还在里面，LLM 读得懂）。
+
+---
+
 ## 同步阶段：`handleLLMMessage`
 
 位置：`handlers/llm.py`
 
 ```python
-@handleTelegramErrors(errorReply="……呜、刚才这条消息没能处理好喵……")
+@handleTelegramErrors(errorReply="……抱歉、刚才这条消息没能处理好呢……")
 async def handleLLMMessage(update, context):
     ...
 ```
@@ -192,28 +266,31 @@ async def handleLLMMessage(update, context):
 |------|------|------|
 | 1 | `getLLMEnabled()` | LLM 全局开关；关则直接 return，不经过流程 |
 | 2 | `update.message` | 群入群、系统推送等无实质内容消息，直接忽略 |
-| 3 | `_getRawMessageText(message)` | 读取文本，没有文本则读取图片 caption |
+| 3 | `getRawMessageText(message)` | 读取文本，没有文本则读取图片 caption |
 | 4 | `_isCommandLikeMessage(rawText)` | `/` 开头的指令直接交给命令模块，不走 LLM 流程 |
 | 5 | `handleEditReply(message, context)` | 命中编辑索引直接消费，不再往下走 |
-| 6 | `rawText` 非空 | 只有图片没有文字说明，则跳过触发对话 |
-| 7 | `_getAuthorizedUserID(message)` | 白名单校验，返回 userID 或 None |
-| 8 | `_shouldTriggerLLM(message, botUsername, isPrivate)` | 私聊默认触发(`True`)，群聊需要 @或匹配关键词 |
-| 9 | `isRateLimited(userID)` | 处于冷却期给用户提示后返回 |
-| 10 | `_extractImageRefsForLLM(message)` | 提取当前消息图片，以及被回复消息里的图片 |
-| 11 | `_preparePurePromptText(...)` | 返回四元组：pureText, includeContext, urlIntentText, urlCandidateText |
-| 12 | `_downloadImagesAndAnnotatePrompt(...)` | 下同步下载图片，失败则在 prompt 中追加说明文字 |
-| 13 | `_enqueueLLMDebounce(...)` | 消息入缓冲，取消旧任务并拉起新后台协程 |
+| 6 | `handleFeedbackRetry(message, context)` | 命中 `:fb ` 前缀的补充反馈直接消费（仅回复审核），不再往下走 |
+| 7 | `rawText` 非空 | 只有图片没有文字说明，则跳过触发对话 |
+| 8 | `_getAuthorizedUserID(message)` | 白名单校验，返回 userID 或 None |
+| 9 | `shouldTriggerLLM(message, botUsername, isPrivate)` | 私聊默认触发(`True`)，群聊需要 @或匹配关键词 |
+| 10 | `isRateLimited(userID)` | 处于冷却期给用户提示后返回 |
+| 11 | `extractImageRefsForPrompt(message)` | 提取当前消息图片，以及被回复消息里的图片 |
+| 12 | `preparePurePromptText(...)` | 返回 PromptPayload 具名载体（4 个 prompt 字段 + replyLine/currentText 展示切分） |
+| 13 | `_downloadImagesAndAnnotatePrompt(...)` | 下同步下载图片，失败则在 prompt 中追加说明文字 |
+| 14 | `_enqueueLLMDebounce(...)` | 消息入缓冲，取消旧任务并拉起新后台协程 |
 
-### `_preparePurePromptText` 的 4 个返回值
+### `preparePurePromptText` 的 PromptPayload
+
+位置：`utils/llm/messagePrep.py`（handlers/llm.py 调用）
 
 ```python
-def _preparePurePromptText(message, rawText, botUsername) -> tuple[str, bool, str, str]:
+payload = preparePurePromptText(message, rawText, botUsername)  # -> PromptPayload（frozen dataclass）
 ```
 
-| 返回字段 | 含义 | 来源 |
+| 字段 | 含义 | 来源 |
 |----------|------|------|
 | `pureText` | 	最终送入模型的对话原文，可能前置 reply-to 引用 | 原始文本清理 @标记、`#context` 标识，附加回复消息正文 |
-| `includeContext` | 是否启用记忆、历史对话上下文 | `#context` 标记 + `memoryEnabled` 全局开关 + `contextOnce` |
+| `includeContext` | 是否启用记忆、历史对话上下文 | 入口阶段：`#context` 标记 + `memoryEnabled` 全局开关；`contextOnce` 单次标记在后续防抖聚合时才叠加（见「消息合并规则」） |
 | `urlIntentText` | 仅用来判断网页抓取意图 | 去 mention/`#context` 后的纯 current 文本 |
 | `urlCandidateText` | 用来提取全部待抓取链接 | `pureText`（去 mention）+ reply-to text/caption |
 
@@ -221,12 +298,10 @@ def _preparePurePromptText(message, rawText, botUsername) -> tuple[str, bool, st
 
 ---
 
-## 后台阶段：`_dispatchLLMReply`
+## 后台阶段：`_runLLMPipeline`
 
 ```python
-async def _dispatchLLMReply(
-    debounceKey, userID, username, chatID, triggerMsgID, context
-):
+async def _runLLMPipeline(*, debounceKey, target: DispatchTarget, context):
 ```
 
 ### 关键注意点
@@ -241,27 +316,27 @@ async def _dispatchLLMReply(
 | 序号 | 调用 | 备注 |
 |------|------|------|
 | 1 | `asyncio.sleep(LLM_DEBOUNCE_SECONDS)` | 用户连续发消息时会被新任务取消 |
-| 2 | `_collectDebouncedBatch(debounceKey)` | 返回 `(combinedText, includeContext, images, urlIntentText, urlCandidateText)`；空则 return |
+| 2 | `collectDebouncedBatch(debounceKey)` | 返回 `DebouncedBatch`（combinedText / includeContext / images / urlIntentText / urlCandidateText）；空则 return |
 | 3 | `readURLContextsForUserText(intentText, candidateText)` | 前提：`urlReadEnabled` 且命中意图词；否则返回 `[]` |
-| 4 | `_formatDisplayOriginalMsg(...)` | 生成 ops 审核用的展示原文；带图/URL 时追加摘要 |
+| 4 | `formatDisplayOriginalMsg(...)` | 生成 ops 审核用的展示原文；带图/URL 时追加摘要 |
 | 5 | `_sendTypingActionSafely(...)` | 发送 typing，失败静默 |
 | 6 | `_generateReplyOrNotify(...)` | 调用 `generateReply(..., images, urlContexts)`；失败返回 None 并提示用户 |
 | 7 | `addRateLimit(userID)` | 仅成功生成回复时添加冷却 |
-| 8 | `_parseAndValidateMemoryActions(reply, includeContext)` | 剥离 `<MEMORY_ACTION>` 块；越界动作直接丢弃 |
-| 9 | `_dispatchGeneratedOutput(...)` | 按 autoMode 分发文字回复；按 memoryAutoApprove 执行记忆操作 |
+| 8 | `extractValidatedMemoryActions(reply, logLabel="generate")` | 剥离 `<MEMORY_ACTION>` 块；越界动作直接丢弃。仅 includeContext 为真时调用（否则记忆块保留在 reply 原文） |
+| 9 | `dispatchGeneratedOutput(...)` | 按 autoMode 分发文字回复；按 memoryAutoApprove 执行记忆操作 |
 
 ---
 
 ## 触发判断
 
-位置：`_shouldTriggerLLM` / `_isBotMentioned` / `_matchesGroupTriggerKeyword`
+位置：`utils/llm/trigger.py`（`shouldTriggerLLM` / `matchesGroupTriggerKeyword`）+ `utils/telegramHelpers.py`（`isMentionedByEntity`）
 
 | 聊天类型 | 触发模式 `mention` | 触发模式 `keyword` |
 |----------|---------------------|---------------------|
 | 私聊 | 总是触发 | 总是触发 |
 | 群聊 | 仅 `@bot` | `@bot` 或 匹配预设关键词 |
 
-**`_isBotMentioned`** 使用 Telegram `MessageEntityType.MENTION` 原生实体精确匹配 `@bot_username`，避免单纯子串误匹配其他同名 bot 带来的误判（例如 `@notmybot`）。
+**`isMentionedByEntity`** 使用 Telegram `MessageEntityType.MENTION` 原生实体精确匹配 `@bot_username`，避免单纯子串误匹配其他同名 bot 带来的误判（例如 `@notmybot`）。
 
 **群聊关键词**由 `getGroupTriggerKeywords()` 配置，大小写不敏感，仅做包含匹配；设计上，**不支持**群内无条件全量触发，防止无关消息持续稀释上下文、过度占用接口资源。
 
@@ -290,7 +365,7 @@ _pendingTasks: dict[str, asyncio.Task]
 
 1. 收到消息，`appendPendingMessage()` 写入缓冲列表；若超过单用户最大缓冲条数(`LLM_PENDING_MSG_LIMIT`) 时，就返回 False 提示"消息太多"。
 2. 若已有旧 `asyncio.Task` 在跑，则执行 `task.cancel()` 取消旧的进程。
-3. 创建新的 `_dispatchLLMReply` task，然后注册 `done_callback` 进行清理。
+3. 创建新的 `_runLLMPipeline` task，然后注册 `done_callback` 进行清理。
 4. 新任务等待防抖时长 (`LLM_DEBOUNCE_SECONDS`) 后，批量合并处理全部缓冲消息。
 
 ### 消息合并规则
@@ -337,7 +412,7 @@ _pendingTasks: dict[str, asyncio.Task]
 
 ### 图片资源 (ref) 提取
 
-`_extractImageRefsForLLM(message)` 先从当前消息取，若消息没有图则回退到 `reply_to_message`。
+`extractImageRefsForPrompt(message)` 先从当前消息取，若消息没有图则回退到 `reply_to_message`。
 
 ### 下载时机
 
@@ -354,13 +429,13 @@ _pendingTasks: dict[str, asyncio.Task]
 
 ## 回复分发（`autoMode`）
 
-这块是生成完文本之后，决定消息直接发给用户、还是丢给管理员审核的分支逻辑，放在 `_dispatchTextReply` 里面。三种模式分开设计各有适配场景，混在一起反而会把逻辑搅乱。
+这块是生成完文本之后，决定消息直接发给用户、还是丢给管理员审核的分支逻辑，放在 `utils/llm/review.py` 的 `dispatchTextReply` 里面（TG 发送经回调注入，handler 侧组装闭包）。三种模式分开设计各有适配场景，混在一起反而会把逻辑搅乱。
 
 | `autoMode` | 行为 |
 |------------|------|
-| `on` | 调用 `sendLLMReplyWithMarkdown()` 直接发送，内部会自动把 Markdown 转成 Telegram 能识别的 HTML 格式 |
-| `off` | 不会直接下发用户，而向每个有 `Permission.LLM` 的管理员发 Telegram 审核消息；同时给触发的那条消息挂上👀 reaction |
-| `console` | 入队 `addReviewItem(...)`，不往 Telegram 发审核卡片，转存入控制台的审核队列，适合管理员常驻终端离线复核内容 |
+| `on` | 调用 `sendLLMReply` 直接发送，内部会自动把 Markdown 转成 Telegram 能识别的 HTML 格式 |
+| `off` | 不会直接下发用户，而向每个有 `Permission.LLM` 的管理员发 Telegram 审核消息（sendReview 回调）；同时给触发的那条消息挂上👀 reaction |
+| `console` | 入队 `addReviewItem(...)`（review.py 队列 item 契约），不往 Telegram 发审核卡片，转存入控制台的审核队列，适合管理员常驻终端离线复核内容 |
 
 有个兜底的细节：要是系统里没配置任何管理员，off 和 console 模式不会一点反应都没有。客户端会主动在聊天窗口提示管理员权限配置有缺位，免得用户发完的消息彻底石沉大海……
 
@@ -370,7 +445,7 @@ LLM 输出习惯用 Markdown 排版，但 Telegram 原生只支持一小部分�
 
 **实现链路**
 - 转换核心工具：`utils/markdownToHtml.py::convertMarkdownToHtml()`
-- 统一发送封装：`utils/telegramHelpers.py::sendLLMReplyWithMarkdown()`
+- 统一发送封装：`utils/telegramHelpers.py::sendLLMReply()`（内部经 `prepareMarkdownReply` 完成转换）
 - 调用点位：自动发送分支、审核通过重发、网络报错重试三处都会复用这套逻辑
 
 **转换规则**：
@@ -478,7 +553,7 @@ LLM 输出习惯用 Markdown 排版，但 Telegram 原生只支持一小部分�
 
 LLM 在回复里夹带 `<MEMORY_ACTION>` 标签、想要新增 / 修改 / 删除记忆时，会走到 `utils/llm/review.py` 的 `dispatchMemoryActions` 做分发处理，区分自动通过和人工审核两条分支。
 
-> 下表描述的是**首次生成路径**（由 `_dispatchGeneratedOutput` 调用，在 `respectAutoApprove=True` 的情况下）。retry / `:fb` 补充反馈路径经 `_makeTelegramDispatcher` 闭包通过 `respectAutoApprove=False`——此处是**有意不读 `memoryAutoApprove` 的，产出的记忆操作始终需要审核**，因为管理员得看过新回复才能定夺。
+> 下表描述的是**首次生成路径**（由 `dispatchGeneratedOutput` 调用，在 `respectAutoApprove=True` 的情况下）。retry / `:fb` 补充反馈路径经 `_makeTelegramDispatcher` 闭包通过 `respectAutoApprove=False`——此处是**有意不读 `memoryAutoApprove` 的，产出的记忆操作始终需要审核**，因为管理员得看过新回复才能定夺。
 
 | 条件 | 行为 |
 |------|------|
@@ -507,7 +582,7 @@ LLM 在回复里夹带 `<MEMORY_ACTION>` 标签、想要新增 / 修改 / 删除
 4. 速率限制只在成功后计入
 > 网络超时、参数错误、接口报错全部不计入冷却，用户遇到故障可以立刻重试，不会平白占用限流额度，也不会无限冷却……
 
-5. 后台任务 `_dispatchLLMReply` 必须重新抛出 `CancelledError`
+5. 后台任务 `_runLLMPipeline` 必须重新抛出 `CancelledError`
 > 多条消息连续刷屏会不断新建、取消旧防抖任务，不把取消异常上抛就会导致新旧任务互相阻塞，消息聚合逻辑彻底乱掉。
 
 6. 审核缓存 key 格式不做统一
@@ -574,18 +649,18 @@ def register():
 这里记录当前版本管线没法完美解决、或是设计上遗留的小短板，后续迭代可以对照着优化：
 
 - `memoryEnabled` 全局开关**对 Telegram 自动回复实际无效**：`chatHistory.db` 只在 `/send -c` 聊天界面下写入，LLM handler 本身不写入历史。除非先用 `/send -c` 与目标 chatID 聊过天，否则 `memoryEnabled + 历史` 不起作用。
-- `handleTelegramErrors` 不保护 `_dispatchLLMReply`。里面任何未 catch 的异常都会触发 asyncio 的 "Task exception was never retrieved" warning，需要依赖自身的 try/except。
+- `handleTelegramErrors` 不保护 `_runLLMPipeline`。里面任何未 catch 的异常都会触发 asyncio 的 "Task exception was never retrieved" warning，需要依赖自身的 try/except。
 - URL reader 的意图判断是基于关键词的保守策略：不加意图词的"再试一次"类追问不会触发 URL 读取。必要时需要用户显式说"再读一次"或加 `#url` marker。
-- 调试 bug 时，由于拆分后调用链较深，需要结合 `_dispatchLLMReply` 的日志（`System` 标签）和 Telegram API 的报错一起看。
+- 调试 bug 时，由于拆分后调用链较深，需要结合 `_runLLMPipeline` 的日志（`System` 标签）和 Telegram API 的报错一起看。
 
 ---
 
 ## 维护原则
 
-修改 `handlers/llm.py` 时建议遵守：
+修改 `handlers/llm.py`（及其下游 `utils/llm/` 模块）时建议遵守：
 
-1. **新增能力优先做成 helper**，尽量不让 `handleLLMMessage` 或 `_dispatchLLMReply` 再度膨胀。
+1. **新增能力优先做成 helper**，且优先下沉 `utils/llm/` 对应域模块（handlers 层只留 PTB wiring），尽量不让 `handleLLMMessage` 或 `_runLLMPipeline` 再度膨胀。
 2. **尽量不破坏现有触发边界**（mention/keyword/URL intent 三层）。
 3. **不合并 `autoMode` 的三种路径**，线上调试、Telegram 审核、控制台离线审查是三套完全独立的运维场景，它们对应真实的不同部署阶段。
-4. **不轻易改动防抖数据结构**。改过一次（tuple → dict），新增字段时追加 key 比改结构成本低。
-5. **任何新增的外部 I/O（HTTP、DB）**都应该考虑是否要进 `_dispatchLLMReply` 的后台阶段，同时记得注册到`ResourceManager`，程序退出时正常释放连接，不会残留占用进程的句柄。
+4. **不轻易改动防抖数据结构**。缓冲内单条消息的 dict 键与 `DebouncedBatch` 字段对应，新增字段时追加 key 比改结构成本低。
+5. **任何新增的外部 I/O（HTTP、DB）**都应该考虑是否要进 `_runLLMPipeline` 的后台阶段，同时记得注册到`ResourceManager`，程序退出时正常释放连接，不会残留占用进程的句柄。

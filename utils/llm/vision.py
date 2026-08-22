@@ -97,6 +97,16 @@ def extractReplyImageRefs(message) -> list[ImageRef]:
     return extractImageRefs(message.reply_to_message)
 
 
+def extractImageRefsForPrompt(message) -> list[ImageRef]:
+    """提取供 LLM prompt 使用的图片引用：当前消息优先，无图回退 reply_to_message。"""
+    refs = extractImageRefs(message)
+    if not refs:
+        refs = extractReplyImageRefs(message)
+    return refs
+
+
+
+
 async def downloadImages(bot, refs: list[ImageRef]) -> tuple[list[dict], list[str]]:
     """
     下载图片引用列表并 base64 编码。

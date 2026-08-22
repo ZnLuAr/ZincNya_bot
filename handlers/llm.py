@@ -1,24 +1,37 @@
 """
 handlers/llm.py
 
-LLM 消息处理器
+LLM 消息处理器（Telegram 接线层）
 
-职责：
-    - 监听群聊被 @ / 命中关键词 / 私聊消息（文字 + 图片）
-    - 权限检查（whitelist + llmEnabled）
-    - 提取图片（同消息 photo/document 或 reply_to_message 中的图片）
-    - 当用户明确请求时按低信任策略读取 URL 内容（utils/llm/urlReader）
-    - 调用 LLM 生成回复
-    - 根据 autoMode 分发结果（直接发送 / Telegram 审核 / 控制台审核）
-    - 解析回复中的 <MEMORY_ACTION> 块，按 autoMode 分流记忆操作审核
-    - 支持 memoryAutoApprove 自动执行模式
+本文件只负责 PTB wiring：入口门禁、防抖调度、后台生成管线编排、
+TG 审核发送回调。领域逻辑已下沉 utils/llm/：
+
+    - utils/llm/messagePrep.py    消息文本准备（prompt 清洗 / reply 注入 / URL 意图切分）
+    - utils/llm/trigger.py        群聊触发判断（私聊 / @entity / 关键词）
+    - utils/llm/vision.py         图片引用提取（本消息 + reply 回退）与下载
+    - utils/llm/urlReader.py      URL 读取（管线内按意图触发）
+    - utils/llm/state.py          防抖缓冲与批次聚合（DebouncedBatch）
+    - utils/llm/review.py         审核域：autoMode 三分流 / 空输出检测 / 记忆操作分流 /
+                                  审核队列 item 契约 / TG 之外三端共用的审核原语
+
+数据流（入口 → 分发）：
+    update → handleLLMMessage（门禁 + PromptPayload + DispatchTarget 组装）
+           → _enqueueLLMDebounce（防抖缓冲 + create_task）
+           → _runLLMPipeline（DebouncedBatch 聚合 → URL 读取 → 生成 →
+              GeneratedOutput 组装 → dispatchGeneratedOutput 经回调发 TG 审核卡 / reaction）
+
+载体（frozen dataclass，PTB-free）：
+    PromptPayload    入口阶段的消息文本载体（4 个 prompt 字段 + replyLine/currentText 展示切分，messagePrep）
+    DispatchTarget   入口到分发全程稳定的定位四元组（review）
+    DebouncedBatch   防抖窗口结束后的聚合批次（state）
+    GeneratedOutput  一次生成的完整产出（review）
 """
 
-import re
 import asyncio
+from dataclasses import replace
 
 from telegram import Update, ReactionTypeEmoji
-from telegram.constants import MessageEntityType, ChatType
+from telegram.constants import ChatType
 from telegram.error import NetworkError
 from telegram.ext import (
     filters,
@@ -26,44 +39,44 @@ from telegram.ext import (
     MessageHandler,
 )
 
-from config import Permission, LLM_DEBOUNCE_SECONDS, TG_MESSAGE_MAX_LEN, LLM_REPLY_CONTEXT_LIMIT, LLM_MEMORY_MAX_ACTIONS
+from config import Permission, LLM_DEBOUNCE_SECONDS, TG_MESSAGE_MAX_LEN
 
 from handlers.llmReview import handleEditReply, handleFeedbackRetry, sendReviewMessage, sendMemoryReviewMessage
 
 from utils.core.errorDecorators import handleTelegramErrors
 from utils.llm import (
     addRateLimit,
-    addReviewItem,
     appendPendingMessage,
     clearPendingTask,
-    consumeContextOnce,
+    collectDebouncedBatch,
     generateReply,
     getAutoMode,
     getLLMEnabled,
-    getGroupTriggerKeywords,
-    getGroupTriggerMode,
-    getMemoryEnabled,
     getPendingTask,
     isRateLimited,
     makeDebounceKey,
-    popPendingMessages,
     setPendingTask,
 )
-from utils.llm.memory.action import (
-    parseMemoryActions,
-    validateAction,
+from utils.llm.messagePrep import (
+    DisplayBlocks,
+    PromptPayload,
+    formatDisplayOriginalMsg,
+    getRawMessageText,
+    getSenderDisplayName,
+    preparePurePromptText,
 )
-from utils.llm.review import dispatchMemoryActions
-from utils.llm.vision import extractImageRefs, extractReplyImageRefs, downloadImages
-from utils.core.logger import logAction, logSystemEvent, LogLevel, LogChildType
-from utils.operators import loadOperators
-from utils.telegramHelpers import removeMention, sendLLMReply
+from utils.llm.review import (
+    DispatchTarget,
+    GeneratedOutput,
+    dispatchGeneratedOutput,
+    extractValidatedMemoryActions,
+)
+from utils.llm.trigger import shouldTriggerLLM
+from utils.llm.vision import downloadImages, extractImageRefsForPrompt
+from utils.core.logger import logAction, LogLevel, LogChildType
+from utils.operators import getOperatorsWithPermission
+from utils.telegramHelpers import sendLLMReply
 from utils.whitelistManager.data import whetherAuthorizedUser
-
-
-_TG_MAX_LEN = TG_MESSAGE_MAX_LEN  # Telegram 消息上限（平台硬约束，复用 config）
-
-_NO_OPS_HINT = "诶——等等……管理员配置貌似有缺位……💦\n得有人为锌酱说的话负责，锌酱才可以畅所欲言不逾矩的喵……"
 
 
 
@@ -72,82 +85,8 @@ _NO_OPS_HINT = "诶——等等……管理员配置貌似有缺位……💦\n�
 # 辅助函数
 # ============================================================================
 
-def _getRawMessageText(message) -> str:
-    return message.text or message.caption or ""
-
-
 def _isCommandLikeMessage(rawText: str) -> bool:
     return rawText.startswith("/")
-
-
-def _extractPureMessage(text: str, botUsername: str) -> tuple[str, bool]:
-    """
-    去除 @bot 并检查是否包含 #context 标记
-
-    参数:
-        text: 原始消息文本
-        botUsername: bot 用户名
-
-    返回:
-        (纯文本, 是否需要上下文)
-        第二个值：#context 标记存在时为 True；否则跟随全局 memoryEnabled 配置
-        调用方还需将此值与 consumeContextOnce() 取逻辑或，以叠加 one-shot 标记
-    """
-    text = removeMention(text, botUsername)
-
-    # 检查 #context 标记（必须在消息开头，去除 @bot 后的第一个词）
-    contextMatch = re.match(r"#context\b\s*(.*)", text, re.DOTALL)
-    if contextMatch:
-        pureText = contextMatch.group(1).strip()
-        return pureText, True
-
-    return text, getMemoryEnabled()
-
-
-def _getOpsWithLLMPermission() -> list[str]:
-    """获取拥有 LLM 权限的所有 ops ID"""
-    operators = loadOperators()
-    result = []
-    for uid, data in operators.items():
-        perms = data.get("permissions", [])
-        if str(Permission.LLM) in perms:
-            result.append(uid)
-    return result
-
-
-def _isBotMentioned(message, botUsername: str) -> bool:
-    """LLM 专用的 @bot 判断，直接按 Telegram mention entity 匹配"""
-    expected = f"@{botUsername}".lower()
-    for text, entities in (
-        (message.text or "", message.entities or []),
-        (message.caption or "", message.caption_entities or []),
-    ):
-        for entity in entities:
-            if entity.type != MessageEntityType.MENTION:
-                continue
-            mention = text[entity.offset:entity.offset + entity.length].lower()
-            if mention == expected:
-                return True
-    return False
-
-
-def _matchesGroupTriggerKeyword(message) -> bool:
-    """检查群聊消息是否命中 LLM 触发关键词"""
-    text = (message.text or message.caption or "").strip().lower()
-    if not text:
-        return False
-    return any(keyword and keyword in text for keyword in getGroupTriggerKeywords())
-
-
-def _shouldTriggerLLM(message, botUsername: str, isPrivate: bool) -> bool:
-    """判断当前消息是否应触发 LLM私聊始终触发；群聊按配置触发"""
-    if isPrivate:
-        return True
-    if _isBotMentioned(message, botUsername):
-        return True
-    if getGroupTriggerMode() == "keyword":
-        return _matchesGroupTriggerKeyword(message)
-    return False
 
 
 def _getAuthorizedUserID(message) -> int | None:
@@ -157,135 +96,54 @@ def _getAuthorizedUserID(message) -> int | None:
     return userID
 
 
-def _extractImageRefsForLLM(message):
-    imageRefs = extractImageRefs(message)
-    if not imageRefs:
-        imageRefs = extractReplyImageRefs(message)
-    return imageRefs
+async def _downloadImagesAndAnnotatePrompt(bot, imageRefs, pureText: str) -> tuple[str, list[dict], str]:
+    """下载图片引用并把说明（过大 / 失败）前置注入 prompt 文本（同步阶段，失败可立即说明）。
 
-
-def _injectReplyTextContext(message, pureText: str) -> str:
+    返回 (annotatedText, downloadedImages, notesText)——notesText 为说明行的换行拼接
+    （无说明为空串），供调用方同时前置到 prompt 文本与展示侧 currentText（结构化拆分后
+    图片说明归入「当前消息」段）。
     """
-    将 reply-to 消息的文本注入到 prompt 中，格式上明确标注这是「引用别人说过的话」。
-
-    参数:
-        message: 当前用户消息
-        pureText: 已去除 @bot / #context 的用户消息
-
-    返回:
-        注入 reply 上下文后的 prompt text
-
-    设计思路:
-        - 格式上接近 history 块的 `<sender> xxx`，让 LLM 识别这是「别人说过的话」而非「用户现在说的话」
-
-    分隔符安全:
-        这里用朴素括号写 [引用的消息] / <sender> / [当前用户消息] 标记。整段 pureText
-        作为 userMessage 流经 contextBuilder，进 <CURRENT_USER_MESSAGE> 前会被
-        neutralizePromptDelimiters 整体折成全角——包括这里的标记和 replyText / pureText。
-        这是有意且安全的：
-        - replyText（不可信叶子）里的 <...> tag 一并折叠，如此则无法伪造 <TRUSTED_KNOWLEDGE> 等高信任块跨层越权；
-        - 本函数的标记折成全角后仍语义可读，「引用 vs 当前」的角色区分照样生效，
-          且与 replyText 内可能预置的全角标记同处 CURRENT_USER_MESSAGE 信任层，
-          不会造成跨层混淆。
-    """
-    replyMsg = message.reply_to_message
-    if not replyMsg:
-        return pureText
-
-    replyText = replyMsg.text or replyMsg.caption or ""
-    if not replyText:
-        return pureText
-
-    # 截断过长的 reply 文本
-    if len(replyText) > LLM_REPLY_CONTEXT_LIMIT:
-        replyText = replyText[:LLM_REPLY_CONTEXT_LIMIT] + "……"
-
-    # 提取 reply 消息的发送者
-    replyUser = ""
-    if replyMsg.from_user:
-        replyUser = replyMsg.from_user.username or replyMsg.from_user.first_name or ""
-    replySender = f"@{replyUser}" if replyUser else "未知用户"
-
-    # 当前用户发送者（匿名群/频道 from_user 可能为 None）
-    currentUser = ""
-    if message.from_user:
-        currentUser = message.from_user.username or message.from_user.first_name or ""
-    currentSender = f"@{currentUser}" if currentUser else "未知用户"
-
-    # 格式接近 history 块的 "<sender> 说的内容"；引用与当前消息对称带 sender 前缀
-    return f"[引用的消息]\n<{replySender}> {replyText}\n\n[当前用户消息]\n<{currentSender}> {pureText}"
-
-
-def _getReplyURLCandidateText(message) -> str:
-    """获取被回复消息的文本，用于 URL 候选提取"""
-    replyMsg = message.reply_to_message
-    if not replyMsg:
-        return ""
-    return replyMsg.text or replyMsg.caption or ""
-
-
-def _preparePurePromptText(message, rawText: str, botUsername: str) -> tuple[str, bool, str, str]:
-    """
-    准备 LLM prompt text
-
-    返回:
-        pureText:           给 LLM 的 prompt text（可包含 reply 文本注入）
-        includeContext:     是否包含 memory/history
-        urlIntentText:      当前用户消息去除 mention/#context 后的文本，用于判断 URL 读取意图
-        urlCandidateText:   当前用户消息文本 + 被回复消息文本，用于提取 URL
-
-    安全提醒：
-        urlIntentText 必须在 _injectReplyTextContext 调用之前取值，
-        否则 reply-to 消息里的"帮我总结"等文本会被误判为当前用户的意图，
-        或可能变成第三方无声触发 URL 抓取的攻击面
-    """
-    pureText, includeContext = _extractPureMessage(rawText, botUsername)
-    if not pureText:
-        return "", includeContext, "", ""
-
-    # 先取意图（仅当前消息），再做 reply 注入（包含 reply-to 文本）
-    urlIntentText = pureText
-    urlCandidateText = pureText + "\n" + _getReplyURLCandidateText(message)
-
-    pureText = _injectReplyTextContext(message, pureText)
-
-    return pureText, includeContext, urlIntentText, urlCandidateText
-
-
-async def _downloadImagesAndAnnotatePrompt(bot, imageRefs, pureText: str) -> tuple[str, list[dict]]:
     downloadedImages: list[dict] = []
+    notesText = ""
     if imageRefs:
         downloadedImages, notes = await downloadImages(bot, imageRefs)
         if notes:
-            pureText = "\n".join(notes) + "\n" + pureText
-    return pureText, downloadedImages
-
-
-def _getSenderDisplayName(message, userID: int) -> str:
-    return message.from_user.username or message.from_user.first_name or str(userID)
+            notesText = "\n".join(notes)
+            pureText = notesText + "\n" + pureText
+    return pureText, downloadedImages, notesText
 
 
 async def _enqueueLLMDebounce(
     *,
     message,
     context: ContextTypes.DEFAULT_TYPE,
-    chatID: str,
-    userID: int,
-    username: str,
-    pureText: str,
-    includeContext: bool,
-    downloadedImages: list[dict],
-    urlIntentText: str,
-    urlCandidateText: str,
+    target: DispatchTarget,
+    payload: PromptPayload,
+    images: list[dict],
 ) -> bool:
-    debounceKey = makeDebounceKey(chatID, userID)
+    """
+    将一条已提取的消息送入防抖缓冲，并（重新）拉起后台生成管线。
+
+    payload 来历：handleLLMMessage 阶段由 messagePrep.preparePurePromptText 产出
+    （pureText 已含 reply 注入、图片下载说明由 _downloadImagesAndAnnotatePrompt
+    以 replace() 更新进 pureText）；随后拆字段存入防抖缓冲（state.appendPendingMessage），
+    后台侧由 state.collectDebouncedBatch 聚合为 DebouncedBatch——payload 本体不跨任务传递。
+
+    防抖语义：同一 (chatID, userID) 键已有存活任务时取消旧任务（其 sleep 被打断、
+    缓冲不被消费），新任务重新计时 LLM_DEBOUNCE_SECONDS，实现「等用户说完一起答」。
+
+    返回 False 表示缓冲已达 LLM_PENDING_MSG_LIMIT（已向用户提示）。
+    """
+    debounceKey = makeDebounceKey(target.chatID, target.userID)
     if not appendPendingMessage(
         debounceKey,
-        pureText,
-        includeContext,
-        images=downloadedImages,
-        urlIntentText=urlIntentText,
-        urlCandidateText=urlCandidateText,
+        payload.pureText,
+        payload.includeContext,
+        images=images,
+        urlIntentText=payload.urlIntentText,
+        urlCandidateText=payload.urlCandidateText,
+        replyLine=payload.replyLine,
+        currentText=payload.currentText,
     ):
         await message.reply_text("……消息太多了喵，等锌酱处理完再发吧💦")
         return False
@@ -295,54 +153,15 @@ async def _enqueueLLMDebounce(
         oldTask.cancel()
 
     task = asyncio.create_task(
-        _dispatchLLMReply(
+        _runLLMPipeline(
             debounceKey=debounceKey,
-            userID=userID,
-            username=username,
-            chatID=chatID,
-            triggerMsgID=message.message_id,
+            target=target,
             context=context,
         )
     )
     setPendingTask(debounceKey, task)
     task.add_done_callback(lambda t: clearPendingTask(debounceKey, t))
     return True
-
-
-def _collectDebouncedBatch(debounceKey: str) -> tuple[str, bool, list[dict], str, str] | None:
-    """
-    收集防抖批次消息
-
-    返回:
-        combinedText: 聚合后的 prompt text
-        includeContext: 是否包含 memory/history
-        allImages: 所有图片
-        combinedURLIntentText: 聚合后的 URL 意图文本
-        combinedURLCandidateText: 聚合后的 URL 候选文本
-    """
-
-    parts = popPendingMessages(debounceKey)
-    if not parts:
-        return None
-
-    combinedText = "\n".join(p["text"] for p in parts if p["text"])
-    hadOnce = consumeContextOnce()
-    includeContext = any(p["includeContext"] for p in parts) or hadOnce
-
-    allImages: list[dict] = []
-    for p in parts:
-        allImages.extend(p["images"])
-
-    combinedURLIntentText = "\n".join(p["urlIntentText"] for p in parts if p["urlIntentText"])
-    combinedURLCandidateText = "\n".join(p["urlCandidateText"] for p in parts if p["urlCandidateText"])
-
-    return combinedText, includeContext, allImages, combinedURLIntentText, combinedURLCandidateText
-
-
-def _formatDisplayOriginalMsg(username: str, combinedText: str, allImages: list[dict]) -> str:
-    if allImages:
-        return f"@{username}：[附带 {len(allImages)} 张图片]\n{combinedText}"
-    return f"@{username}：{combinedText}"
 
 
 async def _sendTypingActionSafely(context: ContextTypes.DEFAULT_TYPE, chatID: str) -> None:
@@ -362,6 +181,22 @@ async def _generateReplyOrNotify(
     allImages: list[dict],
     urlContexts: list[dict] | None = None,
 ) -> str | None:
+    """
+    调用 LLM 生成回复；失败时向用户发送错误提示。
+
+    返回:
+        str - 生成成功的回复文本
+        None - 生成失败（错误提示已发出），调用方应立即 return，
+               不记录速率限制、不进入分发
+
+    错误分类：
+        _isRetryable(e)（网络波动等瞬时错误）→ 「再试一次」文案；
+        其余 → 「意料之外的错误」文案。提示发送自身的 NetworkError 静默吞掉
+        （用户侧网络已断，重试无意义）。
+
+    注意：_isRetryable 走函数内延迟 import——它是 client 私有符号，
+    不值得提到模块顶层 import 面。
+    """
     try:
         return await generateReply(
             combinedText,
@@ -376,7 +211,7 @@ async def _generateReplyOrNotify(
         from utils.llm.client._request import _isRetryable
         await logAction("System", f"LLM 生成回复失败：{chatID}", str(e), LogLevel.ERROR, LogChildType.WITH_ONE_CHILD)
         if _isRetryable(e):
-            errMsg = "呜……网络好像有些波动，锌酱没能接收到这条消息喵……可以再试一次吗？"
+            errMsg = "……网络好像有些波动，锌酱没能接收到这条消息喵……可以再试一次吗？"
         else:
             errMsg = "呜哇——有、有意料之外的错误正向咱袭来喵！"
         try:
@@ -386,300 +221,171 @@ async def _generateReplyOrNotify(
         return None
 
 
-async def _parseAndValidateMemoryActions(reply: str, includeContext: bool) -> tuple[str, list]:
-    memoryActions = []
-    if not includeContext:
-        return reply, memoryActions
-
-    reply, memoryActions = parseMemoryActions(reply)
-    if len(memoryActions) > LLM_MEMORY_MAX_ACTIONS:
-        await logSystemEvent(
-            "LLM 记忆操作数量超限",
-            f"请求 {len(memoryActions)} 个，上限 {LLM_MEMORY_MAX_ACTIONS}，截断",
-            LogLevel.WARNING,
-        )
-        memoryActions = memoryActions[:LLM_MEMORY_MAX_ACTIONS]
-
-    validatedActions = []
-    for act in memoryActions:
-        err = await validateAction(act)
-        if err:
-            await logSystemEvent(
-                "LLM 记忆操作校验失败",
-                f"{act.action} | {err}",
-                LogLevel.WARNING,
-            )
-        else:
-            validatedActions.append(act)
-    return reply, validatedActions
-
-
-async def _handleEmptyLLMOutputIfNeeded(
-    *,
-    reply: str,
-    memoryActions: list,
-    context: ContextTypes.DEFAULT_TYPE,
-    chatID: str,
-    triggerMsgID: int,
-    username: str,
-) -> bool:
-    if reply.strip() or memoryActions:
-        return False
-
-    try:
-        await context.bot.set_message_reaction(
-            chat_id=chatID,
-            message_id=triggerMsgID,
-            reaction=[ReactionTypeEmoji(emoji="🤔")],
-        )
-    except Exception:
-        pass
-    await logSystemEvent(
-        "LLM 回复为空",
-        f"chatID={chatID}, user=@{username} | 回复为空且无有效记忆操作",
-        LogLevel.WARNING,
-        LogChildType.WITH_ONE_CHILD,
-    )
-    return True
-
-
-async def _dispatchTextReply(
-    *,
-    reply: str,
-    autoMode: str,
-    opsList: list[str],
-    context: ContextTypes.DEFAULT_TYPE,
-    chatID: str,
-    triggerMsgID: int,
-    displayOriginalMsg: str,
-    username: str,
-    userID: int,
-    includeContext: bool,
-    urlContexts: list[dict] | None = None,
-) -> None:
-    if autoMode == "on":
-        await sendLLMReply(
-            bot=context.bot,
-            chatID=chatID,
-            reply=reply,
-            replyToMessageID=triggerMsgID,
-            maxLength=_TG_MAX_LEN,
-        )
-        await logAction("System", f"LLM 生成内容直接发送至 @{username}（{chatID}）", f"原文：{displayOriginalMsg}", LogLevel.INFO, LogChildType.WITH_CHILD)
-        await logAction("System", "", f"生成的消息：{reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
-
-    elif autoMode == "off":
-        if not opsList:
-            await context.bot.send_message(
-                chat_id=chatID,
-                text=_NO_OPS_HINT,
-            )
-        else:
-            for opsID in opsList:
-                await sendReviewMessage(
-                    bot=context.bot,
-                    opsID=int(opsID),
-                    originalMsg=displayOriginalMsg,
-                    reply=reply,
-                    chatID=int(chatID),
-                    context=context,
-                    triggerMsgID=triggerMsgID,
-                    userID=userID,
-                    includeContext=includeContext,
-                    urlContexts=urlContexts,
-                    autoMode=autoMode,
-                )
-            await context.bot.set_message_reaction(
-                chat_id=chatID,
-                message_id=triggerMsgID,
-                reaction=[ReactionTypeEmoji(emoji="👀")],
-            )
-            await logAction("System", f"LLM 生成内容待审核：@{username}（{chatID}）", f"原文：{displayOriginalMsg}", LogLevel.INFO, LogChildType.WITH_CHILD)
-            await logAction("System", "", f"生成的消息：{reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
-
-    else:
-        if not opsList:
-            await context.bot.send_message(chat_id=chatID, text=_NO_OPS_HINT)
-        else:
-            addReviewItem(
-                chatID=chatID,
-                messageID=triggerMsgID,
-                originalMsg=displayOriginalMsg,
-                reply=reply,
-                opsID=opsList[0],
-                userID=userID,
-                includeContext=includeContext,
-                urlContexts=urlContexts,
-            )
-            await context.bot.set_message_reaction(
-                chat_id=chatID,
-                message_id=triggerMsgID,
-                reaction=[ReactionTypeEmoji(emoji="👀")],
-            )
-            await logAction("System", f"LLM 生成内容等待控制台审核：@{username}（{chatID}）", f"原文：{displayOriginalMsg}", LogLevel.INFO, LogChildType.WITH_CHILD)
-            await logAction("System", "", f"生成的消息：{reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
-
-
-async def _dispatchGeneratedOutput(
-    *,
-    reply: str,
-    memoryActions: list,
-    context: ContextTypes.DEFAULT_TYPE,
-    chatID: str,
-    triggerMsgID: int,
-    displayOriginalMsg: str,
-    username: str,
-    userID: int,
-    includeContext: bool,
-    urlContexts: list[dict] | None = None,
-) -> None:
-    autoMode = None
-    try:
-        autoMode = getAutoMode()
-        opsList = _getOpsWithLLMPermission()
-
-        if await _handleEmptyLLMOutputIfNeeded(
-            reply=reply,
-            memoryActions=memoryActions,
-            context=context,
-            chatID=chatID,
-            triggerMsgID=triggerMsgID,
-            username=username,
-        ):
-            return
-
-        if reply.strip():
-            await _dispatchTextReply(
-                reply=reply,
-                autoMode=autoMode,
-                opsList=opsList,
-                context=context,
-                chatID=chatID,
-                triggerMsgID=triggerMsgID,
-                displayOriginalMsg=displayOriginalMsg,
-                username=username,
-                userID=userID,
-                includeContext=includeContext,
-                urlContexts=urlContexts,
-            )
-
-        async def _sendTGMemoryReview(actDict):
-            # TG 分支回调：review.py 不碰 PTB，int() 类型转换留在 handler 侧
-            await sendMemoryReviewMessage(
-                bot=context.bot,
-                opsID=int(opsList[0]),
-                action=actDict,
-                originalMsg=displayOriginalMsg,
-                chatID=int(chatID),
-                context=context,
-                userID=userID,
-            )
-
-        await dispatchMemoryActions(
-            memoryActions,
-            autoMode=autoMode,
-            opsList=opsList,
-            chatID=chatID,
-            originalMsg=displayOriginalMsg,
-            userID=userID,
-            sendTGMemoryReview=_sendTGMemoryReview,
-        )
-
-    except NetworkError as e:
-        await logAction("System", f"LLM 分发回复网络错误：{chatID}", str(e), LogLevel.WARNING, LogChildType.WITH_ONE_CHILD)
-        await asyncio.sleep(2)
-        try:
-            if reply.strip() and autoMode == "on":
-                await sendLLMReply(
-                    bot=context.bot,
-                    chatID=chatID,
-                    reply=reply,
-                    replyToMessageID=triggerMsgID,
-                    maxLength=_TG_MAX_LEN,
-                )
-                await logAction("System", f"LLM 分发重试成功：{chatID}", "", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
-        except NetworkError as e2:
-            await logAction("System", f"LLM 分发重试仍失败：{chatID}", str(e2), LogLevel.ERROR, LogChildType.WITH_ONE_CHILD)
-
-
 
 
 # ============================================================================
 # 主处理器
 # ============================================================================
 
-async def _dispatchLLMReply(
+async def _runLLMPipeline(
+    *,
     debounceKey: str,
-    userID: int,
-    username: str,
-    chatID: str,
-    triggerMsgID: int,
+    target: DispatchTarget,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     """
-    后台任务异步处理器，负责处理 handleLLMMessage 发来的任务
-    防抖窗口结束后触发 聚合消息、调用 LLM 与 分发回复
+    后台生成管线：防抖窗口结束后 聚合消息 → 读取 URL → 生成回复 → 分发。
 
-    由 handleLLMMessage 通过 asyncio.create_task 调用，
-    不直接持有 update 对象（可能已过期），改用 chatID 和 triggerMsgID
+    由 _enqueueLLMDebounce 经 asyncio.create_task 拉起；不持有 update 对象
+    （可能已过期），目标定位（chatID / userID / username / triggerMsgID）全部
+    经 DispatchTarget 传入。
+
+    分工：本函数负责编排与 PTB 接线；autoMode 三分流 / 空输出检测 / 记忆操作
+    分流在 utils/llm/review.dispatchGeneratedOutput（TG 依赖经回调注入）。
+
+    错误兜底：create_task 内异常不冒泡回 handler（@handleTelegramErrors 抓不到），
+    除 CancelledError（防抖取消的常态，重新抛出）外在此记录 ERROR 日志。
     """
     try:
         await asyncio.sleep(LLM_DEBOUNCE_SECONDS)
 
         # 收集防抖批次消息，成批组织起来
-        batch = _collectDebouncedBatch(debounceKey)
+        batch = collectDebouncedBatch(debounceKey)
         if batch is None:
             return
-        combinedText, includeContext, allImages, urlIntentText, urlCandidateText = batch
 
         # URL 读取，根据用户发来的信息，判断用户意图、读取候选文本 URL 内容
         from utils.llm.urlReader import readURLContextsForUserText, summarizeURLFetchResults
         urlContexts = await readURLContextsForUserText(
-            intentText=urlIntentText,
-            candidateText=urlCandidateText,
+            intentText=batch.urlIntentText,
+            candidateText=batch.urlCandidateText,
         )
 
-        # 构造 displayOriginalMsg，供初步展示
-        displayOriginalMsg = _formatDisplayOriginalMsg(username, combinedText, allImages)
+        # 构造 displayOriginalMsg（字符串，日志/console item/memory 分发依赖）与
+        # displayBlocks（结构化展示块）——header 同处派生，防两处组装漂移
+        header = formatDisplayOriginalMsg(target.username, batch.combinedText, batch.images)
+        displayOriginalMsg = header
+        urlSummary = ""
         if urlContexts:
             # 需要包含 URL 摘要的情况下
-            displayOriginalMsg += "\n" + summarizeURLFetchResults(urlContexts)
+            urlSummary = summarizeURLFetchResults(urlContexts)
+            displayOriginalMsg += "\n" + urlSummary
+
+        # 结构化展示块：prefix = 图片/URL 标注行；pairs 由防抖批次配对而来
+        # （注意 header 含 combinedText，展示前缀只保留标注部分——由 formatDisplayOriginalMsg 拆分）
+        prefixParts = []
+        if batch.images:
+            prefixParts.append(f"[附带 {len(batch.images)} 张图片]")
+        if urlSummary:
+            prefixParts.append(urlSummary)
+        displayBlocks = DisplayBlocks(
+            prefix="\n".join(prefixParts),
+            pairs=list(batch.displayPairs),
+        )
 
         # 发送 typing action，在状态栏中展示类似于 ZincNya is typing... 字样
-        await _sendTypingActionSafely(context, chatID)
+        await _sendTypingActionSafely(context, target.chatID)
 
         # 调用 LLM、传递 URL 摘要与图片，生成回复内容
         reply = await _generateReplyOrNotify(
             context=context,
-            combinedText=combinedText,
-            chatID=chatID,
-            includeContext=includeContext,
-            userID=userID,
-            allImages=allImages,
+            combinedText=batch.combinedText,
+            chatID=target.chatID,
+            includeContext=batch.includeContext,
+            userID=target.userID,
+            allImages=batch.images,
             urlContexts=urlContexts,
         )
         if reply is None:
             return
 
         # 仅在成功时添加速率限制
-        addRateLimit(userID)
+        addRateLimit(target.userID)
 
         # 从 reply 中解析并校验 memory actions
-        reply, memoryActions = await _parseAndValidateMemoryActions(reply, includeContext)
+        # 门禁：includeContext=False 时不解析，<MEMORY_ACTION> 块保留在 reply 原文中
+        memoryActions = []
+        if batch.includeContext:
+            reply, memoryActions, _ = await extractValidatedMemoryActions(reply, logLabel="generate")
 
         # 最终分发 output，包含 文字回复 与 记忆操作
-        await _dispatchGeneratedOutput(
+        generated = GeneratedOutput(
             reply=reply,
             memoryActions=memoryActions,
-            context=context,
-            chatID=chatID,
-            triggerMsgID=triggerMsgID,
             displayOriginalMsg=displayOriginalMsg,
-            username=username,
-            userID=userID,
-            includeContext=includeContext,
+            includeContext=batch.includeContext,
             urlContexts=urlContexts,
+            displayBlocks=displayBlocks,
         )
+
+        # TG 侧回调闭包：review.py 不碰 PTB，int() 类型转换留在本侧完成
+        async def _sendTGReview(opsID):
+            await sendReviewMessage(
+                bot=context.bot,
+                opsID=int(opsID),
+                originalMsg=generated.displayOriginalMsg,
+                reply=generated.reply,
+                chatID=int(target.chatID),
+                context=context,
+                triggerMsgID=target.triggerMsgID,
+                userID=target.userID,
+                includeContext=generated.includeContext,
+                urlContexts=generated.urlContexts,
+                autoMode=autoMode,
+                displayBlocks=generated.displayBlocks,
+            )
+
+        async def _sendTGMemoryReview(actDict):
+            await sendMemoryReviewMessage(
+                bot=context.bot,
+                opsID=int(opsList[0]),
+                action=actDict,
+                originalMsg=generated.displayOriginalMsg,
+                chatID=int(target.chatID),
+                context=context,
+                userID=target.userID,
+                displayBlocks=generated.displayBlocks,
+            )
+
+        async def _setReaction(emoji):
+            await context.bot.set_message_reaction(
+                chat_id=target.chatID,
+                message_id=target.triggerMsgID,
+                reaction=[ReactionTypeEmoji(emoji=emoji)],
+            )
+
+        # autoMode / opsList 是全局配置而非消息属性，在分发前读取、经参数注入
+        #（放 try 外侧无意义——两行同步读不抛 NetworkError，且重试分支需要 autoMode）
+        autoMode = getAutoMode()
+        opsList = getOperatorsWithPermission(Permission.LLM)
+
+        try:
+            await dispatchGeneratedOutput(
+                generated,
+                target=target,
+                autoMode=autoMode,
+                opsList=opsList,
+                bot=context.bot,
+                sendTGReview=_sendTGReview,
+                sendTGMemoryReview=_sendTGMemoryReview,
+                sendReaction=_setReaction,
+            )
+        except NetworkError as e:
+            # 发送侧网络错误：等待后仅 on 模式重试一次直接发送（审核卡不重发）
+            await logAction("System", f"LLM 分发回复网络错误：{target.chatID}", str(e), LogLevel.WARNING, LogChildType.WITH_ONE_CHILD)
+            await asyncio.sleep(2)
+            try:
+                if generated.reply.strip() and autoMode == "on":
+                    await sendLLMReply(
+                        bot=context.bot,
+                        chatID=target.chatID,
+                        reply=generated.reply,
+                        replyToMessageID=target.triggerMsgID,
+                        maxLength=TG_MESSAGE_MAX_LEN,
+                    )
+                    await logAction("System", f"LLM 分发重试成功：{target.chatID}", "", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            except NetworkError as e2:
+                await logAction("System", f"LLM 分发重试仍失败：{target.chatID}", str(e2), LogLevel.ERROR, LogChildType.WITH_ONE_CHILD)
 
     except asyncio.CancelledError:
         raise
@@ -687,7 +393,7 @@ async def _dispatchLLMReply(
     except Exception as e:
         await logAction(
             "System",
-            f"LLM 后台任务异常：{chatID}",
+            f"LLM 后台任务异常：{target.chatID}",
             str(e),
             LogLevel.ERROR,
             LogChildType.WITH_ONE_CHILD,
@@ -706,7 +412,7 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         LLM 开关检查 → :edit 审核捕获 → 白名单 + 速率限制 →
         图片提取与下载 → 防抖缓冲 → 取消旧任务 → 创建新防抖任务
 
-    实际调用 LLM 和分发回复在 _dispatchLLMReply 中异步执行
+    实际调用 LLM 和分发回复在 _runLLMPipeline 中异步执行
     """
     if not getLLMEnabled():
         return
@@ -715,17 +421,17 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not message:
         return
 
-    rawText = _getRawMessageText(message)
+    rawText = getRawMessageText(message)
 
     # 再次判断收到的消息是否是命令
     if _isCommandLikeMessage(rawText):
         return
 
-    # 检查消息是否经过 ops 编辑使带 :edit 标签的消息，其标签被消费，不触发 llm 回复
+    # 检查消息是否经过 ops 编辑，使带 :edit 标签的消息，其标签被消费，不触发 llm 回复
     if await handleEditReply(message, context):
         return
 
-    # 检查消息是否为补充反馈重试使带 :fb 标签的消息，其标签被消费，不触发 llm 回复
+    # 检查消息是否为补充反馈重试，使带 :fb 标签的消息，其标签被消费，不触发 llm 回复
     if await handleFeedbackRetry(message, context):
         return
 
@@ -740,7 +446,7 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 触发判断（私聊 / @ / 关键词）
     isPrivate = update.effective_chat.type == ChatType.PRIVATE
-    if not _shouldTriggerLLM(message, context.bot.username, isPrivate):
+    if not shouldTriggerLLM(message, context.bot.username, isPrivate):
         return
 
     if isRateLimited(userID):
@@ -748,31 +454,34 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # 提取图片 Refs
-    imageRefs = _extractImageRefsForLLM(message)
+    imageRefs = extractImageRefsForPrompt(message)
 
-    # 构造 pureText / includeContext / urlIntentText / urlCandidateText
-    pureText, includeContext, urlIntentText, urlCandidateText = _preparePurePromptText(message, rawText, context.bot.username)
-    if not pureText:
+    # 构造 PromptPayload（pureText / includeContext / urlIntentText / urlCandidateText）
+    payload = preparePurePromptText(message, rawText, context.bot.username)
+    if not payload.pureText:
         return
 
-    # 下载图片并补充 prompt 说明
-    pureText, downloadedImages = await _downloadImagesAndAnnotatePrompt(context.bot, imageRefs, pureText)
+    # 下载图片并补充 prompt 说明——frozen 载体不可原地改写，用 replace 生成新 payload；
+    # 说明行同步前置到 currentText（展示侧「当前消息」段），时间线必须在 _enqueueLLMDebounce 之前
+    annotatedText, downloadedImages, notesText = await _downloadImagesAndAnnotatePrompt(context.bot, imageRefs, payload.pureText)
+    annotatedCurrent = (notesText + "\n" + payload.currentText) if notesText else payload.currentText
+    payload = replace(payload, pureText=annotatedText, currentText=annotatedCurrent)
 
-    chatID = str(update.effective_chat.id)
-    username = _getSenderDisplayName(message, userID)
+    # 组装分发目标（从入口到分发全程稳定的定位四元组）
+    target = DispatchTarget(
+        chatID=str(update.effective_chat.id),
+        userID=userID,
+        username=getSenderDisplayName(message, userID),
+        triggerMsgID=message.message_id,
+    )
 
     # 进入防抖缓冲，取消旧任务并发起新任务
     await _enqueueLLMDebounce(
         message=message,
         context=context,
-        chatID=chatID,
-        userID=userID,
-        username=username,
-        pureText=pureText,
-        includeContext=includeContext,
-        downloadedImages=downloadedImages,
-        urlIntentText=urlIntentText,
-        urlCandidateText=urlCandidateText,
+        target=target,
+        payload=payload,
+        images=downloadedImages,
     )
 
 

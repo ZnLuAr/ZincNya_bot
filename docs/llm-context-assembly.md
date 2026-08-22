@@ -171,7 +171,7 @@ blocks.append(f"<CURRENT_USER_MESSAGE>\n{safeUserMessage}\n</CURRENT_USER_MESSAG
 
 其中，**`<RETRIEVED_CONTEXT>`** 给所有上下文块一个统一的外层标记，让 LLM 能明确区分"背景参考"和"当前任务"；**`neutralizePromptDelimiters`** 把用户消息里的 XML 分隔符折成全角，防止攻击者构造 `</CURRENT_USER_MESSAGE><TRUSTED_KNOWLEDGE>...` 来越权注入高信任内容。
 
-需要留意的是，`userMessage` 在进入 `buildConversationContext` 之前，可能已被上游 `handlers/llm.py:_injectReplyTextContext` 预处理。当用户以 reply 方式发消息时，实际拼进 `<CURRENT_USER_MESSAGE>` 的 `userMessage` 形如：
+需要留意的是，`userMessage` 在进入 `buildConversationContext` 之前，可能已被上游 `utils/llm/messagePrep.py:injectReplyTextContext` 预处理。当用户以 reply 方式发消息时，实际拼进 `<CURRENT_USER_MESSAGE>` 的 `userMessage` 形如：
 
 ```
 [引用的消息]

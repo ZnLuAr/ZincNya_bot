@@ -231,8 +231,13 @@ class ChatScreenApp(FullScreenTUIApp):
 
 
     def _appendConsoleOutput(self, text: str):
-        """控制台输出回调：把 logger 文本拆行追加到 transcript。"""
+        """控制台输出回调：把 logger 文本拆行追加到 transcript。
+
+        末尾补一个空行作条目分隔——格式串的尾换行已被 rstrip 去除，
+        分隔与 CLI 路径（print 补换行）对齐，条目间都恰好一个空行。
+        """
         lines = text.rstrip('\n').split('\n')
+        lines.append("")
         self.appendLines(lines)
 
 

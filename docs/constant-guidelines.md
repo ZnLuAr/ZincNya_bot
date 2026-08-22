@@ -69,7 +69,7 @@
 ### 留各文件模块级（import 后的「常量区」集中定义）
 
 - **模块私有的实现词汇**：key 前缀、回调 data 格式、私有正则（`_SECRET_RE`）、私有集合（`_VALID_ACTIONS`）、映射表（`LANGUAGE_MAP`）、提示文案模板（`_LOW_TRUST_MEMORY_NOTICE`）、单模块用的路径
-- **本地派生别名**：从 config 派生的便捷名（`_REPLY_PREVIEW_LEN = LLM_REVIEW_REPLY_PREVIEW_LEN`），为可读性或避免重复 import
+- **本地派生别名**：从 config 派生的便捷名（`_TG_MAX_LEN = TG_MESSAGE_MAX_LEN`），为可读性或避免重复 import
 - **模块内截断/阈值常量**：日志预览长度、展示截断、UI 列宽等「该模块的显示参数」
 
 ### 留函数内（默认不放）

@@ -2,34 +2,32 @@
 utils/llm/state.py
 
 LLM 运行时状态管理：
-    - 多类型审核队列（reply + memory，console / chatScreen 共用；
-      reply item 会携带 urlContexts 供 retry 复用）
-    - 队首预览（peekReviewHint，供 chatScreen 状态栏显示）
+    - 待审核消息队列容器（console / chatScreen 共用；item 契约与入队操作在
+      utils/llm/review.py——队列项是审核域契约，生产端与消费端同文件演进）
     - 每用户速率限制
     - 消息防抖缓冲（聚合短时间内分多次发送的消息，按 dict 记录
-      text / includeContext / images / urlIntentText / urlCandidateText）
+      text / includeContext / images / urlIntentText / urlCandidateText；
+      collectDebouncedBatch 聚合为 DebouncedBatch）
     - 全局 one-shot context 标记（memory -once）
 """
 
 import time
 import asyncio
+from dataclasses import dataclass, field
 
 from config import LLM_RATE_LIMIT_SECONDS, LLM_PENDING_MSG_LIMIT
 
-# chatScreen 状态栏预览截断长度
-_HINT_LEN = 16
 
 
 
-
-# 待审核消息队列（auto -console 模式时使用）
+# 待审核消息队列（auto -console 模式时使用；item 契约在 utils/llm/review.py）
 _llmReviewQueue: asyncio.Queue = asyncio.Queue()
 
 # 每用户最后调用时间 {userID: timestamp}
 _lastCallTime: dict[str, float] = {}
 
 # 消息防抖状态（聚合短时间内分多次发送的消息）
-_pendingMessages: dict[str, list[dict]] = {}   # debounceKey -> [{"text": str, "includeContext": bool, "images": list, "urlIntentText": str, "urlCandidateText": str}]
+_pendingMessages: dict[str, list[dict]] = {}   # debounceKey -> [{"text": str, "includeContext": bool, "images": list, "urlIntentText": str, "urlCandidateText": str, "replyLine": str, "currentText": str}]
 _pendingTasks: dict[str, asyncio.Task] = {}   # debounceKey -> 当前防抖 Task
 
 # 全局 one-shot context 标记：下一次 LLM 调用强制带记忆，触发后自动清除
@@ -41,147 +39,6 @@ _contextOnce: bool = False
 def getReviewQueue() -> asyncio.Queue:
     """获取审核队列"""
     return _llmReviewQueue
-
-
-def _formatReviewHint(item: dict) -> str:
-    kind = item.get("kind", "reply")
-    if kind == "memory":
-        action = item.get("action", {})
-        actionType = action.get("action", "?")
-        content = action.get("content") or action.get("originalContent") or ""
-        memoryID = action.get("memoryID")
-        if content:
-            # 转义换行符，避免底边栏被截断
-            escaped = content.replace('\n', '\\n')
-            preview = escaped[:_HINT_LEN] + "…" if len(escaped) > _HINT_LEN else escaped
-        elif memoryID is not None:
-            preview = f"#{memoryID}"
-        else:
-            preview = ""
-        return f"当前操作的是：[记忆:{actionType}] {preview}" if preview else f"当前操作的是：[记忆:{actionType}]"
-
-    reply = item.get("reply") or ""
-    # 转义换行符，避免底边栏被截断
-    escaped = reply.replace('\n', '\\n')
-    preview = escaped[:_HINT_LEN] + "…" if len(escaped) > _HINT_LEN else escaped
-    return f"当前操作的是：[回复] {preview}" if preview else "当前操作的是：[回复]"
-
-
-def peekReviewHint() -> str | None:
-    """
-    窥视队首审核项，返回类型+内容预览字符串。
-    队列为空时返回 None。不消费队列项。
-    """
-    # asyncio.Queue 内部使用 collections.deque
-    if not _llmReviewQueue._queue:
-        return None
-    return _formatReviewHint(_llmReviewQueue._queue[0])
-
-
-
-
-def makeReplyReviewItem(
-    *,
-    chatID: str,
-    messageID: int,
-    originalMsg: str,
-    reply: str,
-    opsID: str,
-    userID: str | int | None = None,
-    includeContext: bool = False,
-    urlContexts: list[dict] | None = None,
-) -> dict:
-    return {
-        "kind": "reply",
-        "chatID": chatID,
-        "messageID": messageID,
-        "originalMsg": originalMsg,
-        "reply": reply,
-        "opsID": opsID,
-        "userID": str(userID) if userID is not None else None,
-        "includeContext": includeContext,
-        "urlContexts": urlContexts or [],
-    }
-
-
-def addReviewItem(
-    chatID: str,
-    messageID: int,
-    originalMsg: str,
-    reply: str,
-    opsID: str,
-    userID: str | int | None = None,
-    includeContext: bool = False,
-    urlContexts: list[dict] | None = None,
-):
-    """
-    将待审核消息加入队列
-
-    参数:
-        chatID: 原始聊天 ID
-        messageID: 原始消息 ID
-        originalMsg: 用户发送的原始消息
-        reply: LLM 生成的回复
-        opsID: 审核通知发送给哪个 ops
-        urlContexts: URL 抓取结果列表
-    """
-    _llmReviewQueue.put_nowait(makeReplyReviewItem(
-        chatID=chatID,
-        messageID=messageID,
-        originalMsg=originalMsg,
-        reply=reply,
-        opsID=opsID,
-        userID=userID,
-        includeContext=includeContext,
-        urlContexts=urlContexts,
-    ))
-
-
-def makeMemoryReviewItem(
-    *,
-    action: dict,
-    chatID: str,
-    originalMsg: str,
-    opsID: str,
-    userID: str | int | None = None,
-) -> dict:
-    return {
-        "kind": "memory",
-        "action": action,
-        "chatID": chatID,
-        "originalMsg": originalMsg,
-        "opsID": opsID,
-        "userID": str(userID) if userID is not None else None,
-    }
-
-
-def addMemoryReviewItem(
-    *,
-    action: dict,
-    chatID: str,
-    originalMsg: str,
-    opsID: str,
-    userID: str | int | None = None,
-):
-    """
-    将 LLM 记忆操作加入审核队列。
-
-    参数:
-        action: MemoryAction 的 dict 形式
-        chatID: 原始聊天 ID
-        originalMsg: 触发该操作的用户消息
-        opsID: 审核通知发送给哪个 ops
-        userID: 触发用户 ID
-    """
-    _llmReviewQueue.put_nowait(makeMemoryReviewItem(
-        action=action,
-        chatID=chatID,
-        originalMsg=originalMsg,
-        opsID=opsID,
-        userID=userID,
-    ))
-
-
 
 
 def isRateLimited(userID: str | int) -> bool:
@@ -199,72 +56,6 @@ def isRateLimited(userID: str | int) -> bool:
         del _lastCallTime[k]
 
     return _lastCallTime.get(userID, 0) > cutoff
-
-
-
-
-def addRateLimit(userID: str | int):
-    """记录用户的调用时间（触发速率限制）"""
-    _lastCallTime[str(userID)] = time.time()
-
-
-
-
-def makeDebounceKey(chatID: str | int, userID: str | int) -> str:
-    """构造防抖键：同一用户在不同 chat 中分别聚合。"""
-    return f"{chatID}:{userID}"
-
-
-def appendPendingMessage(
-    debounceKey: str,
-    text: str,
-    includeContext: bool = False,
-    images: list[dict] | None = None,
-    urlIntentText: str | None = None,
-    urlCandidateText: str | None = None,
-) -> bool:
-    """
-    将消息追加到防抖缓冲区。
-
-    参数:
-        images: 图片列表 [{"data": b64_str, "mimeType": "..."}, ...]
-        urlIntentText: 当前用户消息文本，用于判断 URL 读取意图
-        urlCandidateText: 当前用户消息 + 被回复消息文本，用于提取 URL
-
-    返回 False 表示已达上限，消息被丢弃。
-    """
-    buf = _pendingMessages.setdefault(debounceKey, [])
-    if len(buf) >= LLM_PENDING_MSG_LIMIT:
-        return False
-    buf.append({
-        "text": text,
-        "includeContext": includeContext,
-        "images": images or [],
-        "urlIntentText": urlIntentText or "",
-        "urlCandidateText": urlCandidateText or "",
-    })
-    return True
-
-
-def popPendingMessages(debounceKey: str) -> list[dict]:
-    """取出并清空该防抖键对应的待聚合消息列表"""
-    return _pendingMessages.pop(debounceKey, [])
-
-
-def getPendingTask(debounceKey: str) -> asyncio.Task | None:
-    """获取当前防抖 Task"""
-    return _pendingTasks.get(debounceKey)
-
-
-def setPendingTask(debounceKey: str, task: asyncio.Task):
-    """设置防抖 Task"""
-    _pendingTasks[debounceKey] = task
-
-
-def clearPendingTask(debounceKey: str, task: asyncio.Task | None = None):
-    """清除防抖 Task 记录（若传入 task，仅在匹配时清除，避免误删替换后的新 Task）"""
-    if task is None or _pendingTasks.get(debounceKey) is task:
-        _pendingTasks.pop(debounceKey, None)
 
 
 
@@ -287,3 +78,143 @@ def consumeContextOnce() -> bool:
 def isContextOnceSet() -> bool:
     """查询 one-shot context 标记是否已设置（只读，不消费）"""
     return _contextOnce
+
+
+
+
+# ============================================================================
+# 防抖聚合工具
+# ============================================================================
+
+@dataclass(frozen=True, kw_only=True)
+class DebouncedBatch:
+    """
+    防抖聚合批次的纯数据载体，不涉及 Python-Telegram-Bot。
+
+    collectDebouncedBatch 把同一 (chatID, userID) 防抖键下的全部 pending 消息
+    聚合成一个批次（唯一生产点）；_runLLMPipeline 消费。批次内的多条用户消息
+    在这里合为一体：文本换行拼接、图片串联、上下文标记取或。
+
+    字段（prompt 线 / 展示线在此并行共存）:
+        combinedText:     prompt 主文本。各消息 pureText（已含 reply marker、
+                          图片 notes）换行拼接，直接作为 generateReply 的 userMessage
+        includeContext:   批次内任一消息 True 或 one-shot 标记（consumeContextOnce）
+                          取或——一条开上下文，整批生效
+        images:           各消息图片列表串联，元素 {"data": b64, "mimeType": str}
+        urlIntentText:    各消息 urlIntentText 换行拼接（意图判定，reply 不参与）
+        urlCandidateText: 各消息 urlCandidateText 换行拼接（URL 提取候选）
+        displayPairs:     展示线。各消息 {"replyLine", "currentText"} 的列表，
+                          双空条目已过滤——审核卡按此逐条渲染引用/当前配对
+    """
+    combinedText: str
+    includeContext: bool
+    images: list[dict]
+    urlIntentText: str
+    urlCandidateText: str
+    displayPairs: list[dict] = field(default_factory=list)
+
+
+def addRateLimit(userID: str | int):
+    """记录用户的调用时间（触发速率限制）"""
+    _lastCallTime[str(userID)] = time.time()
+
+
+def makeDebounceKey(chatID: str | int, userID: str | int) -> str:
+    """构造防抖键：同一用户在不同 chat 中分别聚合"""
+    return f"{chatID}:{userID}"
+
+
+def appendPendingMessage(
+    debounceKey: str,
+    text: str,
+    includeContext: bool = False,
+    images: list[dict] | None = None,
+    urlIntentText: str | None = None,
+    urlCandidateText: str | None = None,
+    replyLine: str | None = None,
+    currentText: str | None = None,
+) -> bool:
+    """
+    将消息追加到防抖缓冲区。
+
+    参数:
+        images: 图片列表 [{"data": b64_str, "mimeType": "..."}, ...]
+        urlIntentText: 当前用户消息文本，用于判断 URL 读取意图
+        urlCandidateText: 当前用户消息 + 被回复消息文本，用于提取 URL
+        replyLine: 引用行（"<@发送者> 文本"，无引用为空串）——审核卡结构化展示用，prompt 侧不用
+        currentText: 当前消息纯文本（含图片 notes）——同上
+
+    返回 False 表示已达上限，消息被丢弃。
+    """
+    buf = _pendingMessages.setdefault(debounceKey, [])
+    if len(buf) >= LLM_PENDING_MSG_LIMIT:
+        return False
+    buf.append({
+        "text": text,
+        "includeContext": includeContext,
+        "images": images or [],
+        "urlIntentText": urlIntentText or "",
+        "urlCandidateText": urlCandidateText or "",
+        "replyLine": replyLine or "",
+        "currentText": currentText or "",
+    })
+    return True
+
+
+def popPendingMessages(debounceKey: str) -> list[dict]:
+    """取出并清空该防抖键对应的待聚合消息列表"""
+    return _pendingMessages.pop(debounceKey, [])
+
+
+def collectDebouncedBatch(debounceKey: str) -> DebouncedBatch | None:
+    """
+    收集防抖批次消息，空缓冲返回 None
+
+    includeContext 在「任一消息为 True」和「one-shot context 标记（consumeContextOnce）」之间取或。
+    """
+    parts = popPendingMessages(debounceKey)
+    if not parts:
+        return None
+
+    combinedText = "\n".join(p["text"] for p in parts if p["text"])
+    hadOnce = consumeContextOnce()
+    includeContext = any(p["includeContext"] for p in parts) or hadOnce
+
+    allImages: list[dict] = []
+    for p in parts:
+        allImages.extend(p["images"])
+
+    combinedURLIntentText = "\n".join(p["urlIntentText"] for p in parts if p["urlIntentText"])
+    combinedURLCandidateText = "\n".join(p["urlCandidateText"] for p in parts if p["urlCandidateText"])
+
+    # 引用/当前结构化配对（双空过滤——旧缓冲条目/外部调用无新键时跳过）
+    displayPairs = [
+        {"replyLine": p.get("replyLine", ""), "currentText": p.get("currentText", "")}
+        for p in parts
+        if p.get("replyLine") or p.get("currentText")
+    ]
+
+    return DebouncedBatch(
+        combinedText=combinedText,
+        includeContext=includeContext,
+        images=allImages,
+        urlIntentText=combinedURLIntentText,
+        urlCandidateText=combinedURLCandidateText,
+        displayPairs=displayPairs,
+    )
+
+
+def getPendingTask(debounceKey: str) -> asyncio.Task | None:
+    """获取当前防抖任务"""
+    return _pendingTasks.get(debounceKey)
+
+
+def setPendingTask(debounceKey: str, task: asyncio.Task):
+    """设置防抖任务"""
+    _pendingTasks[debounceKey] = task
+
+
+def clearPendingTask(debounceKey: str, task: asyncio.Task | None = None):
+    """清除防抖任务记录（若传入任务，仅在匹配时清除，避免误删替换后的新任务）"""
+    if task is None or _pendingTasks.get(debounceKey) is task:
+        _pendingTasks.pop(debounceKey, None)

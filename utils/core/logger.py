@@ -287,25 +287,29 @@ class TreeLogger:
 
 
     def _formatConsoleText(self, timestamp, userName, event, details, level: LogLevel, childType: LogChildType):
-        """根据子节点类型格式化控制台输出"""
+        """根据子节点类型格式化控制台输出。
+
+        尾部换行约定：块末格式串只出一个 \\n（结束行），空行分隔由消费端补——
+        CLI 路径 print 自动补 \\n、TUI 路径 transcript 追加时补，避免双补多出空行。
+        """
         match childType:
             case LogChildType.NONE:
-                return f"[{timestamp}] [{level.value}] @{userName}: {event}\n\n"
+                return f"[{timestamp}] [{level.value}] @{userName}: {event}\n"
 
             case LogChildType.WITH_CHILD:
                 return f"[{timestamp}] [{level.value}] @{userName}: {event}\n                   └─┤ {details}"
 
             case LogChildType.WITH_ONE_CHILD:
-                return f"[{timestamp}] [{level.value}] @{userName}: {event}\n                   └─┤ {details}\n\n"
+                return f"[{timestamp}] [{level.value}] @{userName}: {event}\n                   └─┤ {details}\n"
 
             case LogChildType.CHILD_WITH_CHILD:
                 return f"                   └─┤ {event}\n                         └─┤ {details}"
 
             case LogChildType.LAST_CHILD_WITH_CHILD:
-                return f"                   └─┤ {event}\n                         └─┤ {details}\n\n"
+                return f"                   └─┤ {event}\n                         └─┤ {details}\n"
 
             case LogChildType.LAST_CHILD:
-                return f"                   └─┤ {details}\n\n"
+                return f"                   └─┤ {details}\n"
 
             case LogChildType.ONLY_RESULT:
                 return f"                   └─┤ {details}"

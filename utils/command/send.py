@@ -135,9 +135,10 @@ async def execute(app , args):
             # 未指定 ID，弹出白名单列表供选择
             screenChatID = await chatIDList(app, bot)
 
-            # 用户未选择或 whitelist 为空
+            # 用户未选择或 whitelist 为空（空列表提示已由 TUI 打过，Esc 退出消息亦然；
+            # 此提示只补「选择流程未产出 chatID」的兜底说明）
             if not screenChatID:
-                print("没有可用的聊天对象……大概是因为 whitelist 为空或未选择\n")
+                print("没有选择聊天对象……\n")
                 return
 
         if screenChatID:
@@ -163,8 +164,8 @@ async def execute(app , args):
                 # 正常退出,结束循环
                 break
 
-            # 退出 chatScreen 循环后打印提示
-            print("\n退出聊天界面喵\n")
+            # 退出 chatScreen 循环后打印提示（TUI 退出已留分隔空行，提示自身只补一个）
+            print("退出聊天界面喵\n")
 
         return
 

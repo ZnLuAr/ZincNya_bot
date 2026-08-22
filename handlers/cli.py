@@ -93,7 +93,7 @@ async def handleConsoleCommand(app, commandLine: str):
     commandArgs = args[1:]
 
     if not commandName or not commandName.replace("_", "").isalnum():
-        print(f"\n❌ '{commandName}' 不是锌酱认识的指令的说……？\n\n")
+        print(f"❌ '{commandName}' 不是锌酱认识的指令的说……？\n")
         return
     
     # 加载对应命令模块
@@ -103,7 +103,7 @@ async def handleConsoleCommand(app, commandLine: str):
 
     # 接受单文件命令（name.py）或包命令（name/ 目录）
     if not (os.path.exists(filePath) or os.path.isdir(commandDir)):
-        print(f"\n❌ '{commandName}' 不是锌酱认识的指令的说……？\n\n")
+        print(f"❌ '{commandName}' 不是锌酱认识的指令的说……？\n")
         return
     
     try:

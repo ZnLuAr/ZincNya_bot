@@ -163,7 +163,7 @@ class WhitelistTUIController(ListMenuController):
 
 
     def getExitMessage(self):
-        return "退出白名单列表喵——\n\n"
+        return "退出白名单列表喵——\n"
 
 
     def getSelectedEntry(self):
