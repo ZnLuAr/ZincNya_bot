@@ -210,13 +210,13 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await logAction(
             "System",
-            "",
+            "缓存中的表情包已失效",
             f"找不到表情包：{setName}",
             LogLevel.WARNING,
-            LogChildType.LAST_CHILD
+            LogChildType.WITH_ONE_CHILD
         )
         return
-    
+
     if action == "gif_confirm":
         text = (
             "喵？\n"
@@ -352,7 +352,7 @@ async def onDownloadPressed(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"表情包 {setName} 下载失败",
             f"{type(e).__name__}: {str(e)}",
             LogLevel.ERROR,
-            LogChildType.LAST_CHILD
+            LogChildType.WITH_ONE_CHILD
         )
         # 清理可能残留的 zip 文件
         if zipPath and os.path.exists(zipPath):

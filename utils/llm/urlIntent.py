@@ -5,7 +5,8 @@ URL 读取意图判断：
     - NFKC 归一化
     - 中英文关键词 / 正则模板
     - 全局抑制（出现即拒）
-    - 近邻否定（仅在 intent 词附近 window 内生效）
+    - 近邻否定（只压制否定词窗口内的第一个意图词；其它意图词逃逸则整体仍触发，
+      如「不要只总结，帮我分析」。注意：否定只覆盖词表/正则路径检出的意图位置）
 
 对外只暴露：hasURLReadIntent(text) -> bool
 """
@@ -328,6 +329,8 @@ _GLOBAL_SUPPRESS_EN = [
 # 前置否定：只在紧跟 intent 词时拦截（像是 "不要只总结，帮我分析" 的情况）
 # ============================================================================
 
+# 中文否定前缀。「别」是单字、子串误命中率高（"特别"/"差别"/"说得特别长"），
+# 故单字否定要求后 2 字符内出现意图词才算有效否定位置（见 _zhNegationSpans）
 _NEGATION_PREFIX_ZH = ["不要", "别", "不用", "无需", "不必", "先别", "暂时别"]
 _NEGATION_PREFIX_EN = ["do not", "don't", "dont", "no need to", "no need", "needn't"]
 
@@ -370,31 +373,94 @@ def _hasGlobalSuppress(textNorm: str, textLower: str) -> bool:
     return False
 
 
-def _hasNegationNearIntent(textNorm: str, textLower: str) -> bool:
-    """
-    只在否定词后 config.LLM_URL_INTENT_NEGATION_WINDOW 字符内出现 intent 词时才拦截。
+# 单字「别」的意图探针长度：否定字 + 后 2 字（「别读」「别只说」覆盖；
+# 「特别长」的「别」后跟非意图字被滤掉）。实现词汇，不进根 config。
+_ZH_SINGLE_NEGATION_PROBE_LEN = 3
 
-    避免误杀 "不要只总结，帮我分析一下"。
+
+
+def _zhNegationSpans(textNorm: str) -> list[tuple[int, int]]:
     """
-    # 中文
+    收集中文否定词的有效位置区间。
+
+    多字否定（不要/不用/…）按子串定位即可；单字「别」误命中率高
+    （"特别"/"说得特别长"），要求其探针窗口（否定字 + 后 2 字，见
+    _ZH_SINGLE_NEGATION_PROBE_LEN）内含意图词才算否定位置——
+    「别读」「别只说」这类直接修饰才成立，「特别长」的「别」后面
+    跟的是「长」而非意图动作。2 字余量是给「别只说」「别老是看」这类
+    中间带一个修饰字的句式留的。
+    返回 [(start, end)]，end 为否定词结尾索引。
+    """
+    spans: list[tuple[int, int]] = []
     for neg in _NEGATION_PREFIX_ZH:
         start = 0
         while True:
             idx = textNorm.find(neg, start)
             if idx < 0:
                 break
-            nearby = textNorm[idx: idx + config.LLM_URL_INTENT_NEGATION_WINDOW]
-            if _hasZhKeyword(nearby, _INTENT_KEYWORDS_ZH):
-                return True
+            if len(neg) == 1:
+                # 单字「别」：探针窗口（否定字 + 后 2 字）内须含意图词
+                probe = textNorm[idx: idx + _ZH_SINGLE_NEGATION_PROBE_LEN]
+                if not _hasZhKeyword(probe, _INTENT_KEYWORDS_ZH):
+                    start = idx + len(neg)
+                    continue
+            spans.append((idx, idx + len(neg)))
             start = idx + len(neg)
+    return spans
 
-    # 英文
-    for pattern in _EN_NEGATION_PATTERNS:
+
+
+def _hasNegationNearIntent(textNorm: str, textLower: str) -> bool:
+    """
+    判定意图是否有被否定压住。
+
+    语义：否定只作用于它**直接修饰**的意图词（否定词窗口内的第一个意图词）。
+    该意图词被忽略后，若还有其它意图词逃出任何否定的直接修饰，整体仍成立——
+    「不要只总结，帮我分析」：否定吃掉「总结」，但「分析」不是它直接修饰的
+    那个（否定后第一个意图词），于是放行。
+
+    单字「别」的误命中（"说得特别长"的"别"）由 _zhNegationSpans 的
+    意图邻近要求过滤。
+    """
+    def negatedIntentStarts(spans, intentPositions):
+        """每个否定位置吃掉的意图词 start 集合（窗口内第一个意图词）。"""
+        eaten: set[int] = set()
+        for negStart, _negEnd in spans:
+            window = config.LLM_URL_INTENT_NEGATION_WINDOW
+            candidates = sorted(
+                s for s, _e in intentPositions if negStart < s < negStart + window
+            )
+            if candidates:
+                eaten.add(candidates[0])
+        return eaten
+
+    # ---- 中文 ----
+    zhIntentPositions: list[tuple[int, int]] = []
+    for kw in set(_INTENT_KEYWORDS_ZH):
+        start = 0
+        while True:
+            idx = textNorm.find(kw, start)
+            if idx < 0:
+                break
+            zhIntentPositions.append((idx, idx + len(kw)))
+            start = idx + len(kw)
+
+    zhEaten = negatedIntentStarts(_zhNegationSpans(textNorm), zhIntentPositions)
+
+    # ---- 英文（词表 + 正则两路意图位置）----
+    enIntentPositions: list[tuple[int, int]] = []
+    for pattern in _EN_INTENT_PATTERNS + _INTENT_PATTERNS_EN:
         for m in pattern.finditer(textLower):
-            nearby = textLower[m.start(): m.start() + config.LLM_URL_INTENT_NEGATION_WINDOW]
-            if _hasEnPattern(nearby, _EN_INTENT_PATTERNS):
-                return True
+            enIntentPositions.append((m.start(), m.end()))
 
+    enNegSpans = [(m.start(), m.end()) for p in _EN_NEGATION_PATTERNS for m in p.finditer(textLower)]
+    enEaten = negatedIntentStarts(enNegSpans, enIntentPositions)
+
+    # 全部意图词都被否定直接修饰 → True；有逃逸 → False；无意图位置 → False（外层已 gate）
+    zhSurvivors = [s for s, _e in zhIntentPositions if s not in zhEaten]
+    enSurvivors = [s for s, _e in enIntentPositions if s not in enEaten]
+    if zhIntentPositions or enIntentPositions:
+        return not (zhSurvivors or enSurvivors)
     return False
 
 

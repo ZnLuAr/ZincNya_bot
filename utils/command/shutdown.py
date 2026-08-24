@@ -4,11 +4,11 @@ async def execute(app, args):
     await logAction(
         "System",
         "/shutdown",
-        "收到关机指令喵——",
+        "收到关机指令",
         LogLevel.INFO,
         LogChildType.NONE
     )
-    print("\n     · 锌酱、要去睡觉了喵——\n     · 期待和你的下一次见面——\n     · 嘿嘿……❤\n")
+    print("\n     · 现在、就关机了喵——\n     · 期待和你的下一次见面——\n")
     print(".\n.\n.\n    *……瞼を閉じました……= =\n")
     return "SHUTDOWN"
 
@@ -20,10 +20,10 @@ def getHelp():
 
     "name": "/shutdown",
     
-    "description": "正确且安全地让锌喵去睡觉",
+    "description": "正确且安全地关闭客户端",
     
     "usage": "直接输入 /shutdown 就好了哦",
 
-    "example": "もー、又在装傻了……"
+    "example": "👀"
 
     }

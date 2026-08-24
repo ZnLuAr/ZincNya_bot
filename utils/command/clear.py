@@ -16,11 +16,11 @@ from handlers.cli import parseArgsTokens
 
 
 
-async def execute(app , args: list[str]):
+async def execute(app, args: list[str]):
 
     parsed = {
         "all": None,
-        "n": None,
+        "lines": None,
         "reset": None,
     }
 
@@ -31,10 +31,10 @@ async def execute(app , args: list[str]):
         "r": "reset",
     }
 
-    parsed = parseArgsTokens(parsed , args , argAlias)
+    parsed = parseArgsTokens(parsed, args, argAlias)
 
     allFlag = parsed["all"]
-    linesCount = parsed["n"]
+    linesCount = parsed["lines"]
     resetFlag = parsed["reset"]
 
 
@@ -46,7 +46,7 @@ async def execute(app , args: list[str]):
 
 
     # -n/--lines <数字>: 清除指定行数
-    if linesCount and linesCount != "NoValue":
+    if linesCount and linesCount is not True:
         try:
             n = int(linesCount)
             if n > 0:

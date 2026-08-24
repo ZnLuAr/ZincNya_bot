@@ -1,7 +1,8 @@
 # 模块管理系统
 
 > 落地时间：2026-05-25
-> 最后更新：2026-07-10
+>
+> 最后更新：2026-08-25
 > 
 > Written by ZincNya~ ❤
 
@@ -119,7 +120,7 @@ list [-a|-e|-d]      # 列出模块（全部 / 仅启用 / 仅禁用）
 show <name>          # 查看模块详情（文件、initFunctions、backgroundTasks、依赖）
 enable <name>        # 启用模块
 disable <name>       # 禁用模块
-install <url> [--with-tests]  # 从 GitHub URL 安装模块（默认不装测试文件，--with-tests 一并装）
+install <name_or_url> [--with-tests] [--branch <branch>]  # 按模块名或 GitHub URL 安装（默认不装测试文件）
 uninstall <name>     # 卸载模块（详见下文）
 validate             # 检查所有模块的文件是否完整（files + testFiles；data/*.json 属运行时本地状态，允许初始不存在，跳过检查）
 scan                 # 找出未被任何模块管理的 handler / utils / tests 文件

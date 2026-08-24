@@ -77,7 +77,7 @@ async def execute(app, args: list[str]):
 
     # /news -fetch: 抓取并推送
     if parsed["fetch"] is not None:
-        targetChatID = parsed["id"] if parsed["id"] and parsed["id"] != "NoValue" else NEWS_TARGET_CHAT_ID
+        targetChatID = parsed["id"] if parsed["id"] and parsed["id"] is not True else NEWS_TARGET_CHAT_ID
         await fetchAndPush(bot, targetChatID)
         return
 

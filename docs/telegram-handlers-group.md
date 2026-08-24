@@ -1,6 +1,6 @@
 # Telegram Handler 分组与注册机制
 
-> 最后更新：2026-07-10
+> 最后更新：2026-08-25
 >
 > Written by ZincNya~ ❤
 
@@ -31,11 +31,11 @@
 
 ## 注册入口
 
-Telegram handlers 由 [loader.py](../loader.py) 动态加载，整套加载流程流程可以说是非常清晰：
+Telegram handlers 由 [loader.py](../loader.py) 按模块注册表（[modulesRegistry.py](../modulesRegistry.py)）动态加载，整套流程清晰：
 
-1. 扫描 [handlers/](../handlers/) 目录。
-2. 跳过 `SKIP_MODULES` 中的模块，目前只有 `cli`。
-3. 导入每个模块并调用 `register()`。
+1. 从 `getAllModules()` 取注册表声明的模块列表，包含启停状态。
+2. 跳过 `enabled: false` 的模块，以及 `SKIP_MODULES` 中的模块（目前只有 `cli`，它是控制台入口而非 Telegram handler）。
+3. 遍历各模块 metadata 的 `handlers` 字段，逐个导入并调用 `register()`。
 4. 将返回的 handler 注册到 `Application`。
 
 `register()` 支持两种格式：
@@ -119,7 +119,7 @@ app.add_handler(MessageHandler(filters.ALL, messageCollector), group=-1)
 | Handler | 条件 | 说明 |
 |---------|------|------|
 | `CommandHandler("shutdown")` | `/shutdown` | ops 关机 |
-| `CommandHandler("restart")` | `/restart` | ops 重启 |
+| `CommandHandler("reboot")` | `/reboot` | ops 重启 |
 | `CommandHandler("status")` | `/status` | 查看运行状态 |
 | `MessageHandler(filters.TEXT & filters.Entity(MessageEntityType.MENTION))` | 文本消息中含 mention entity | 处理 `@bot + 关机/重启/运行状态` 等自然语言控制 |
 
@@ -260,7 +260,7 @@ LLM handler 自己负责二次 gate：
 
 ### 同一 group 内只有第一个匹配 handler 执行
 
-loader 通过 `pkgutil.iter_modules()` 动态扫描模块，模块加载顺序不应该作为业务依赖。
+loader 按注册表声明顺序加载模块，但模块加载顺序不应该作为业务依赖。
 
 因此如果两个 group `0` handlers 可能匹配同一类 update，不能依赖“谁先注册”来表达优先级；应该改用不同 group 或更精确的 filter。
 

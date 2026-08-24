@@ -22,6 +22,19 @@ from utils.llm import (
     updateMemory,
 )
 
+from .._helpRender import renderSubcommands
+
+# 子命令速查表（case _ 提示的数据源；新增子命令时同步此处与 match 分支）
+_MEMORY_SUBCOMMANDS = {
+    "-on | -off | -once": "开启 / 关闭记忆模式，或仅下一次带入历史",
+    "-autoapprove": "切换记忆自动批准（跳过审核）",
+    "list": "列出记忆条目",
+    "add": "新增记忆条目",
+    "edit": "编辑记忆条目",
+    "del <id>": "删除一条记忆",
+    "ui": "打开 Memory 管理界面",
+}
+
 
 
 
@@ -63,12 +76,12 @@ async def _handleMemoryCommand(args, app=None):
                 {"s": "scope", "i": "id", "a": "all", "l": "limit"}
             )
             enabledOnly = parsed["all"] == None
-            limit = int(parsed["limit"]) if parsed["limit"] and parsed["limit"] != "NoValue" else 0
+            limit = int(parsed["limit"]) if parsed["limit"] and parsed["limit"] is not True else 0
             scopeType = parsed["scope"]
             scopeID = parsed["id"]
-            if scopeType == "NoValue":
+            if scopeType is True:
                 scopeType = None
-            if scopeID == "NoValue":
+            if scopeID is True:
                 scopeID = None
             if scopeType == MEMORY_SCOPE_GLOBAL:
                 scopeID = "global"
@@ -93,19 +106,19 @@ async def _handleMemoryCommand(args, app=None):
             )
             scopeType = parsed["scope"]
             content = parsed["text"]
-            if not scopeType or scopeType == "NoValue" or not content or content == "NoValue":
+            if not scopeType or scopeType is True or not content or content is True:
                 print("memory add 的用法应该是：\n    /llm memory add -scope <{global|chat|user|session}> [-id <scopeID>] -text <content>")
                 return
             scopeID = parsed["id"]
-            if scopeID == "NoValue":
+            if scopeID is True:
                 scopeID = None
             memoryID = await addMemory(
                 scopeType,
                 scopeID,
                 content,
-                tags=[] if parsed["tags"] == ["NoValue"] else parsed["tags"],
-                priority=int(parsed["priority"]) if parsed["priority"] and parsed["priority"] != "NoValue" else 0,
-                source=parsed["source"] if parsed["source"] and parsed["source"] != "NoValue" else "manual",
+                tags=[] if parsed["tags"] == [True] else parsed["tags"],
+                priority=int(parsed["priority"]) if parsed["priority"] and parsed["priority"] is not True else 0,
+                source=parsed["source"] if parsed["source"] and parsed["source"] is not True else "manual",
                 enabled=parsed["off"] == None,
             )
             if memoryID is None:
@@ -120,22 +133,22 @@ async def _handleMemoryCommand(args, app=None):
                 {"m": "mid", "t": "text", "g": "tags", "p": "priority", "e": "enabled", "s": "source"}
             )
             memoryID = parsed["mid"]
-            if not memoryID or memoryID == "NoValue":
+            if not memoryID or memoryID is True:
                 print("memory edit 的用法应该是：\n    /llm memory edit -mid <id> [-text <内容>] [-tags <标签...>] [-priority <n>] [-enabled <on|off>]")
                 return
             enabled = None
-            if parsed["enabled"] and parsed["enabled"] != "NoValue":
+            if parsed["enabled"] and parsed["enabled"] is not True:
                 enabled = parsed["enabled"].lower() == "on"
             if not await getMemoryByID(int(memoryID)):
                 print("❌ 记忆不存在喵\n")
                 return
             ok = await updateMemory(
                 int(memoryID),
-                content=parsed["text"] if parsed["text"] and parsed["text"] != "NoValue" else None,
-                tags=None if not parsed["tags"] or parsed["tags"] == ["NoValue"] else parsed["tags"],
-                priority=int(parsed["priority"]) if parsed["priority"] and parsed["priority"] != "NoValue" else None,
+                content=parsed["text"] if parsed["text"] and parsed["text"] is not True else None,
+                tags=None if not parsed["tags"] or parsed["tags"] == [True] else parsed["tags"],
+                priority=int(parsed["priority"]) if parsed["priority"] and parsed["priority"] is not True else None,
                 enabled=enabled,
-                source=parsed["source"] if parsed["source"] and parsed["source"] != "NoValue" else None,
+                source=parsed["source"] if parsed["source"] and parsed["source"] is not True else None,
             )
             print("memory 已更新\n" if ok else "❌ memory 更新失败\n")
 
@@ -155,4 +168,4 @@ async def _handleMemoryCommand(args, app=None):
             await memoryMenuController(app)
 
         case _:
-            print("/llm memory 可用的子命令有：{-on|-off|-once|list|add|edit|del|ui}")
+            print(renderSubcommands("/llm memory 可用的子命令有", _MEMORY_SUBCOMMANDS))

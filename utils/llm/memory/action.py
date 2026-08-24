@@ -25,15 +25,21 @@ from utils.core.logger import logSystemEvent, logAction, LogLevel, LogChildType
 _backgroundTasks: set[asyncio.Task] = set()
 
 
+
+
 def _fireAndForget(coro):
-    """创建后台 task 并持有强引用，会在完成后自动移除"""
+    """创建后台 task 并持有强引用，会在完成后自动移除。
+
+    在没有事件循环（同步上下文调用，如测试）时关闭协程释放资源——
+    不关闭会留下 never awaited 的 RuntimeWarning，且协程体永不执行。
+    """
     try:
         loop = asyncio.get_running_loop()
         task = loop.create_task(coro)
         _backgroundTasks.add(task)
         task.add_done_callback(_backgroundTasks.discard)
     except RuntimeError:
-        pass
+        coro.close()
 
 from .database import (
     addMemory,

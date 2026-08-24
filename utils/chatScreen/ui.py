@@ -231,14 +231,13 @@ class ChatScreenApp(FullScreenTUIApp):
 
 
     def _appendConsoleOutput(self, text: str):
-        """控制台输出回调：把 logger 文本拆行追加到 transcript。
-
-        末尾补一个空行作条目分隔——格式串的尾换行已被 rstrip 去除，
-        分隔与 CLI 路径（print 补换行）对齐，条目间都恰好一个空行。
         """
-        lines = text.rstrip('\n').split('\n')
-        lines.append("")
-        self.appendLines(lines)
+        控制台输出回调：把 logger 文本拆行追加到 transcript。
+
+        rstrip 尾换行后拆行——聊天界面内日志条目紧贴，保持与聊天消息同样的节奏，
+        分隔空行只在 CLI 路径（print 补换行）出现。
+        """
+        self.appendLines(text.rstrip('\n').split('\n'))
 
 
     # ========================================================================

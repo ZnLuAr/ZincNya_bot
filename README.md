@@ -160,6 +160,8 @@ ZincNya_bot/
 │   │   ├── news.py                 # /news 新闻推送管理
 │   │   ├── killsticker.py          # /killsticker 中止表情包下载任务
 │   │   ├── clear.py                # /clear 清屏
+│   │   ├── _helpRender.py          # 子命令速查表渲染（/llm 系共用）
+│   │   ├── reboot.py                # /reboot 重启
 │   │   └── shutdown.py             # /shutdown 关闭
 │   │
 │   ├── moduleManager.py            # 模块配置管理（加载/保存/查询启用状态）
@@ -258,6 +260,7 @@ ZincNya_bot/
 │   │   ├── formatter.py            # 消息格式化工具
 │   │   ├── history.py              # 历史加载与显示
 │   │   ├── statusBar.py            # 状态栏文本常量
+│   │   ├── helpers.py              # 聊天对象导航（Alt+←→ 切换）
 │   │   └── ui.py                   # ChatScreenApp UI 控制层
 │   │
 │   ├── archiver.py                 # 文件打包工具（ZIP / 7z 分卷）
@@ -316,6 +319,7 @@ ZincNya_bot/
 | `/log` | 管理日志文件 |
 | `/clear` | 清理控制台 |
 | `/shutdown` | 关闭程序 |
+| `/reboot` | 重启程序 |
 
 在 **Telegram** 这头，用户能用的是：
 
@@ -332,7 +336,7 @@ ZincNya_bot/
 | 命令 | 说明 |
 |------|------|
 | `/shutdown` | 远程关闭 |
-| `/restart` | 远程重启 |
+| `/reboot` | 远程重启 |
 | `/status` | 查看运行状态 |
 | `/llm` | 查看 LLM 开关状态 |
 | `@bot 关机` | 通过 @ 提及触发关机（也认「去睡觉」） |
@@ -344,12 +348,12 @@ Operator 权限位（在 `operators.json` 里配置）：
 | 权限 | 说明 |
 |------|------|
 | `shutdown` | 允许远程关机 |
-| `restart` | 允许远程重启 |
+| `reboot` | 允许远程重启 |
 | `status` | 允许查看运行状态 |
 | `notify` | 接收未授权用户访问通知 |
 | `llm` | 接收 LLM 生成内容与记忆操作的 Telegram 审核消息 |
 
-想知道某个命令更细的用法，敲 `/help <command>` 或者 `/<command> --h` 就可以啦。
+想知道某个命令更细的用法，敲 `/help <command>` 或者 `/<command> -h` 就可以啦。
 
 ---
 
@@ -724,15 +728,15 @@ python scripts/merge_data.py --source /path/to/other/data --apply
 
 ### 权限 / 管理员命令
 
-**`/status`、`/shutdown`、`/restart` 在 Telegram 里没反应**
-- 检查 `data/operators.json`，确认你的用户 ID 加进去了，且 `permissions` 里有对应权限位（`status`、`shutdown`、`restart`）；
+**`/status`、`/shutdown`、`/reboot` 在 Telegram 里没反应**
+- 检查 `data/operators.json`，确认你的用户 ID 加进去了，且 `permissions` 里有对应权限位（`status`、`shutdown`、`reboot`）；
 - 示例配置：
   ```json
 
   {
     "123456789": {
       "name": "你的名字",
-      "permissions": ["shutdown", "restart", "status", "notify", "llm"]
+      "permissions": ["shutdown", "reboot", "status", "notify", "llm"]
     }
   }
 

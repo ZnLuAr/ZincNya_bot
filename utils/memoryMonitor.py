@@ -55,7 +55,7 @@ async def monitorMemory(app):
                         "内存不足告警",
                         f"可用内存：{availableMB:.0f}MB（阈值：{MEMORY_WARNING_THRESHOLD_MB}MB）",
                         level=LogLevel.WARNING,
-                        childType=LogChildType.LAST_CHILD
+                        childType=LogChildType.WITH_ONE_CHILD
                     )
 
                     text, keyboard = alertMessageConstructor(availableMB)
@@ -74,7 +74,7 @@ async def monitorMemory(app):
                                 "内存告警发送失败",
                                 f"OP {opID}: {type(e).__name__}: {str(e)}",
                                 level=LogLevel.ERROR,
-                                childType=LogChildType.CHILD
+                                childType=LogChildType.WITH_ONE_CHILD
                             )
 
         except asyncio.CancelledError:
@@ -84,7 +84,7 @@ async def monitorMemory(app):
                 "内存监控任务异常",
                 str(e),
                 level=LogLevel.ERROR,
-                childType=LogChildType.LAST_CHILD
+                childType=LogChildType.WITH_ONE_CHILD
             )
             await asyncio.sleep(min(MEMORY_MONITOR_INTERVAL, 10))
 
@@ -168,7 +168,7 @@ async def cancelAllStickerTasks() -> int:
         "sticker 下载任务已中止",
         f"共 {count} 个任务",
         level=LogLevel.INFO,
-        childType=LogChildType.LAST_CHILD
+        childType=LogChildType.WITH_ONE_CHILD
     )
 
     return count

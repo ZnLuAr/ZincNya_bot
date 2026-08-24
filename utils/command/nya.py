@@ -6,7 +6,7 @@ from utils.nyaQuoteManager.ui import quoteMenuController
 
 
 
-async def execute(app , args: list[str]):
+async def execute(app, args: list[str]):
 
     parsed = {
         "edit": None,
@@ -17,11 +17,11 @@ async def execute(app , args: list[str]):
         "e": "edit"
     }
 
-    parsed = parseArgsTokens(parsed , args , argAlias)
+    parsed = parseArgsTokens(parsed, args, argAlias)
     
     editMatch = parsed["edit"]
     
-    if editMatch == "NoValue":
+    if editMatch is True:
         await quoteMenuController(app)
         return
 
@@ -33,7 +33,7 @@ async def execute(app , args: list[str]):
               "\n呜喵……？说不出话来……\n")
         return
     for _ in selectedQuote:
-        print(_ , "\n")
+        print(_, "\n")
 
 
 

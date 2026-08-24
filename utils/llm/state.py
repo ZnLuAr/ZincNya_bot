@@ -96,7 +96,7 @@ class DebouncedBatch:
     在这里合为一体：文本换行拼接、图片串联、上下文标记取或。
 
     字段（prompt 线 / 展示线在此并行共存）:
-        combinedText:     prompt 主文本。各消息 pureText（已含 reply marker、
+        combinedText:     prompt 主文本。各消息 pureText（已含引用标记、
                           图片 notes）换行拼接，直接作为 generateReply 的 userMessage
         includeContext:   批次内任一消息 True 或 one-shot 标记（consumeContextOnce）
                           取或——一条开上下文，整批生效

@@ -35,7 +35,8 @@ class PromptPayload:
 
     字段（生产：preparePurePromptText；消费：_enqueueLLMDebounce 拆字段入防抖缓冲）:
         pureText:         prompt 主文本。去 @bot / #context 后的当前消息，
-                          有引用时已注入 [引用的消息]/[当前用户消息] marker（_assembleReplyContext）；
+                          有引用时已注入引用标记（[引用的消息]/[当前用户消息]，
+                          由 _assembleReplyContext 拼接）；
                           图片下载说明行由 handler 侧 replace() 前置进来
         includeContext:   是否启用 memory/history 上下文。
                           #context 标记 or 全局 memoryEnabled；one-shot 标记
@@ -61,10 +62,10 @@ class ReplyContext:
     """
     引用/当前的结构化切分（extractReplyTextContext 的产出，模块内部中间载体）。
 
-    一次切分、两用：_assembleReplyContext 拼回 prompt marker 字符串 +
+    一次切分、两用：_assembleReplyContext 拼回带引用标记的 prompt 字符串 +
     preparePurePromptText 填 PromptPayload 展示字段（防双调用漂移）。
 
-    TODO（Design A 预留）：prompt 组装未来改用它——injectReplyTextContext 的 marker 字符串
+    TODO（Design A 预留）：prompt 组装未来改用它——injectReplyTextContext 的标记字符串
     届时改为结构化注入（引用可独立进上下文 tier / 针对性指令 / 多消息配对保真），
     retry 契约同步改造。收益与改点见 docs/llm-handler.md「四个数据载体」。
 
@@ -91,7 +92,7 @@ class DisplayBlocks:
     生产：_runLLMPipeline 由 DebouncedBatch.displayPairs 组装；
     消费：utils/llm/review.renderOriginalMsgBlock 走结构化渲染
     （每条消息一个 blockquote，引用/当前合并同块、粗体小节区分）。
-    None（整个字段缺省或显式 None）时渲染层退化为对 originalMsg 做 marker 解析。
+    None（整个字段缺省或显式 None）时渲染层退化为对 originalMsg 按引用标记切分。
 
     字段:
         prefix: 标注前缀行——图片标注（"[附带 N 张图片]"）与 URL 摘要（urlSummary）
@@ -170,9 +171,9 @@ def extractReplyTextContext(message, pureText: str) -> ReplyContext:
 
 
 def _assembleReplyContext(ctx: ReplyContext, currentText: str) -> str:
-    """将结构化切分拼回 marker 字符串（与 injectReplyTextContext 的历史格式逐字节同构）。
+    """将结构化切分拼回带引用标记的字符串（与 injectReplyTextContext 的历史格式逐字节同构）。
 
-    TODO（Design A 预留）：prompt 结构化后此函数退役——marker 拼接被结构化注入取代。
+    TODO（Design A 预留）：prompt 结构化后此函数退役——标记拼接被结构化注入取代。
     """
     if not ctx.replyLine:
         return currentText
@@ -236,7 +237,7 @@ def injectReplyTextContext(message, pureText: str) -> str:
 
 def preparePurePromptText(message, rawText: str, botUsername: str) -> PromptPayload:
     """
-    准备 LLM prompt text
+    准备 LLM 提示词文本
 
     返回:
         PromptPayload:

@@ -33,7 +33,23 @@ from utils.llm.state import getReviewQueue
 
 from .knowledgeCmd import _handleKnowledgeCommand
 from .memoryCmd import _handleMemoryCommand
+from .._helpRender import renderSubcommands
 from .review.consoleReview import handleConsoleReview
+
+# 子命令速查表（case _ 提示的数据源；新增子命令时同步此处与 match 分支。
+# fade 仅 Telegram 端 llmCommand 支持，控制台无此分支故不列）
+_LLM_SUBCOMMANDS = {
+    "on | off": "开启 / 关闭 LLM 功能",
+    "status": "显示当前配置",
+    "auto -on|-off|-console": "切换审核模式",
+    "model [switch <model>]": "显示或切换模型",
+    "visionmodel [...]": "显示 / 切换 / 重置视觉模型",
+    "trigger [mention|keyword]": "显示或切换群聊触发模式",
+    "keyword [add|del <关键词>]": "管理群聊触发关键词",
+    "memory [...]": "记忆模式与条目管理（/llm memory 查看子命令）",
+    "knowledge [...]": "知识库管理（/llm knowledge 查看子命令）",
+    "review": "打开控制台审核队列",
+}
 
 
 
@@ -157,7 +173,7 @@ async def execute(app, args):
                 except ValueError as e:
                     print(f"❌ {e}\n")
             else:
-                print("keyword 的用法应该是：/llm keyword [{add <关键词>|del <关键词>}]")
+                print("keyword 的用法应该是：/llm keyword [{add <关键词>|del <关键词>}]\n")
 
         case "memory":
             await _handleMemoryCommand(rest, app)
@@ -172,8 +188,8 @@ async def execute(app, args):
             await _handleKnowledgeCommand(rest)
 
         case _:
-            print(f"❌ 这个 {cmd} 不是锌酱认识的命令的说……？")
-            print("/llm 可用的子命令：{on|off|status|fade|model|visionmodel|trigger|keyword|memory|url|knowledge|review}")
+            print(f"❌ 这个 {cmd} 不是锌酱认识的命令的说……？\n")
+            print(renderSubcommands("/llm 可用的子命令有", _LLM_SUBCOMMANDS))
 
 
 

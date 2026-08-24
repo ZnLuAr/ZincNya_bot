@@ -289,8 +289,9 @@ class TreeLogger:
     def _formatConsoleText(self, timestamp, userName, event, details, level: LogLevel, childType: LogChildType):
         """根据子节点类型格式化控制台输出。
 
-        尾部换行约定：块末格式串只出一个 \\n（结束行），空行分隔由消费端补——
-        CLI 路径 print 自动补 \\n、TUI 路径 transcript 追加时补，避免双补多出空行。
+        尾部换行约定：块末格式串只出一个 \\n（结束行）——CLI 路径由 print 自动
+        补 \\n 得到条目间空行；TUI 路径（chatScreen transcript）rstrip 后紧贴
+        拆行，条目间不设空行（紧凑节奏，与聊天消息一致）。
         """
         match childType:
             case LogChildType.NONE:

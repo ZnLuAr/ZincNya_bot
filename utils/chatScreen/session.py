@@ -22,16 +22,16 @@ async def chatScreen(app, bot, targetChatID: str):
     进入与指定 chatID 的用户/群聊的本地交互聊天界面。
 
     参数:
-        targetChatID: 有效的 Telegram chat ID（不接受 "NoValue"，
+        targetChatID: 有效的 Telegram chat ID（不接受光杆 flag（True），
                       调用方需先处理列表选择）。
 
     返回:
         - None：正常退出（Esc / Ctrl+C）
         - {"action": "switch", "direction": "next"/"prev"}：切换聊天对象信号，透传给 send.py
     """
-    # 参数校验（确保调用方已处理 "NoValue"）
-    if not targetChatID or targetChatID == "NoValue":
-        raise ValueError("targetChatID 必须是有效的 chat ID，不能是 'NoValue'")
+    # 参数校验（确保调用方已处理光杆 -c 的列表选择）
+    if not targetChatID or targetChatID is True:
+        raise ValueError("targetChatID 必须是有效的 chat ID，不能是光杆 flag")
 
     # 历史记录构建仍由 session 负责（构造前 buildHistoryLines + 欢迎行 → initialLines 传构造器）
     initialLines = await buildHistoryLines(targetChatID)

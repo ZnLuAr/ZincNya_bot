@@ -1,6 +1,6 @@
 # ChatScreen 聊天界面技术文档
 
-> 最后更新：2026-07-26
+> 最后更新：2026-08-25
 >
 > ChatScreen 是 TUI 框架 `FullScreenTUIApp` 范式的复杂实例——会话契约、范式分层、横切关注点的总规则写在 [docs/tui.md](tui.md)，本文专注聊天界面自身的实现细节。
 >
@@ -53,7 +53,7 @@ chatScreen 功能由两层协作实现——业务编排层（`session.py`）负
 
 早时手工管的 `interactiveMode` 旗标、`consoleOutputCallback`、receiver 协程的启动和 cancel，现在全下沉到 `ChatScreenApp.onEnter`/`onExit` 和 `TUISession.runSession` 的 finally 里了——这些是所有 TUI 范式共用的横切规则，总纲写在 [docs/tui.md](tui.md)。session 层只剩 chatScreen 自己的编排：
 
-- 校验 `targetChatID`（必须是有效 ID，不接受 `NoValue`——目标选择由调用方 `send.py` 负责）
+- 校验 `targetChatID`（必须是有效 ID，不接受光杆 flag（`True`，即 `/send -c` 未选出目标）——目标选择由调用方 `send.py` 负责）
 - 构造历史记录 + 欢迎行，灌进 `ChatScreenApp` 的 `initialLines`
 - `await ui.runSession()` 跑完整生命周期，拿回 `reviewEditItem`
 - 按 `reviewEditItem` 三态收尾
@@ -94,8 +94,8 @@ reviewEditItem 三态处理（放回队列 / switch 透传 / None）
 
 ```python
 async def chatScreen(app, bot, targetChatID: str):
-    if not targetChatID or targetChatID == "NoValue":
-        raise ValueError("targetChatID 必须是有效的 chat ID，不能是 'NoValue'")
+    if not targetChatID or targetChatID is True:
+        raise ValueError("targetChatID 必须是有效的 chat ID，不能是光杆 flag")
 
     initialLines = await buildHistoryLines(targetChatID)
     initialLines.extend(["", f"已进入聊天界面喵", f"与 {targetChatID} 的实时聊天已连接", "=" * 64])
@@ -302,7 +302,7 @@ if initialLines:
 > 每次追加消息、滚动、切换状态都会使用这个方法——它根据 `_scrollOffset`，从 `_allLines` 切出可见窗口，刷新 `_transcriptArea` 的显示。
 > 
 > 
-> **滚动**（ui.py:267-279）
+> **滚动**（`_scrollUp` / `_scrollDown`，ui.py）
 > 
 > ```python
 > def _scrollUp(self, lines: int):
@@ -369,8 +369,8 @@ chatScreen 依赖 `utils/core/stateManager.py` 的全局状态：
 | `Esc` | 退出聊天界面 | 如在编辑模式，则取消编辑（不退出） |
 | `Ctrl+C` | 退出聊天界面 | 同 `Esc` |
 | `Ctrl+X` | 清空输入框 | 清空当前输入框的所有内容 |
-| `Alt+↑` | 向上滚动 1 行 | 查看历史消息 |
-| `Alt+↓` | 向下滚动 1 行 | 回到最新消息 |
+| `Alt+↑`（`Ctrl+↑` 同效） | 向上滚动 1 行 | 查看历史消息 |
+| `Alt+↓`（`Ctrl+↓` 同效） | 向下滚动 1 行 | 回到最新消息 |
 | `PgUp` | 向上滚动 1 页 | 页大小 = 可见窗口高度 |
 | `PgDn` | 向下滚动 1 页 | 回到最新消息 |
 | `Alt+←` | 切换到上一个聊天对象 | 按 whitelist 列表顺序循环切换 |
@@ -403,8 +403,8 @@ chatScreen 内置了 LLM 审核队列的处理功能——可以在聊天界面�
 ### 编辑模式
 
 执行 `:re` 后：
-1. 输入框内容被替换为待审核的 LLM 回复预览
-2. 状态栏显示 `[编辑模式] 修改后按 Ctrl+S 提交 | Esc 取消编辑`
+1. 输入框内容被替换为待审核的完整内容（LLM 回复或记忆条目）
+2. 状态栏显示 `LLM 生成消息 编辑审核中 | Ctrl+S 提交 | Esc 取消编辑`（记忆项则是 `记忆内容 编辑审核中 | ...`）……这样的提示文本
 3. 用户修改内容后按 `Ctrl+S`，修改后的内容会放回审核队列
 4. 按 `Esc` 取消编辑，原内容放回队列，**就不用退出聊天界面了**
 
@@ -413,11 +413,11 @@ chatScreen 内置了 LLM 审核队列的处理功能——可以在聊天界面�
 当审核队列有待处理项时，状态栏自动显示：
 
 ```
-待审核: (3 条) | :ra 通过 :re 编辑 :rr 重试 :rc 取消 | [预览: "你好，好久不见..."]
+待审核: (3 条) | :ra 通过 :re 编辑 :rr 重试 :rc 取消 | 当前操作的是：[回复] 你好，好久不见…
 ```
 
 - `(3 条)`：队列中待审核的数量
-- `[预览: ...]`：当前队首项的前 30 字符预览
+- 尾段是队首项的预览（`peekReviewHint()`，16 字符截断）——回复项显示 `当前操作的是：[回复] <预览>`，记忆操作项显示 `当前操作的是：[记忆:<动作>] <预览>`
 
 ---
 
@@ -583,12 +583,14 @@ def _clearScreen(event):
 
 #### 2. 更新状态栏默认提示
 
+默认状态栏文案集中在 `utils/chatScreen/statusBar.py`，避免 ui.py / mainLoop.py 等多处硬编码同一串文本漂移。如果想要对状态栏的内容进行修改或扩展，可以改这里：
+
 ```python
-def _defaultStatus(self) -> str:
+def getDefaultStatus(targetChatID: str) -> str:
+    """默认状态栏：显示所有快捷键提示。"""
     return (
-        "Enter 换行 | Ctrl+S / Alt+Enter 发送 | Esc 退出 | Ctrl+X 清空"
-        " | Alt+↑↓ / PgUp PgDn 滚动历史 | Ctrl+L 清屏"  # 新增
-        f" | 聊天对象: {self._targetChatID}"
+        "Ctrl+S 发送 | Esc 退出 | Ctrl+X 清空 | Alt+↑↓ 滚动 | Alt+←→ 切换"
+        f" | 聊天: {targetChatID}"
     )
 ```
 

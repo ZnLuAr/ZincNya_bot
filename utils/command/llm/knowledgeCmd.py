@@ -22,6 +22,19 @@ from utils.llm import (
 )
 
 
+from .._helpRender import renderSubcommands
+
+# 子命令速查表（case _ 提示的数据源；新增子命令时同步此处与 match 分支）
+_KNOWLEDGE_SUBCOMMANDS = {
+    "on | off": "开启 / 关闭知识库",
+    "reindex [--force]": "重建知识库索引",
+    "list [category]": "列出知识库条目",
+    "stats": "显示知识库统计",
+    "search <query>": "测试检索（显示评分）",
+    "maxresults <n>": "设置召回数（1-10）",
+    "minscore <float>": "设置最低分数阈值",
+}
+
 _TAG_DISPLAY_LIMIT = 5
 _CONTENT_PREVIEW_LEN = 100
 
@@ -99,7 +112,7 @@ async def _handleKnowledgeCommand(args):
 
         case "search":
             if not rest:
-                print("knowledge search 的用法应该是：/llm knowledge search <查询内容>")
+                print("knowledge search 的用法应该是：/llm knowledge search <查询内容>\n")
                 return
             query = " ".join(rest)
             try:
@@ -144,4 +157,4 @@ async def _handleKnowledgeCommand(args):
                 print(f"❌ {e}\n")
 
         case _:
-            print("/llm knowledge 可用的子命令有：{on|off|reindex|list|stats|search|maxresults|minscore}")
+            print(renderSubcommands("/llm knowledge 可用的子命令有", _KNOWLEDGE_SUBCOMMANDS))

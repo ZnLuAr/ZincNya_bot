@@ -32,10 +32,10 @@ def _patches(reviewEditItem, historyLines=None):
 
 
 @pytest.mark.asyncio
-async def test_chatScreen_noValue_raises():
-    """NoValue 守卫：targetChatID='NoValue' 抛 ValueError"""
-    with pytest.raises(ValueError, match="NoValue"):
-        await chatScreen(MagicMock(), MagicMock(), "NoValue")
+async def test_chatScreen_bare_flag_raises():
+    """光杆 flag 守卫：targetChatID=True（/send -c 未选目标）抛 ValueError"""
+    with pytest.raises(ValueError, match="光杆"):
+        await chatScreen(MagicMock(), MagicMock(), True)
 
 
 @pytest.mark.asyncio

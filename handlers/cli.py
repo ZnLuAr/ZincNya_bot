@@ -52,7 +52,7 @@ parseArgsTokens() 是通用参数解析器，供各指令模块调用。
     - 若 aliasMap 存在且输入为缩写（如 -a），会被替换为对应的全称键（如 add）
     - 若 parsed[key] 是 list，则追加读取到的多个值
     - 若 parsed[key] 是其他类型，则仅接收第一个值
-    - 若参数未显式带值，会返回 ["NoValue"] 作为占位
+    - 若参数未显式带值，会返回 True 作为占位（flag 语义）
 
 该解析器是所有命令模块共享的基础能力，使得 Bot 的指令系统能够以统一、可扩展的方式处理各种输入。
 """
@@ -168,9 +168,19 @@ def parseArgsTokens(parsed: dict, tokens: list[str], aliasMap: dict|None=None):
     最终，解析器所能支持的格式包含：
 
         - -f value1 value2 value3
-        - --flag value 
+        - --flag value
         - --flag=value
         - -id 123 456 789
+
+    参数值的三态语义：
+        None = 参数没出现
+        True = 参数出现但光杆（flag 形态，如 /send -c——按 flag 语义取真）
+            此外，在 `if eqValue is not None and eqValue != ""`，
+            即 --flag=""（等号后为空串）时，也会得到 True。
+        值/[] = 参数出现且有值（标量取首值；list 类型收集全部后续值；光杆时 list 收到 [True]）
+
+
+    已知限制：-n -5 的负数值会被当作 flag 跳过（用 -n=-5 形式传递）。
 
     非参数（不以 '-' 开头的 token）会被忽略。
     '''
@@ -204,7 +214,7 @@ def parseArgsTokens(parsed: dict, tokens: list[str], aliasMap: dict|None=None):
         # 获取参数值——
         values = []
 
-        if eqValue is not None:
+        if eqValue is not None and eqValue != "":
             values.append(eqValue)
             i += 1
         else:
@@ -215,9 +225,9 @@ def parseArgsTokens(parsed: dict, tokens: list[str], aliasMap: dict|None=None):
                 j += 1
             i = j
 
-        # 若没有任何 value ，返回 "NoValue"
+        # 光杆 flag（无值）：按 flag 语义取 True
         if not values:
-            values = ["NoValue"]
+            values = [True]
 
 
         # 将解析出的参数分别写入 parsed

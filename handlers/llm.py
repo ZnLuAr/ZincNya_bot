@@ -96,21 +96,24 @@ def _getAuthorizedUserID(message) -> int | None:
     return userID
 
 
-async def _downloadImagesAndAnnotatePrompt(bot, imageRefs, pureText: str) -> tuple[str, list[dict], str]:
-    """下载图片引用并把说明（过大 / 失败）前置注入 prompt 文本（同步阶段，失败可立即说明）。
+async def _downloadImagesAndAnnotatePrompt(bot, imageRefs, payload: PromptPayload) -> tuple[PromptPayload, list[dict]]:
+    """
+    下载图片引用，并把说明（过大 / 失败）前置到 prompt 线与展示线的文本（同步阶段，失败可立即说明）。
 
-    返回 (annotatedText, downloadedImages, notesText)——notesText 为说明行的换行拼接
-    （无说明为空串），供调用方同时前置到 prompt 文本与展示侧 currentText（结构化拆分后
-    图片说明归入「当前消息」段）。
+    图片说明同时归入两处：PromptPayload.pureText（LLM 看得到）与 currentText
+    （审核卡「当前消息」段）。frozen 载体不可原地改写，返回 replace() 生成的新 payload。
     """
     downloadedImages: list[dict] = []
-    notesText = ""
     if imageRefs:
         downloadedImages, notes = await downloadImages(bot, imageRefs)
         if notes:
             notesText = "\n".join(notes)
-            pureText = notesText + "\n" + pureText
-    return pureText, downloadedImages, notesText
+            payload = replace(
+                payload,
+                pureText=notesText + "\n" + payload.pureText,
+                currentText=notesText + "\n" + payload.currentText,
+            )
+    return payload, downloadedImages
 
 
 async def _enqueueLLMDebounce(
@@ -461,11 +464,8 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not payload.pureText:
         return
 
-    # 下载图片并补充 prompt 说明——frozen 载体不可原地改写，用 replace 生成新 payload；
-    # 说明行同步前置到 currentText（展示侧「当前消息」段），时间线必须在 _enqueueLLMDebounce 之前
-    annotatedText, downloadedImages, notesText = await _downloadImagesAndAnnotatePrompt(context.bot, imageRefs, payload.pureText)
-    annotatedCurrent = (notesText + "\n" + payload.currentText) if notesText else payload.currentText
-    payload = replace(payload, pureText=annotatedText, currentText=annotatedCurrent)
+    # 下载图片并把说明写进 payload（pureText 与 currentText 两处，见 helper docstring）
+    payload, downloadedImages = await _downloadImagesAndAnnotatePrompt(context.bot, imageRefs, payload)
 
     # 组装分发目标（从入口到分发全程稳定的定位四元组）
     target = DispatchTarget(

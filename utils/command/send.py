@@ -42,7 +42,7 @@ sendMsg(bot, idList, atUser, text)
 本地交互式聊天界面（核心功能）
 包含 chatScreen() 及其内部的 receiverLoop() / printMessage() / displayHistory()
 
-chatScreen(app , bot: Bot , targetChatID: str)
+chatScreen(app, bot: Bot, targetChatID: str)
     用于进入与某一 chatID 的实时聊天界面。
 
 其操作模式为全屏 CLI 聊天窗口：
@@ -102,7 +102,7 @@ from utils.whitelistManager.ui import whitelistMenuController
 
 
 
-async def execute(app , args):
+async def execute(app, args):
 
     bot: Bot = app.bot
  
@@ -121,17 +121,22 @@ async def execute(app , args):
         "c": "chat",
     }
 
-    parsed = parseArgsTokens(parsed , args , argAlias)
-    
+    parsed = parseArgsTokens(parsed, args, argAlias)
+
     atUser = parsed["at"]
     text = parsed["text"]
     idList = parsed["id"]
     screenChatID = parsed["chat"]
 
+    # 无有效模式（text/id/chat 全空——-a 单独出现不算模式）：给用法指引
+    if text is None and not idList and screenChatID is None:
+        print("send 的用法应该是：/send [-t <文字>] [-id <chatID>...] 或 /send -c [chatID]\n")
+        return
+
     # 参数验证
     if screenChatID is not None:
         # 聊天界面模式
-        if screenChatID == "NoValue":
+        if screenChatID is True:
             # 未指定 ID，弹出白名单列表供选择
             screenChatID = await chatIDList(app, bot)
 
@@ -169,37 +174,37 @@ async def execute(app , args):
 
         return
 
-    if not text or text == "NoValue":
+    if not text or text is True:
         print("❌ 参数 <-t/--text <text>> 要加上才可以发得出文字的说\n")
         return
     
-    if not idList or idList == "NoValue":
+    if not idList or idList == [True]:
         print("❌ 参数 <-id/--id <chatID>> 得加上才对的说\n")
         return
     
-    await sendMsg(bot , idList , atUser , text)
+    await sendMsg(bot, idList, atUser, text)
 
 
 
 
-async def chatIDList(app , bot):
+async def chatIDList(app, bot):
 
     # 使用交互式选择器
-    selectedUID = await whitelistMenuController(bot , app)
+    selectedUID = await whitelistMenuController(bot, app)
 
     return selectedUID
 
 
 
 
-async def sendMsg(bot: Bot , idList , atUser , text):
+async def sendMsg(bot: Bot, idList, atUser, text):
     # 执行发送信息给<chatID>
     for chatID in idList:
         try:
             msg = text
             if atUser:
                 msg = f"@{atUser} {text}"
-            await bot.send_message(chat_id=chatID , text=msg)
+            await bot.send_message(chat_id=chatID, text=msg)
             result = f"已发送给 {chatID}"
 
         except Exception as e:

@@ -9,7 +9,7 @@ from utils.whitelistManager.ui import whitelistMenuController
 
 
 
-async def execute(app , args):
+async def execute(app, args):
 
     bot: Bot = app.bot
 
@@ -31,7 +31,7 @@ async def execute(app , args):
     }
 
 
-    parsed = parseArgsTokens(parsed , args , argAlias)
+    parsed = parseArgsTokens(parsed, args, argAlias)
     
     addUID = parsed["add"]
     delUID = parsed["del"]
@@ -40,12 +40,21 @@ async def execute(app , args):
     commentList: list = parsed["comment"]
 
     # 参数验证
-    # 当四个参数中出现超过一个（设定的规则上不能同时使用）时，报错并返回
-    if sum(bool(x and x != "NoValue") for x in [addUID , delUID , susUID , listFlag]) > 1:
+    # 当四个操作参数中出现超过一个（设定的规则上不能同时使用）时，报错并返回。
+    # 光杆 -l（True）也计入——否则 -l 与 -a 组合不会被冲突检测拦住。
+    # -c 不参与冲突计数：它与 -a 组合（加入并备注）或单独使用（改备注）都是合法模式。
+    argsCount = sum(bool(x) for x in [addUID, delUID, susUID, listFlag])
+    if argsCount > 1:
         print(
                 "もー、/whitelist 的参数不能这样用喵——\n",
-                "详情要用 /help whitelist 来查看哦"
+                "使用 '/help whitelist' 查看 /whitelist 的详细用法哦——\n"
             )
+        return
+    elif argsCount == 0 and not commentList:
+        print(
+            "❌ /whitelist 需要参数的说……\n"
+            "使用 '/help whitelist' 查看 /whitelist 的详细用法哦——\n"
+        )
         return
 
 
@@ -55,7 +64,7 @@ async def execute(app , args):
             -c 所支持的格式包括：
                 -c <'ID'> <'comment text...'>
                 -a <'ID'> -c <'comment text'>
-                -c (NoValue)
+                -c（光杆，不带值）
 
         因此，为了能让 parseArgsTokens() 能够正常读取，
             需要以列表的形式将 key=comment 传入 parseArgsTokens()\n
@@ -63,8 +72,8 @@ async def execute(app , args):
         函数用于将 commentUID 和 commentText 从 commentList 分别解析出来
         '''
 
-        if not commentList or commentList[0] == "NoValue":
-            return None , None
+        if not commentList or commentList[0] is True:
+            return None, None
         
         # 值得注意的是，当 -a 与 -c 合用时，-c 的参数值只有一项
         # 即 commentList = ['<obj>']，其中 obj 将被视为 commentText
@@ -77,24 +86,24 @@ async def execute(app , args):
             # -c 单独使用：commentList[0] 是 ID，后面是备注文本
             commentUID = commentList[0]
             commentText = " ".join(commentList[1:]) if len(commentList) > 1 else None
-        return commentUID , commentText
+        return commentUID, commentText
 
 
     if listFlag:
-        # -l 是一个标志，不需要参数，"NoValue" 表示用户使用了这个标志
+        # -l 是一个标志，不需要参数，光杆（True）表示用户使用了这个标志
         # 使用交互式选择器管理白名单
-        await whitelistMenuController(bot , app , mode="manage")
+        await whitelistMenuController(bot, app, mode="manage")
         return
     
 
-    commentUID , commentText = _extractCommentList(commentList)
+    commentUID, commentText = _extractCommentList(commentList)
     
     # 当独立使用 -c/--comment 参数时
-    if commentUID and not any(x and x != "NoValue" for x in [addUID, delUID, susUID]):
+    if commentUID and not any(x and x is not True for x in [addUID, delUID, susUID]):
         if commentText is None:
             print("❌ ムリー，备注内容不能为空喵——\n")
             return
-        ok = userOperation("setComment" , commentUID , commentText)
+        ok = userOperation("setComment", commentUID, commentText)
         action = f"为 {commentUID} 添加备注 '{commentText}' ……"
         result = "OK喵——" if ok else "备注添加失败喵……"
         await logAction(
@@ -107,15 +116,15 @@ async def execute(app , args):
         return
 
     # 以下是包含了-a、-d、-s 的使用情况
-    if any(x and x != "NoValue" for x in [addUID, delUID, susUID]):
-        if addUID and addUID != "NoValue":
+    if any(x and x is not True for x in [addUID, delUID, susUID]):
+        if addUID and addUID is not True:
             operation = "addUser"
             action = f"将 {addUID} 加入白名单……"
             if commentText:
             # -a 和 -c 同时使用的情况
             # 在这个分支就结束操作并返回，不到达下面的汇总操作
                 # Step 1：添加用户 ID 进入白名单
-                ok = userOperation(operation , addUID)
+                ok = userOperation(operation, addUID)
                 result = "OK喵" if ok else f"{addUID} 已经在白名单了喵——"
                 if not ok:
                     # 当添加 UID 不成功时，返回“已经在白名单了”——这种无意义的消息可以不出现在日志中
@@ -137,7 +146,7 @@ async def execute(app , args):
                 )
                 # Step 2：添加备注
                 # 所以要使 comment
-                ok = userOperation("setComment" , addUID , commentText)
+                ok = userOperation("setComment", addUID, commentText)
                 result = f"已为 {addUID} 添加备注 {commentText} 喵——" if ok else f"备注添加失败喵……"
                 await logAction(
                     "Console",
@@ -147,21 +156,21 @@ async def execute(app , args):
                     LogChildType.LAST_CHILD
                 )
                 return
-            result = ["OK喵" , f"{addUID} 已在白名单喵——"]
+            result = ["OK喵", f"{addUID} 已在白名单喵——"]
 
-        elif delUID and delUID != "NoValue":
+        elif delUID and delUID is not True:
             operation = "deleteUser"
             action = f"将 {delUID} 移出白名单……"
-            result = ["OK喵" , f"{delUID} 不在白名单喵——"]
+            result = ["OK喵", f"{delUID} 不在白名单喵——"]
 
-        elif susUID and susUID != "NoValue":
+        elif susUID and susUID is not True:
             operation = "suspendUser"
             action = f"暂停 {susUID} 的权限……"
-            result = ["OK喵" , f"{susUID} 已经是暂停状态了喵——"]
+            result = ["OK喵", f"{susUID} 已经是暂停状态了喵——"]
 
         # 汇总操作
         userID = addUID or delUID or susUID
-        ok = userOperation(operation , userID)
+        ok = userOperation(operation, userID)
         finalResult = result[0] if ok else result[1]
         await logAction(
             "Console",
@@ -172,8 +181,10 @@ async def execute(app , args):
         )
         return
 
-    print("❌ 填的这个参数不对的说……")
-    print("使用 '/help whitelist' 查看 /whitelist 的详细用法哦——\n")
+    print(
+        "❌ 填的这个参数不对的说……\n"
+        "使用 '/help whitelist' 查看 /whitelist 的详细用法哦——\n"
+    )
 
 
 

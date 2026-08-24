@@ -1,7 +1,7 @@
 """
 shutdown.py
 
-提供在 Telegram 端使用 /shutdown、/restart、/status 等管理命令的途径，
+提供在 Telegram 端使用 /shutdown、/reboot、/status 等管理命令的途径，
 仅限 operators 使用。
 """
 
@@ -32,11 +32,11 @@ _START_TIME = time.time()
 
 
 @handleTelegramErrors(errorReply="就不关w ——")
-async def shutdown(update: Update , _: ContextTypes.DEFAULT_TYPE):
+async def shutdown(update: Update, _: ContextTypes.DEFAULT_TYPE):
     """关闭 bot（仅 operators）"""
     userID = update.effective_user.id
 
-    if not hasPermission(userID , Permission.SHUTDOWN):
+    if not hasPermission(userID, Permission.SHUTDOWN):
         await update.message.reply_text("❌ 只有管理员才有权限执行这个操作的说——")
         return
 
@@ -55,11 +55,11 @@ async def shutdown(update: Update , _: ContextTypes.DEFAULT_TYPE):
 
 
 @handleTelegramErrors(errorReply="就不关w ——")
-async def restart(update: Update , _: ContextTypes.DEFAULT_TYPE):
+async def reboot(update: Update, _: ContextTypes.DEFAULT_TYPE):
     """重启 bot（仅 operators）"""
     userID = update.effective_user.id
 
-    if not hasPermission(userID , Permission.RESTART):
+    if not hasPermission(userID, Permission.REBOOT):
         await update.message.reply_text("❌ 只有管理员才有权限执行这个操作的说……")
         return
 
@@ -72,17 +72,20 @@ async def restart(update: Update , _: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("现在就重启喵——\n\n……瞼を閉じました……=  =")
 
     # 通过状态管理器请求优雅重启
+    # 
+    # 此处调用的函数依旧以 Restart 为措辞，这是因为 「reboot」在系统语境里通常指整机重启，
+    # 而这里做的是进程重启（process restart）。命令使用 reboot 只是 Unix 的习惯。
     getStateManager().requestRestart()
 
 
 
 
 @handleTelegramErrors(errorReply="呜……不给看w ——！")
-async def status(update: Update , _: ContextTypes.DEFAULT_TYPE):
+async def status(update: Update, _: ContextTypes.DEFAULT_TYPE):
     """查看运行状态（仅 operators）"""
     userID = update.effective_user.id
 
-    if not hasPermission(userID , Permission.STATUS):
+    if not hasPermission(userID, Permission.STATUS):
         await update.message.reply_text("❌ 只有管理员才有权限执行这个操作的说……")
         return
 
@@ -128,17 +131,17 @@ async def status(update: Update , _: ContextTypes.DEFAULT_TYPE):
 # ops 可在群聊中 @bot 并跟上以下关键词来触发管理操作（不需要 /命令 前缀）
 _KEYWORD_MAP = {
     "关机": shutdown,
-    "重启": restart,
+    "重启": reboot,
     "运行状态": status,
 
     "去睡觉": shutdown,
-    "起来重睡": restart,
+    "起来重睡": reboot,
     "看看你的": status,
 }
 
 
 @handleTelegramErrors   # 实在想不到什么时候会触发这里的装饰器，但是防御性编程😋
-async def _mentionDispatch(update: Update , context: ContextTypes.DEFAULT_TYPE):
+async def _mentionDispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     处理 @bot + 关键词 的消息，匹配 _KEYWORD_MAP 并调用对应操作。
 
@@ -159,7 +162,7 @@ async def _mentionDispatch(update: Update , context: ContextTypes.DEFAULT_TYPE):
     pattern = re.compile(re.escape(f"@{botUsername}"), re.IGNORECASE)
     body = pattern.sub("", text).strip()
     if body in _KEYWORD_MAP:
-        await _KEYWORD_MAP[body](update , context)
+        await _KEYWORD_MAP[body](update, context)
         # 关键词已处理，阻止后续 group（如 LLM 消息处理器）再次处理同一条消息
         raise ApplicationHandlerStop
 
@@ -170,9 +173,9 @@ def register():
     """注册 handlers """
     return {
         "handlers": [
-            CommandHandler("shutdown" , shutdown),
-            CommandHandler("restart" , restart),
-            CommandHandler("status" , status),
+            CommandHandler("shutdown", shutdown),
+            CommandHandler("reboot", reboot),
+            CommandHandler("status", status),
             MessageHandler(
                 filters.TEXT & filters.Entity(MessageEntityType.MENTION) ,
                 _mentionDispatch

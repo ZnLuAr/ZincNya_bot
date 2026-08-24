@@ -502,7 +502,7 @@ class GeneratedOutput:
                             retry 复用不重抓
         displayBlocks:      审核卡结构化展示块（DisplayBlocks：引用/当前配对 +
                             标注前缀）；None 时渲染层走退化路径（对 displayOriginalMsg
-                            做 marker 解析）。降级边界：console/chatScreen 的记忆审核项
+                            按引用标记切分）。降级边界：console/chatScreen 的记忆审核项
                             永远无 displayBlocks——这两端本就不渲染 blockquote，
                             属可接受降级
     """

@@ -210,5 +210,5 @@ async def _safeRemove(filePath: str) -> None:
             "文件清理失败",
             f"{os.path.basename(filePath)}: {type(e).__name__}",
             LogLevel.WARNING,
-            LogChildType.LAST_CHILD
+            LogChildType.WITH_ONE_CHILD
         )

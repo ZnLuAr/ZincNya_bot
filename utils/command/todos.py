@@ -88,7 +88,7 @@ async def execute(app, args: list[str]):
     parsed = parseArgsTokens(parsed, args, argAlias)
 
     # ── 确定操作目标身份 ──
-    targetUserID = parsed["u"] if parsed["u"] and parsed["u"] != "NoValue" else CONSOLE_ID
+    targetUserID = parsed["u"] if parsed["u"] and parsed["u"] is not True else CONSOLE_ID
     targetChatID = targetUserID   # 私聊中 chat_id == user_id；控制台同样用虚拟 ID
     isAdmin      = targetUserID != CONSOLE_ID
     targetLabel  = f"用户 {targetUserID}" if isAdmin else "控制台"
@@ -101,7 +101,7 @@ async def execute(app, args: list[str]):
 
     # ── -a / --add：添加 todo ──
     addText = parsed["add"]
-    if addText and addText != "NoValue":
+    if addText and addText is not True:
         priority, content = parsePriority(addText)
         remindTime, content = parseTime(content)
 
@@ -121,7 +121,7 @@ async def execute(app, args: list[str]):
 
     # ── -done：标记完成 ──
     doneID = parsed["done"]
-    if doneID and doneID != "NoValue":
+    if doneID and doneID is not True:
         try:
             doneID = int(doneID)
         except ValueError:
@@ -145,7 +145,7 @@ async def execute(app, args: list[str]):
 
     # ── -reopen：重新打开 ──
     reopenID = parsed["reopen"]
-    if reopenID and reopenID != "NoValue":
+    if reopenID and reopenID is not True:
         try:
             reopenID = int(reopenID)
         except ValueError:
@@ -169,7 +169,7 @@ async def execute(app, args: list[str]):
 
     # ── -d / --del：删除 ──
     delID = parsed["del"]
-    if delID and delID != "NoValue":
+    if delID and delID is not True:
         try:
             delID = int(delID)
         except ValueError:
@@ -301,7 +301,7 @@ async def execute(app, args: list[str]):
 
     # ── -l / --list 或无参数：列出 ──
     listStatus = parsed["list"]
-    if listStatus is None or listStatus == "NoValue":
+    if listStatus is None or listStatus is True:
         listStatus = "pending"
     if listStatus not in ("pending", "done", "all"):
         print(f"❌ 无效状态 {listStatus!r}，可选：pending / done / all\n")

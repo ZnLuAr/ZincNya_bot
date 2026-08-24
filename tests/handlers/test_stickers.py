@@ -70,8 +70,10 @@ class TestFindSticker:
         mock_set = MagicMock(title="Test Pack", stickers=[MagicMock()] * 5)
         mockContext.bot.get_sticker_set = AsyncMock(return_value=mock_set)
 
+        # deleteMessageLater mock 成 AsyncMock（同 test_valid_sticker_sets_cache：
+        # patch create_task 仍会先创建真协程再丢弃，留下 never awaited 泄漏）
         with patch('handlers.stickers.logAction', new_callable=AsyncMock), \
-             patch('asyncio.create_task'):
+             patch('handlers.stickers.deleteMessageLater', new_callable=AsyncMock):
             await findSticker(mockUpdate, mockContext)
 
         call_args = mockUpdate.message.reply_text.call_args[0][0]
@@ -87,8 +89,10 @@ class TestFindSticker:
         mock_set = MagicMock(title="New Pack", stickers=[MagicMock()])
         mockContext.bot.get_sticker_set = AsyncMock(return_value=mock_set)
 
+        # deleteMessageLater mock 成 AsyncMock：create_task 拿到的是 mock 协程，
+        # 立即完成——真协程会挂在 10s sleep 上，测试结束时成为 never awaited 泄漏
         with patch('handlers.stickers.logAction', new_callable=AsyncMock), \
-             patch('asyncio.create_task'):
+             patch('handlers.stickers.deleteMessageLater', new_callable=AsyncMock):
             await findSticker(mockUpdate, mockContext)
 
         # 成功后应缓存结果
@@ -99,9 +103,11 @@ class TestFindSticker:
         """API 失败时显示错误"""
         sticker = MagicMock(set_name="error_pack")
         mockUpdate.message.reply_to_message = MagicMock(sticker=sticker)
+        mockUpdate.message.reply_text = AsyncMock(return_value=MagicMock(chat_id=123, message_id=1))
         mockContext.bot.get_sticker_set = AsyncMock(side_effect=Exception("Network error"))
 
-        with patch('handlers.stickers.logAction', new_callable=AsyncMock):
+        with patch('handlers.stickers.logAction', new_callable=AsyncMock), \
+             patch('handlers.stickers.deleteMessageLater', new_callable=AsyncMock):
             await findSticker(mockUpdate, mockContext)
 
         call_args = mockUpdate.message.reply_text.call_args[0][0]

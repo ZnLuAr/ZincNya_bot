@@ -95,7 +95,7 @@ async def execute(app, args: list[str]):
 
     # --export 导出模式
     if doExport is not None:
-        if chatID and chatID != "NoValue":
+        if chatID and chatID is not True:
             await logAction(
                 "System",
                 f"/history --export -c {chatID}",
@@ -116,9 +116,9 @@ async def execute(app, args: list[str]):
         return
 
     # -c <chatID> 预览模式
-    if chatID and chatID != "NoValue":
+    if chatID and chatID is not True:
         limit = CHAT_PREVIEW_LIMIT
-        if countArg and countArg != "NoValue":
+        if countArg and countArg is not True:
             try:
                 limit = int(countArg)
                 if limit <= 0:
@@ -158,7 +158,7 @@ async def _listChats():
                 commentMap[uid] = comment[:_COMMENT_TRUNCATE_LEN] + ("…" if len(comment) > _COMMENT_TRUNCATE_LEN else "")
 
     print(f"{'─' * _SEPARATOR_WIDTH}")
-    print(f"  {'Chat ID':<_COL_WIDTH_CHAT_ID}  {'备注':<_COL_WIDTH_COMMENT}  {'消息数':>_COL_WIDTH_MSG_COUNT}  {'最后消息时间'}")
+    print(f"  {'Chat ID':<{_COL_WIDTH_CHAT_ID}}  {'备注':<{_COL_WIDTH_COMMENT}}  {'消息数':>{_COL_WIDTH_MSG_COUNT}}  {'最后消息时间'}")
     print(f"{'─' * _SEPARATOR_WIDTH}")
 
     for chat in chats:
@@ -167,7 +167,7 @@ async def _listChats():
         ts    = chat["last_message_time"]
         ts_str = ts.strftime("%Y-%m-%d %H:%M:%S") if ts else "未知"
         name  = commentMap.get(cid, "")
-        print(f"  {cid:_COL_WIDTH_CHAT_ID}  {name:_COL_WIDTH_COMMENT}  {count:>_COL_WIDTH_MSG_COUNT}  {ts_str}")
+        print(f"  {cid:<{_COL_WIDTH_CHAT_ID}}  {name:<{_COL_WIDTH_COMMENT}}  {count:>{_COL_WIDTH_MSG_COUNT}}  {ts_str}")
 
     print(f"{'─' * _SEPARATOR_WIDTH}")
     print(f"  共 {len(chats)} 个会话，使用 -c <chatID> 预览消息\n")
@@ -351,10 +351,10 @@ async def _writeExportFile(filepath: str, chatID: str, messages: list) -> bool:
 
     except Exception as e:
         await logSystemEvent(
-            "",
-            f"写入文件失败喵：{str(e)}",
+            "导出文件写入失败",
+            str(e),
             LogLevel.ERROR,
-            LogChildType.LAST_CHILD,
+            LogChildType.WITH_ONE_CHILD,
             exception=e
         )
         return False

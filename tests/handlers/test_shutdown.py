@@ -10,7 +10,7 @@ from telegram.ext import ApplicationHandlerStop
 
 from handlers.shutdown import (
     shutdown,
-    restart,
+    reboot,
     status,
     _mentionDispatch,
     register,
@@ -68,11 +68,11 @@ async def test_shutdown_unauthorized():
 
     mock_state_manager.requestShutdown.assert_not_called()
 # ============================================================================
-# restart() 测试
+# reboot() 测试
 # ============================================================================
 
 @pytest.mark.asyncio
-async def test_restart_authorized():
+async def test_reboot_authorized():
     """有权限用户触发重启"""
     mockUser = MagicMock()
     mockUser.id = 123
@@ -90,7 +90,7 @@ async def test_restart_authorized():
     with patch('handlers.shutdown.hasPermission', return_value=True):
         with patch('handlers.shutdown.getStateManager', return_value=mock_state_manager):
             with patch('handlers.shutdown.logSystemEvent', new_callable=AsyncMock):
-                await restart(mockUpdate, MagicMock())
+                await reboot(mockUpdate, MagicMock())
 
     mock_state_manager.requestRestart.assert_called_once()
     mockMessage.reply_text.assert_called_once()
@@ -98,7 +98,7 @@ async def test_restart_authorized():
 
 
 @pytest.mark.asyncio
-async def test_restart_unauthorized():
+async def test_reboot_unauthorized():
     """无权限用户被拒绝"""
     mockUser = MagicMock()
     mockUser.id = 999
@@ -114,7 +114,7 @@ async def test_restart_unauthorized():
 
     with patch('handlers.shutdown.hasPermission', return_value=False):
         with patch('handlers.shutdown.getStateManager', return_value=mock_state_manager):
-            await restart(mockUpdate, MagicMock())
+            await reboot(mockUpdate, MagicMock())
 
     mock_state_manager.requestRestart.assert_not_called()
     mockMessage.reply_text.assert_called_once()
@@ -368,7 +368,7 @@ async def test_mention_dispatch_no_text():
 
 
 @pytest.mark.asyncio
-async def test_mention_dispatch_restart_keyword():
+async def test_mention_dispatch_reboot_keyword():
     """测试重启关键词"""
     mockUser = MagicMock()
     mockUser.id = 123

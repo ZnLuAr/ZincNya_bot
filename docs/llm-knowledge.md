@@ -1,6 +1,7 @@
 # LLM Knowledge Base 设计文档
 
 > 适用分支：`feat/llm-rag-dev`
+>
 > 最后更新：2026-07-10
 >
 > Written by ZincNya~ ❤

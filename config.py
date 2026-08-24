@@ -103,7 +103,7 @@ OPERATORS_PATH = os.path.join(PROJECT_ROOT, "data", "operators.json")
 class Permission(str, Enum):
     """Operator 权限枚举"""
     SHUTDOWN = "shutdown"
-    RESTART = "restart"
+    REBOOT = "reboot"
     STATUS = "status"
     NOTIFY = "notify"
     LLM = "llm"

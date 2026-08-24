@@ -70,7 +70,7 @@ Anthropic Claude 和 OpenAI GPT 都有原生 Function Calling / Tool Use API，�
 4. **离线测试友好**：自定义格式可以在单元测试中完全 mock，而不依赖真实 LLM API；
 5. **扩展灵活**：后续如果要加入工具权限控制、费用统计、缓存策略等的功能，不会受提供商的 API 限制。
 
-那么，**代价是什么呢** ？LLM 需要理解自定义的 `<TOOLS>` / `<AFC_ACTION>` / `<FUNCTION_RESULT>` 格式，这就产生了对 prompt 工程的依赖了（System Prompt 里有格式说明和示例）。实测 Claude Sonnet 4.6+ / GPT-4+ / Gemini 2.0+ 均能正确遵守格式。
+那么，**代价是什么呢** ？LLM 需要理解自定义的 `<TOOLS>` / `<AFC_ACTION>` / `<FUNCTION_RESULT>` 格式，这就产生了对 prompt 工程的依赖了（在 `./utils/afc/contextBuilder.py` 里有格式说明和示例）。实测 Claude Sonnet 4.6+ / GPT-4+ / Gemini 2.0+ 均能正确遵守格式。
 
 ### 为什么 AFC 是独立模块而不是 LLM 的子模块
 
