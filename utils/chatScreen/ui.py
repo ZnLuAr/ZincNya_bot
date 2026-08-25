@@ -17,7 +17,8 @@ utils/chatScreen/ui.py
 
 继承 FullScreenTUIApp：app 在 __init__ 构造（createApplication 覆写留本文件，保 patch 目标
 utils.chatScreen.ui.Application）；单轮入口 runOnce（保留 _exitRequested 守卫）；mainLoop
-委托聊天主循环；onEnter/onExit 自管 console 回调 + receiver（chatScreen 专属，不进基类）。
+委托聊天主循环；onEnter/onExit 自管 interactiveChatID 登记 + console 回调 + receiver
+（chatScreen 专属，不进基类）。
 """
 
 import asyncio
@@ -191,22 +192,27 @@ class ChatScreenApp(FullScreenTUIApp):
 
 
     async def onEnter(self):
-        # ① 注册控制台输出回调（chatScreen 专属：把 logger 输出路由到 UI transcript）
+        # 聊天界面启动流程：
+        # 1. 登记 receiver 活跃聊天（LLM handler 据此让位给 incoming 写入，防两方同时写入数据库）
+        self._stateManager.setInteractiveChatID(self._targetChatID)
+        # 2. 注册控制台输出回调（chatScreen 专属，把 logger 输出路由到 UI ）
         self._stateManager.setConsoleOutputCallback(self._appendConsoleOutput)
-        # ② 启动 receiver 并登记（必须在①之后，保 callback-before-receiver）
+        # 3. 启动 receiver 并登记（必须在 (2) 之后，保证 callback-before-receiver）
         from .receiver import startReceiver
         queue = self._stateManager.getMessageQueue()
         shutdownEvent = self._shutdownEvent or getStateManager().getShutdownEvent()
         task = await startReceiver(self._stateManager, self._targetChatID, self, queue, shutdownEvent)
         self.addBackgroundTask(task)
         await asyncio.sleep(_INITIAL_REFRESH_DELAY)
-        # ③ 初次刷新（画 __init__ 已灌入 _allLines 的内容）
+        # 4. 初次刷新（画 __init__ 已灌入 _allLines 的内容）
         self._refreshTranscript()
 
 
     async def onExit(self):
         # 注销控制台输出回调（与 listMenu.onExit=rmcup 对称，各范式收自己的尾）
         self._stateManager.setConsoleOutputCallback(None)
+        # 清除 receiver 活跃聊天登记
+        self._stateManager.setInteractiveChatID(None)
 
 
     async def runOnce(self):

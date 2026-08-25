@@ -9,7 +9,7 @@ utils/chatScreen/mainLoop.py
 
 from telegram.error import Forbidden
 
-from utils.chatHistory import saveMessage
+from utils.chatHistory import recordBotMessage
 from utils.llm.state import getReviewQueue
 
 from .formatter import formatMessage
@@ -92,7 +92,7 @@ async def runMainLoop(bot, targetChatID: str, ui, shutdownEvent) -> dict | None:
             ts, sndr, txt = formatMessage("selfMessage", textToSend)
             ui.appendSelfMessage(ts, sndr, txt)
             await bot.send_message(chat_id=targetChatID , text=textToSend)
-            await saveMessage(targetChatID, "outgoing", "ZincNya~", textToSend)
+            await recordBotMessage(targetChatID, textToSend)
         except Forbidden:
             ui.showStatus(" 被 Forbidden 了……对方可能还没跟咱开始聊天")
         except Exception as e:

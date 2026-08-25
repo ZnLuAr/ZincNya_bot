@@ -80,9 +80,9 @@ buildHistoryLines + 欢迎行 → initialLines
 构造 ChatScreenApp(targetChatID, bot, shutdownEvent=None, initialLines)
     ↓
 await ui.runSession()
-    ├─ onEnter：注册 console 回调 + 启动 receiver + 初次刷新
+    ├─ onEnter：登记 interactiveChatID + 注册 console 回调 + 启动 receiver + 初次刷新
     ├─ mainLoop → runMainLoop（每轮 await ui.runOnce() 处理输入）
-    └─ finally：onExit 注销回调 → 恢复 interactiveMode → cancel+await receiver
+    └─ finally：onExit（注销回调 + 清除 interactiveChatID）→ 恢复 interactiveMode → cancel+await receiver
     ↓
 reviewEditItem 三态处理（放回队列 / switch 透传 / None）
 ```
@@ -134,7 +134,7 @@ async def chatScreen(app, bot, targetChatID: str):
 - 维护聊天记录的缓冲区（`_allLines`）和滚动状态（`_scrollOffset`）
 - 处理用户的键盘快捷键，如发送、退出、滚动、清空等
 - 更新状态栏提示（审核队列、滚动位置、聊天对象）
-- 通过 `onEnter`/`onExit` 自管 chatScreen 专属资源（console 输出回调、receiver 协程）
+- 通过 `onEnter`/`onExit` 自管 chatScreen 专属资源（interactiveChatID 登记、console 输出回调、receiver 协程）
 
 又有以下的 **关键组件**:
 - `_transcriptArea`：作为只读 `TextArea`，显示聊天记录
@@ -351,6 +351,7 @@ chatScreen 依赖 `utils/core/stateManager.py` 的全局状态：
 | 状态 | 类型 | 用途 |
 |------|------|------|
 | `interactiveMode` | `bool` | 标记当前是否在交互模式，暂停外层 CLI 的 `asyncInput()` |
+| `interactiveChatID` | `Optional[str]` | receiver 当前活跃聊天 ID，LLM handler 据此让位 incoming 写入（防双写，见「消息流转」的互斥守卫） |
 | `messageQueue` | `asyncio.Queue` | 全局消息队列，bot 收到的所有 Telegram 消息都进入此队列 |
 | `consoleOutputCallback` | `Callable` | 控制台输出回调，chatScreen 设置后，logger 的输出会路由到 UI transcript |
 | `shutdownEvent` | `asyncio.Event` | 关机信号，receiverLoop 检测到后会强制退出 UI |
@@ -440,6 +441,8 @@ receiverLoop() 后台协程持续监听队列
         ↓
 解析 sender 和 content
         ↓
+守卫校验（interactiveChatID 与 LLM handler 双向互斥，见下文）
+        ↓
 保存到加密数据库: chatHistory.saveMessage(targetChatID, "incoming", sender, content)
         ↓
 ui.appendIncomingMessage(timestamp, sender, content)
@@ -460,9 +463,9 @@ ui.runOnce() 返回输入框内容
         ↓
 chatScreen 主循环调用 bot.send_message(chat_id=targetChatID, text=...)
         ↓
-保存到加密数据库: chatHistory.saveMessage(targetChatID, "outgoing", "ZincNya~", content)
+保存到加密数据库: chatHistory.recordBotMessage(targetChatID, content)
         ↓
-ui.appendSelfMessage(timestamp, "ZincNya~", content)
+ui.appendSelfMessage(timestamp, BOT_DISPLAY_NAME, content)
         ↓
 UI 更新显示，输入框清空
 ```
@@ -507,7 +510,8 @@ async def receiverLoop():
             # 解析并显示
             sender = _getSenderName(msg)
             content = _extractDisplayText(msg)
-            await saveMessage(targetChatID, "incoming", sender, content)
+            if getStateManager().getInteractiveChatID() == str(targetChatID):
+                await saveMessage(targetChatID, "incoming", sender, content)
             ui.appendIncomingMessage(timestamp, sender, content)
             
     finally:
@@ -517,6 +521,8 @@ async def receiverLoop():
 ```
 
 上面的实现里藏着几个关键设计——**超时机制**：`wait_for(timeout=0.5)` 避免无限阻塞，每 0.5 秒检查一次状态；**消息过滤**：只处理 `msg.chat.id == targetChatID` 的消息，其他暂存；**审核队列轮询**：超时时顺便检查审核队列，更新状态栏提示；**关机检测**：`shutdownEvent.is_set()` 时强制退出 UI，避免卡死；**清理保证**：finally 块确保非目标消息不丢失。
+
+**写入互斥守卫（与 LLM handler 双向互斥，issue #1）**：receiver 写库前校验 `getStateManager().getInteractiveChatID() == str(targetChatID)`。chatScreen 打开时 `onEnter` 登记 `interactiveChatID`、退出时 `onExit` 清除；LLM handler 侧读同一登记决定 incoming 让位与否。receiver 侧再校验一次是因为 TUISession 的收尾顺序是「先 onExit（清登记）后 cancel receiver」——毫秒级窗口内 llm.py 侧守卫已放行，此处不校验就会双写一帧。守卫不过只跳过写库，UI 显示照常。
 
 ---
 
@@ -741,8 +747,8 @@ if stripped == ":help":
 | `utils/core/tui/paradigms/fullScreen.py` | `FullScreenTUIApp` 基类（chatScreen 继承它） |
 | `utils/command/send.py` | 命令入口、普通消息发送、目标选择、切换循环 |
 | `utils/whitelistManager/data.py` | getAllowedUserIDs 提供切换列表 |
-| `utils/chatHistory.py` | 聊天记录加密存储与读取 |
-| `utils/core/stateManager.py` | 全局状态管理(interactiveMode / messageQueue) |
+| `utils/chatHistory.py` | 聊天记录加密存储与读取（含 `recordBotMessage` bot 发言入库策略） |
+| `utils/core/stateManager.py` | 全局状态管理(interactiveMode / interactiveChatID / messageQueue) |
 | `utils/command/llm/review/chatScreenReview.py` | LLM 审核命令处理(`handleChatScreenReviewCommand` 等) |
 | `utils/llm/state.py` | 审核队列容器(`getReviewQueue`)、防抖缓冲 |
 | `utils/llm/review.py` | 审核队列 item 契约(`peekReviewHint` / 入队操作)、审核动作 |

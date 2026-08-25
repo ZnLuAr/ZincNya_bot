@@ -39,7 +39,7 @@ System Prompt 是固定全局规则的专属位置，适合一成不变的身份
 
 ### 为什么不直接复用 chatHistory 聊天记录
 
-`utils/chatHistory.py` 只是单纯按顺序追加的对话流水，只负责原样留存全部聊天文字，没有分类、筛选、编辑能力，而且信息密度低，不够凝练。
+`utils/chatHistory.py` 是按顺序追加的对话流水（写入虽已集中到 `recordBotMessage` 等发送咽喉，但）只负责原样留存全部聊天文字，没有分类、筛选、编辑能力，而且信息密度低，不够凝练。
 
 而结构化记忆需要这些专属能力：
 
@@ -341,5 +341,5 @@ LLM 返回的 action 必须通过 scope 越界过滤，这是为了防止模型�
 
 ## 已知局限
 
-- `chatHistory.db` 仅在 `/send -c` 聊天界面下写入，LLM handler 本身不写入历史。因此历史上下文对 Telegram 自动回复实际无效，除非事先通过 `/send -c` 与该 chatID 交互过。
+- 历史上下文来源（issue #1 修复后）：LLM handler 门禁通过后写 incoming、`sendLLMReply` 咽喉写 outgoing（`recordBotMessage`），Telegram 自动回复的历史不再依赖 `/send -c` 窗口。
 - 第一版不支持语义相似度检索，仅按 scope 分层硬过滤。如需更强的召回能力，后续可考虑 SQLite FTS 或嵌入式向量索引。

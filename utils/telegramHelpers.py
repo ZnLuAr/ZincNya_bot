@@ -11,6 +11,7 @@ from telegram.error import BadRequest
 
 from config import TG_MESSAGE_MAX_LEN
 
+from utils.chatHistory import recordBotMessage
 from utils.markdownToHtml import convertMarkdownToHtml
 
 
@@ -151,6 +152,7 @@ async def sendLLMReply(
     - 调用 prepareMarkdownReply 转换格式
     - 发送消息
     - 如果 Telegram HTML 解析失败，自动降级为纯文本重新发送
+    - 发送成功后写入聊天历史（chatHistory.recordBotMessage）
 
     参数：
         bot: Telegram Bot 实例
@@ -196,3 +198,8 @@ async def sendLLMReply(
             )
         else:
             raise
+
+    # 发送成功（含 HTML 解析失败降级重发路径）→ 写入聊天历史。
+    # 记转换前的原始 Markdown reply（与 mainLoop 记 textToSend 原文同语义）；
+    # recordBotMessage → saveMessage 内部自带 try/except 返回 bool，发送路径不会被写库失败炸掉
+    await recordBotMessage(str(chatID), reply)

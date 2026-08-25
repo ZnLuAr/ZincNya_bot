@@ -3,6 +3,10 @@ tests/utils/command/test_send.py
 
 /send 命令测试：无参指引、-c 三态（无/光杆/带值）、-t/-id 校验、sendMsg 发送循环。
 chatScreen 全屏路径不在本文件测（TUI 交互脆弱，见 tests/utils/chatScreen/）。
+
+sendMsg 成功路径会调 recordBotMessage 真实写库（Database.run 不检查 _initialized，
+chatHistoryDB 模块级指向 data/chatHistory.db）——本文件所有 sendMsg 直调用例
+统一 patch 掉，防污染开发库。
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -72,15 +76,18 @@ class TestSendValidation:
 
 
 class TestSendMsg:
+
     async def test_send_to_multiple_ids(self):
         app = _app()
-        with patch("utils.command.send.logAction", new_callable=AsyncMock):
+        with patch("utils.command.send.logAction", new_callable=AsyncMock), \
+             patch("utils.command.send.recordBotMessage", new_callable=AsyncMock):
             await send.sendMsg(app.bot, ["1", "2"], None, "hi")
         assert app.bot.send_message.await_count == 2
 
     async def test_send_with_at_prefix(self):
         app = _app()
-        with patch("utils.command.send.logAction", new_callable=AsyncMock):
+        with patch("utils.command.send.logAction", new_callable=AsyncMock), \
+             patch("utils.command.send.recordBotMessage", new_callable=AsyncMock):
             await send.sendMsg(app.bot, ["1"], "user", "hi")
         sentText = app.bot.send_message.await_args.kwargs["text"]
         assert sentText == "@user hi"
@@ -92,3 +99,29 @@ class TestSendMsg:
         with patch("utils.command.send.logAction", new_callable=AsyncMock) as mockLog:
             await send.sendMsg(app.bot, ["1"], None, "hi")   # 不抛即通过
         assert mockLog.await_count == 1
+
+
+    @patch("utils.command.send.logAction", new_callable=AsyncMock)
+    @patch("utils.command.send.recordBotMessage", new_callable=AsyncMock)
+    async def test_send_records_history(self, mockRecord, mockLog):
+        """发送成功 → recordBotMessage 恰一次，参数 (str(chatID), 实际文本)"""
+        app = _app()
+        await send.sendMsg(app.bot, ["1"], None, "hi")
+        mockRecord.assert_awaited_once_with("1", "hi")
+
+    @patch("utils.command.send.logAction", new_callable=AsyncMock)
+    @patch("utils.command.send.recordBotMessage", new_callable=AsyncMock)
+    async def test_send_with_at_records_prefixed_text(self, mockRecord, mockLog):
+        """带 -a 前缀 → 入库 content 是实际发出的 "@user hi"（记「实际发出的」）"""
+        app = _app()
+        await send.sendMsg(app.bot, ["1"], "user", "hi")
+        mockRecord.assert_awaited_once_with("1", "@user hi")
+
+    @patch("utils.command.send.logAction", new_callable=AsyncMock)
+    @patch("utils.command.send.recordBotMessage", new_callable=AsyncMock)
+    async def test_failure_no_record(self, mockRecord, mockLog):
+        """send_message 抛异常 → 不入库（发送成功才写）"""
+        app = _app()
+        app.bot.send_message = AsyncMock(side_effect=Exception("network"))
+        await send.sendMsg(app.bot, ["1"], None, "hi")
+        mockRecord.assert_not_awaited()

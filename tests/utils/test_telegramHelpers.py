@@ -5,11 +5,17 @@ tests/utils/test_telegramHelpers.py
     - truncateText——按码点截断 + 可参数化 suffix；统一了原 llmReview._truncate /
       book._truncate / telegramHelpers 内联三处截断，边界行为（limit ≤ len(suffix)）在此守护
     - isMentionedByEntity——mention entity 精确匹配（不做子串匹配，@notmybot 不误中）
+    - sendLLMReply——发送成功（含 HTML 解析失败降级重发）后写聊天历史（issue #1）
 """
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
-from utils.telegramHelpers import isMentionedByEntity, truncateText
+import pytest
+from telegram.error import BadRequest, NetworkError
+
+from config import BOT_DISPLAY_NAME
+from utils.telegramHelpers import isMentionedByEntity, sendLLMReply, truncateText
 
 
 
@@ -106,3 +112,56 @@ class TestIsMentionedByEntity:
     def test_non_mention_entity_ignored(self):
         msg = _msg(text="@ZincNyaBot", entities=[_entity("bold", "@ZincNyaBot")])
         assert isMentionedByEntity(msg, "ZincNyaBot") is False
+
+
+# ===========================================================================
+# sendLLMReply（发送成功后写聊天历史——recordBotMessage 咽喉）
+# ===========================================================================
+
+class TestSendLLMReplyHistory:
+
+    @patch("utils.core.logger.logAction", new_callable=AsyncMock)
+    @patch("utils.telegramHelpers.recordBotMessage", new_callable=AsyncMock)
+    async def test_success_records_history(self, mockRecord, mockLog):
+        """发送成功 → recordBotMessage 恰一次（chatID 归一 str、记原始 Markdown reply）"""
+        bot = AsyncMock()
+        await sendLLMReply(bot=bot, chatID=123, reply="**回复**内容")
+
+        bot.send_message.assert_awaited_once()
+        mockRecord.assert_awaited_once_with("123", "**回复**内容")
+
+    @patch("utils.core.logger.logAction", new_callable=AsyncMock)
+    @patch("utils.telegramHelpers.recordBotMessage", new_callable=AsyncMock)
+    async def test_degraded_resend_still_records(self, mockRecord, mockLog):
+        """HTML 解析失败降级纯文本重发成功 → 仍恰写一次"""
+        bot = AsyncMock()
+        bot.send_message.side_effect = [BadRequest("Bad Request: can't parse entities"), None]
+
+        await sendLLMReply(bot=bot, chatID="123", reply="坏格式 <b>回复")
+
+        assert bot.send_message.await_count == 2
+        mockRecord.assert_awaited_once_with("123", "坏格式 <b>回复")
+
+    @patch("utils.core.logger.logAction", new_callable=AsyncMock)
+    @patch("utils.telegramHelpers.recordBotMessage", new_callable=AsyncMock)
+    async def test_other_badrequest_no_record(self, mockRecord, mockLog):
+        """非解析类 BadRequest 上抛 → 不写历史"""
+        bot = AsyncMock()
+        bot.send_message.side_effect = BadRequest("Bad Request: chat not found")
+
+        with pytest.raises(BadRequest):
+            await sendLLMReply(bot=bot, chatID="123", reply="回复")
+
+        mockRecord.assert_not_awaited()
+
+    @patch("utils.core.logger.logAction", new_callable=AsyncMock)
+    @patch("utils.telegramHelpers.recordBotMessage", new_callable=AsyncMock)
+    async def test_networkerror_no_record(self, mockRecord, mockLog):
+        """NetworkError 未被捕获直接上抛 → 不写历史"""
+        bot = AsyncMock()
+        bot.send_message.side_effect = NetworkError("connection reset")
+
+        with pytest.raises(NetworkError):
+            await sendLLMReply(bot=bot, chatID="123", reply="回复")
+
+        mockRecord.assert_not_awaited()

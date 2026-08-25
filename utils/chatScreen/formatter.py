@@ -9,6 +9,8 @@ utils/chatScreen/formatter.py
 
 from datetime import datetime
 
+from config import BOT_DISPLAY_NAME
+
 
 
 
@@ -109,7 +111,7 @@ def formatMessage(mode, content) -> tuple[str, str, str]:
             sender = getSenderName(content)
             text = extractDisplayText(content)
         case "selfMessage":
-            sender = "ZincNya~"
+            sender = BOT_DISPLAY_NAME
             text = content
 
     timestamp = datetime.now().strftime("%H:%M:%S")

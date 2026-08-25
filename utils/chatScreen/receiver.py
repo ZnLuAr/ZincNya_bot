@@ -3,14 +3,16 @@ utils/chatScreen/receiver.py
 
 消息接收后台协程。
 
-启动一个后台 task 持续监听全局 messageQueue，筛选属于当前 chatID 的消息
-并展示到 UI；超时轮询时顺便检查关机信号与审核队列。
+启动一个后台 task 持续监听全局 messageQueue，筛选属于当前 chatID 的消息，
+写库（interactiveChatID 守卫，与 LLM handler 双向互斥防双写）并展示到 UI；
+超时轮询时顺便检查关机信号与审核队列。
 """
 
 import asyncio
 from datetime import datetime
 
 from utils.chatHistory import saveMessage
+from utils.core.stateManager import getStateManager
 from utils.llm.review import peekReviewHint
 from utils.llm.state import getReviewQueue
 
@@ -64,7 +66,11 @@ async def startReceiver(state, targetChatID: str, ui, queue: asyncio.Queue,
 
                     sender = getSenderName(msg)
                     content = extractDisplayText(msg)
-                    await saveMessage(targetChatID, "incoming", sender, content)
+                    # TUISession 在 finally 先调用 onExit 清除 interactiveChatID，
+                    # 此后 cancel receiver，在毫秒级窗口内，llm.py 侧守卫已放行——
+                    # 若此处校验不过则跳过写库，防止双方同时写入（UI 显示照常）
+                    if getStateManager().getInteractiveChatID() == str(targetChatID):
+                        await saveMessage(targetChatID, "incoming", sender, content)
 
                     # sender / content 已解析，直接复用，不再走 formatMessage()
                     # 对同一 msg 二次调用 getSenderName + extractDisplayText。

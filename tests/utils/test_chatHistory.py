@@ -15,12 +15,14 @@ from unittest.mock import patch
 
 import pytest
 
+from config import BOT_DISPLAY_NAME
 from utils import chatHistory
 from utils.chatHistory import (
     getMessageCount,
     getChatList,
     iterMessagesWithDateMarkers,
     loadHistory,
+    recordBotMessage,
     saveMessage,
 )
 
@@ -90,6 +92,33 @@ class TestSaveLoadRoundtrip:
                      ("444", "incoming", "u", encryptText("second"), "2026-08-01 10:00:02"))
         conn.commit(); conn.close()
         assert (await loadHistory("444"))[0]["content"] == "first"
+
+    async def test_same_second_order_by_id(self, db):
+        """同秒双条（时间戳仅秒级精度）→ 按 id 决胜，返回顺序 = 插入顺序"""
+        import sqlite3
+        from utils.core.crypto import encryptText
+        conn = sqlite3.connect(db._dbPath)
+        conn.execute("INSERT INTO messages (chat_id, direction, sender, content, timestamp) VALUES (?,?,?,?,?)",
+                     ("445", "incoming", "u", encryptText("先问"), "2026-08-01 10:00:00"))
+        conn.execute("INSERT INTO messages (chat_id, direction, sender, content, timestamp) VALUES (?,?,?,?,?)",
+                     ("445", "outgoing", "ZincNya~", encryptText("后答"), "2026-08-01 10:00:00"))
+        conn.commit(); conn.close()
+        history = await loadHistory("445")
+        assert [m["content"] for m in history] == ["先问", "后答"]    # 插入序，非随机序
+        assert [m["direction"] for m in history] == ["incoming", "outgoing"]
+
+
+
+class TestRecordBotMessage:
+
+    async def test_bot_message_roundtrip(self, db):
+        """recordBotMessage 落盘为 outgoing + BOT_DISPLAY_NAME，content 明文往返"""
+        assert await recordBotMessage("888", "锌酱的回复") is True
+        history = await loadHistory("888")
+        assert len(history) == 1
+        assert history[0]["direction"] == "outgoing"
+        assert history[0]["sender"] == BOT_DISPLAY_NAME
+        assert history[0]["content"] == "锌酱的回复"
 
 
 

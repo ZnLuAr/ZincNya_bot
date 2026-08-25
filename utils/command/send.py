@@ -92,11 +92,11 @@ chatScreen 聊天界面已重构到独立模块 utils/chatScreen/，详见 docs/
 """
 
 from telegram import Bot
-from telegram.error import Forbidden
 
 from handlers.cli import parseArgsTokens
 
 from utils.core.logger import logAction, LogLevel, LogChildType
+from utils.chatHistory import recordBotMessage
 from utils.whitelistManager.ui import whitelistMenuController
 
 
@@ -198,13 +198,14 @@ async def chatIDList(app, bot):
 
 
 async def sendMsg(bot: Bot, idList, atUser, text):
-    # 执行发送信息给<chatID>
+    # 执行发送信息给 <chatID>
     for chatID in idList:
         try:
             msg = text
             if atUser:
                 msg = f"@{atUser} {text}"
             await bot.send_message(chat_id=chatID, text=msg)
+            await recordBotMessage(str(chatID), msg)    # 发送成功才入库（记实际发出的文本，含 @ 前缀）
             result = f"已发送给 {chatID}"
 
         except Exception as e:

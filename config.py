@@ -143,6 +143,12 @@ CHAT_PREVIEW_LIMIT = 20                                                         
 
 
 
+# Bot 身份相关常量
+BOT_DISPLAY_NAME = "ZincNya~"                                                   # bot 发言入库 / UI 展示统一署名
+
+
+
+
 # 新闻抓取功能相关常量
 # 注意：该站点仅提供 HTTP，无 HTTPS 支持。如更换源站，建议使用 HTTPS
 NEWS_SOURCE_URL = os.getenv("NEWS_SOURCE_URL", "http://naenara.com.kp/main/index/ch/first")

@@ -5,6 +5,7 @@ utils/core/stateManager.py
 
 管理的状态：
 - interactiveMode: 是否处于交互模式（CLI 界面接管输入）
+- interactiveChatID: chatScreen receiver 当前停留的聊天 ID
 - messageQueue: 全局消息队列
 - shutdownEvent / restartRequested: 远程关机/重启信号
 """
@@ -33,6 +34,7 @@ class StateManager:
     def __init__(self):
         # 核心状态
         self._interactiveMode: bool = False
+        self._interactiveChatID: Optional[str] = None
         self._messageQueue: Optional[asyncio.Queue] = None
 
         # 控制台输出回调（用于聊天界面接管 logger 输出）
@@ -82,6 +84,22 @@ class StateManager:
         """检查是否处于交互模式"""
         with self._stateLock:
             return self._interactiveMode
+
+
+    def setInteractiveChatID(self, chatID):
+        """
+        设置 receiver 活跃聊天 ID（None 清除）。入参统一 str() 归一——
+        whitelist uid（int/str 不定）与 llm 侧 str，不如直接统一用 str
+        """
+        with self._stateLock:
+            self._interactiveChatID = str(chatID) if chatID is not None else None
+
+
+    def getInteractiveChatID(self) -> Optional[str]:
+        """获取 receiver 活跃聊天 ID（无活跃窗口为 None）"""
+        with self._stateLock:
+            return self._interactiveChatID
+
 
 
     async def waitForNonInteractive(self):

@@ -15,7 +15,8 @@ TG 审核发送回调。领域逻辑已下沉 utils/llm/：
                                   审核队列 item 契约 / TG 之外三端共用的审核原语
 
 数据流（入口 → 分发）：
-    update → handleLLMMessage（门禁 + PromptPayload + DispatchTarget 组装）
+    update → handleLLMMessage（门禁 + incoming 历史写入[interactiveChatID 守卫] +
+              PromptPayload + DispatchTarget 组装）
            → _enqueueLLMDebounce（防抖缓冲 + create_task）
            → _runLLMPipeline（DebouncedBatch 聚合 → URL 读取 → 生成 →
               GeneratedOutput 组装 → dispatchGeneratedOutput 经回调发 TG 审核卡 / reaction）
@@ -44,6 +45,9 @@ from config import Permission, LLM_DEBOUNCE_SECONDS, TG_MESSAGE_MAX_LEN
 from handlers.llmReview import handleEditReply, handleFeedbackRetry, sendReviewMessage, sendMemoryReviewMessage
 
 from utils.core.errorDecorators import handleTelegramErrors
+from utils.core.stateManager import getStateManager
+
+from utils.chatHistory import saveMessage
 from utils.llm import (
     addRateLimit,
     appendPendingMessage,
@@ -474,6 +478,12 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         username=getSenderDisplayName(message, userID),
         triggerMsgID=message.message_id,
     )
+
+    # 写入 incoming 历史（消息确实发生，与生成成败无关）。
+    # /send -c receiver 活跃于该聊天时由 receiver 负责写入（其记录更全：含媒体标注、
+    # 非触发消息），此处让位避免双写
+    if getStateManager().getInteractiveChatID() != target.chatID:
+        await saveMessage(target.chatID, "incoming", target.username, rawText)
 
     # 进入防抖缓冲，取消旧任务并发起新任务
     await _enqueueLLMDebounce(

@@ -54,6 +54,12 @@ saveMessage(chatID, direction, sender, content)
     保存一条消息到数据库（自动加密）
     当消息数量超过 CHAT_HISTORY_LIMIT 时，自动删除最旧的消息
 
+recordBotMessage(chatID, content)
+    把 bot 的发言记为对话历史（outgoing + BOT_DISPLAY_NAME 恒等对）。
+    发送路径（sendLLMReply / sendMsg / chatScreen mainLoop）调用它而非裸
+    saveMessage——「bot 何时该入库」的策略在此有主，新增发送路径 grep
+    此名即得记录入口
+
 loadHistory(chatID, limit=0, offset=0)
     加载指定聊天的历史记录（自动解密）
 
@@ -92,6 +98,7 @@ from config import (
     DB_TIMESTAMP_FORMAT,
     CHAT_BACKUP_DIR,
     CHAT_HISTORY_LIMIT,
+    BOT_DISPLAY_NAME,
 )
 
 from utils.core.database import Database
@@ -207,7 +214,7 @@ async def _archiveOverflow(chatID: str, overflowCount: int) -> bool:
 
     except Exception as e:
         await logSystemEvent(
-            "聊天记录归档*失败*喵……",
+            "❌ 聊天记录归档失败……",
             f"Chat {chatID}: {str(e)}",
             LogLevel.ERROR,
             exception=e
@@ -266,7 +273,7 @@ async def saveMessage(chatID: str, direction: str, sender: str, content: str) ->
                         WHERE chat_id = ? AND id NOT IN (
                             SELECT id FROM messages
                             WHERE chat_id = ?
-                            ORDER BY timestamp DESC
+                            ORDER BY timestamp DESC, id DESC
                             LIMIT ?
                         )
                         """,
@@ -276,7 +283,7 @@ async def saveMessage(chatID: str, direction: str, sender: str, content: str) ->
                 await chatHistoryDB.run(_deleteOverflow)
             else:
                 await logSystemEvent(
-                    "归档失败喵，先保留旧消息……",
+                    "❌ 归档失败，先保留旧消息……",
                     f"Chat {chatID}",
                     LogLevel.WARNING
                 )
@@ -285,12 +292,24 @@ async def saveMessage(chatID: str, direction: str, sender: str, content: str) ->
 
     except Exception as e:
         await logSystemEvent(
-            "消息保存失败喵……",
+            "❌ 消息保存失败……",
             f"Chat {chatID}: {str(e)}",
             LogLevel.ERROR,
             exception=e
         )
         return False
+
+
+async def recordBotMessage(chatID: str, content: str) -> bool:
+    """
+    把 bot 的发言记为对话历史（outgoing + BOT_DISPLAY_NAME 恒等对）。
+
+    发送路径（sendLLMReply / sendMsg / chatScreen mainLoop）调用它而非裸
+    saveMessage——「bot 何时该入库」的策略在此有主，新增发送路径 grep 此名即得记录入口。
+
+    参数与返回同 saveMessage（content 明文进、密文落盘，失败返回 False 不抛）。
+    """
+    return await saveMessage(chatID, "outgoing", BOT_DISPLAY_NAME, content)
 
 
 async def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict]:
@@ -321,7 +340,7 @@ async def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict
                     SELECT direction, sender, content, timestamp
                     FROM messages
                     WHERE chat_id = ?
-                    ORDER BY timestamp DESC
+                    ORDER BY timestamp DESC, id DESC
                     LIMIT ? OFFSET ?
                     """,
                     (str(chatID), limit, offset)
@@ -332,7 +351,7 @@ async def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict
                     SELECT direction, sender, content, timestamp
                     FROM messages
                     WHERE chat_id = ?
-                    ORDER BY timestamp DESC
+                    ORDER BY timestamp DESC, id DESC
                     """,
                     (str(chatID),)
                 )
@@ -359,7 +378,7 @@ async def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict
 
         if skippedCount > 0:
             await logSystemEvent(
-                "消息解密失败喵……",
+                "❌ 消息解密失败……",
                 f"ChatID {chatID}: 有 {skippedCount} 条消息读取失败",
                 LogLevel.WARNING
             )
@@ -370,7 +389,7 @@ async def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict
 
     except Exception as e:
         await logSystemEvent(
-            "历史记录加载失败喵……",
+            "❌ 历史记录加载失败……",
             f"Chat {chatID}: {str(e)}",
             LogLevel.ERROR,
             exception=e
@@ -417,7 +436,7 @@ async def getChatList() -> List[dict]:
 
     except Exception as e:
         await logSystemEvent(
-            "聊天列表获取失败喵……",
+            "❌ 聊天列表获取失败……",
             str(e),
             LogLevel.ERROR,
             exception=e
@@ -448,7 +467,7 @@ async def clearHistory(chatID: Optional[str] = None) -> bool:
 
     except Exception as e:
         await logSystemEvent(
-            "记录清空失败喵……",
+            "❌ 记录清空失败……",
             str(e),
             LogLevel.ERROR,
             exception=e
