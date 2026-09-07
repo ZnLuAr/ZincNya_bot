@@ -1,6 +1,6 @@
 # ChatScreen 聊天界面技术文档
 
-> 最后更新：2026-08-25
+> 最后更新：2026-09-07
 >
 > ChatScreen 是 TUI 框架 `FullScreenTUIApp` 范式的复杂实例——会话契约、范式分层、横切关注点的总规则写在 [docs/tui.md](tui.md)，本文专注聊天界面自身的实现细节。
 >
@@ -151,8 +151,8 @@ prompt_toolkit 事件循环阻塞
     ↓
 用户按键 → KeyBindings 回调
     ↓
-  - Ctrl+S / Alt+Enter → event.app.exit(result=输入框内容)
-  - Esc → self._exitRequested=True; event.app.exit(result=None)
+  - Ctrl+S / Alt+Enter → safeAppExit(result=输入框内容)
+  - Esc → self._exitRequested=True; safeAppExit(result=None)
   - Alt+↑↓ / PgUp/PgDn → _scrollUp() / _scrollDown()
     ↓
 返回到聊天主循环,根据 result 处理
@@ -215,25 +215,25 @@ self._statusBar = Window(
 @kb.add("c-s")
 @kb.add("escape", "enter")  # Alt+Enter
 def _submit(event):
-    event.app.exit(result=self._composerArea.text)
+    self.safeAppExit(event.app, result=self._composerArea.text)
 
 @kb.add("c-c")
 @kb.add("escape")
 def _cancel(event):
     self._exitRequested = True
-    event.app.exit(result=None)
+    self.safeAppExit(event.app, result=None)
 
 @kb.add("escape", "left")  # Alt+←
 def _switchPrev(event):
     self._switchDirection = "prev"
     self._exitRequested = True
-    event.app.exit(result=None)
+    self.safeAppExit(event.app, result=None)
 
 ...
 
 ```
 
-上面的每个按键回调只做 UI 状态更新或 `event.app.exit()`，不涉及业务逻辑——`exit()` 会让 `await ui.runOnce()` 返回，业务主循环拿到返回值再决定怎么处理。
+上面的每个按键回调只做 UI 状态更新或退出本轮，不涉及业务逻辑。exit 一律走 `self.safeAppExit`（`TUISession` 的幂等守卫）——终端把 Alt 组合键编码为 ESC+键 两字节，pt 解析不出「Alt+Ctrl+X」整体时会拆成两个事件依次派发，两个绑定先后 exit，第二次会撞上 pt 的 "Return value already set" 异常崩出 TUI（Ctrl+Alt+S 稳定复现过）。`safeAppExit` 在 future 已定时静默跳过，`runOnce` 另有兜底：输入轮抛非取消异常时记 WARNING 后按无输入继续（详见 [tui.md](tui.md)）。退出会让 `await ui.runOnce()` 返回，业务主循环拿到返回值再决定怎么处理。
 
 **3. 初始化滚动状态**
 
@@ -328,14 +328,22 @@ if initialLines:
 > async def runOnce(self):  
 > # 覆写 FullScreenTUIApp.runOnce，保留 _exitRequested 守卫
 > 
->     result = await self._app.run_async()
+>     try:
+>         result = await self._app.run_async()
+>     except asyncio.CancelledError:
+>         raise
+>     except Exception as e:
+>         # 键处理层意外异常（未知转义序列等）不崩整个聊天会话：
+>         # 记 WARNING 后按本轮无输入继续（safeAppExit 守卫之外的最后防线）
+>         await logSystemEvent("chatScreen 输入轮异常", ..., LogLevel.WARNING)
+>         return None
 >     # 退出全屏后重置终端状态，清除残留的状态栏
 >     self._app.output.reset_attributes()
 >     self._app.output.flush()
 >     return None if self._exitRequested else result
 > ```
 > 
-> `await self._app.run_async()` 阻塞在 `prompt_toolkit` 的事件循环，等待用户按键，触发 `event.app.exit(result=...)` 使继续流动。退出后，根据 `_exitRequested` 标志决定返回值：
+> `await self._app.run_async()` 阻塞在 `prompt_toolkit` 的事件循环，等待用户按键，触发退出（`safeAppExit`，幂等守卫）使继续流动。输入轮若抛出非取消异常（未知转义序列等），记 WARNING 后按无输入继续，不崩会话。退出后，根据 `_exitRequested` 标志决定返回值：
 > - `Esc` / `Ctrl+C` 两组按键，会设置 `_exitRequested = True`，返回 `None`，此时退出聊天窗口
 > - `Ctrl+S` / `Alt+Enter` 两组，不会设置标志，返回输入框内容，用于发送消息
 > - 在编辑模式中 `Esc` 取消编辑时，业务层会调用 `ui.resetExitFlag()` 来重置标志，避免力大砖飞误退出

@@ -300,6 +300,23 @@ class ListMenuController(TUISession):
 
 
     # ========================================================================
+    # 嵌套子会话（TUISession 钩子实现）
+    # ========================================================================
+
+    def prepareChildSession(self):
+        # 让位给子会话（编辑器 / 行内输入）：本菜单的备用屏先切回主屏，
+        # 否则子会话的 pt alt-screen 与本菜单的手动备用屏嵌套错位，退出时列表残留
+        rmcup()
+        sys.stdout.flush()
+
+    def restoreChildSession(self):
+        # 子会话结束：重进备用屏 + 整屏重绘（备用屏内容在 rmcup 后不保证保留）
+        smcup()
+        sys.stdout.flush()
+        self.redraw()
+
+
+    # ========================================================================
     # 内部工具
     # ========================================================================
 
@@ -331,7 +348,7 @@ class ListMenuController(TUISession):
         @kb.add("escape")
         def _esc(event):
             self.selected = -1
-            event.app.exit()
+            self.safeAppExit(event.app)
 
         # 数字键 0-9：实时拼接并跳转到对应显示序号。
         # 显示序号由各 buildTable 保证（(+) 行不占序号，普通条目从 1 起连续编号）。
@@ -357,7 +374,7 @@ class ListMenuController(TUISession):
         if not isManageMode:
             @kb.add("enter")
             def _enter(event):
-                event.app.exit()
+                self.safeAppExit(event.app)
 
 
     def getSelectedEntry(self):

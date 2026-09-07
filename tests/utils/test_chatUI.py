@@ -4,6 +4,8 @@ tests/utils/test_chatUI.py
 测试 utils/chatScreen/ui.py
 """
 
+import asyncio
+
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -605,3 +607,76 @@ def test_no_run_attribute_runOnce_present_switchDirection_frozen():
     assert hasattr(app, "runSession"), "runSession (from TUISession) must exist"
     assert hasattr(app, "_switchDirection"), "_switchDirection must be frozen on ChatScreenApp"
     assert hasattr(app, "_app"), "_app must be frozen (patch target)"
+
+
+# ============================================================================
+# runOnce 输入轮兜底（未知组合键异常不崩会话）
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_runOnce_swallows_input_round_exception():
+    """run_async 抛非取消异常（未知转义序列等）→ 记 WARNING 后返回 None，不向上冒泡"""
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
+            app = ChatScreenApp("test_chat")
+
+    mockApp = MagicMock()
+    mockApp.run_async = AsyncMock(side_effect=RuntimeError("Return value already set. Application.exit() failed."))
+    app._app = mockApp
+
+    with patch('utils.core.logger.logSystemEvent', new_callable=AsyncMock) as mockSysLog:
+        result = await app.runOnce()
+
+    assert result is None
+    assert mockSysLog.await_count == 1
+    assert "chatScreen 输入轮异常" in mockSysLog.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_runOnce_cancelled_error_propagates():
+    """CancelledError（任务取消）不被兜底吞掉——重新抛出"""
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
+            app = ChatScreenApp("test_chat")
+
+    mockApp = MagicMock()
+    mockApp.run_async = AsyncMock(side_effect=asyncio.CancelledError())
+    app._app = mockApp
+
+    with pytest.raises(asyncio.CancelledError):
+        await app.runOnce()
+
+
+# ============================================================================
+# 键绑定 safeAppExit（Alt 组合键拆键双触发的幂等守卫）
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_keybindings_double_exit_not_raises():
+    """同轮内两次 exit（模拟 Ctrl+Alt+S 拆成 Escape+Ctrl+S 依次派发）不抛异常"""
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.keys import Keys
+
+    with patch('utils.chatScreen.ui.Application'):
+        with patch('utils.chatScreen.ui.sys.stdout'):
+            app = ChatScreenApp("test_chat")
+
+    kb = KeyBindings()
+    app.setupKeyBindings(kb)
+
+    # 模拟「首轮 exit 已落定（future done），第二键绑定再 exit」的拆键场景
+    mockPtApp = MagicMock()
+    doneFuture = asyncio.Future()
+    doneFuture.set_result(None)
+    mockPtApp.future = doneFuture
+
+    event = MagicMock()
+    event.app = mockPtApp
+
+    for binding in kb.get_bindings_for_keys((Keys.Escape,)):
+        binding.handler(event)
+    for binding in kb.get_bindings_for_keys((Keys.ControlS,)):
+        binding.handler(event)
+
+    # 两次绑定都执行完且未抛异常即通过（exit 被守卫跳过）
+    mockPtApp.exit.assert_not_called()

@@ -4,7 +4,6 @@
 ViewModel、渲染、TUI 控制器
 """
 
-import sys
 import asyncio
 from typing import List, Tuple, Optional
 
@@ -13,7 +12,6 @@ from telegram import Bot
 from telegram.error import BadRequest, Forbidden
 
 from utils.core.tui import ListMenuController
-from utils.core.terminalUI import smcup, rmcup
 from utils.inputHelper import asyncInput
 
 from .data import loadWhitelistFile, userOperation
@@ -181,19 +179,19 @@ class WhitelistTUIController(ListMenuController):
         def _left(event):
             if self.selected < len(self.entries) and not self.entries[self.selected].get("isAddRow"):
                 self.pendingAction = ("toggle", "left")
-                event.app.exit()
+                self.safeAppExit(event.app)
 
         @kb.add("right")
         def _right(event):
             if self.selected < len(self.entries) and not self.entries[self.selected].get("isAddRow"):
                 self.pendingAction = ("toggle", "right")
-                event.app.exit()
+                self.safeAppExit(event.app)
 
         @kb.add("delete")
         def _del(event):
             if self.selected < len(self.entries) and not self.entries[self.selected].get("isAddRow"):
                 self.pendingAction = ("delete",)
-                event.app.exit()
+                self.safeAppExit(event.app)
 
         @kb.add("enter")
         def _enter(event):
@@ -202,7 +200,7 @@ class WhitelistTUIController(ListMenuController):
                     self.pendingAction = ("add",)
                 else:
                     self.pendingAction = ("edit_comment",)
-                event.app.exit()
+                self.safeAppExit(event.app)
 
 
     async def handlePendingAction(self):
@@ -224,57 +222,36 @@ class WhitelistTUIController(ListMenuController):
             entry = self.entries[self.selected]
             uid = entry["uid"]
 
-            rmcup()
-            sys.stdout.flush()
-
-            try:
-                confirm = await asyncInput(f"确认删除 {uid} 吗？(y/N): ")
-                if confirm.lower() == "y":
-                    userOperation("deleteUser" , uid)
-                    await self.refreshEntries()
-                    self.selected = min(self.selected , len(self.entries) - 1)
-            finally:
-                smcup()
-                sys.stdout.flush()
+            confirm = await self.runChildSession(asyncInput(f"确认删除 {uid} 吗？(y/N): "))
+            if confirm.lower() == "y":
+                userOperation("deleteUser" , uid)
+                await self.refreshEntries()
+                self.selected = min(self.selected , len(self.entries) - 1)
 
         elif actionType == "add":
-            rmcup()
-            sys.stdout.flush()
-
-            try:
-                newUid = await asyncInput("输入新用户的 Chat ID: ")
-                newUid = newUid.strip()
-                if newUid:
-                    ok = userOperation("addUser" , newUid)
-                    if ok:
-                        print(f"已添加 {newUid} 到白名单")
-                    else:
-                        print(f"{newUid} 已在白名单中")
-                    await asyncio.sleep(_ACTION_NOTICE_DELAY)
-                    await self.refreshEntries()
-            finally:
-                smcup()
-                sys.stdout.flush()
+            newUid = await self.runChildSession(asyncInput("输入新用户的 Chat ID: "))
+            newUid = newUid.strip()
+            if newUid:
+                ok = userOperation("addUser" , newUid)
+                if ok:
+                    print(f"已添加 {newUid} 到白名单")
+                else:
+                    print(f"{newUid} 已在白名单中")
+                await asyncio.sleep(_ACTION_NOTICE_DELAY)
+                await self.refreshEntries()
 
         elif actionType == "edit_comment":
             entry = self.entries[self.selected]
             uid = entry["uid"]
             currentComment = entry.get("comment" , "")
 
-            rmcup()
-            sys.stdout.flush()
-
-            try:
-                prompt = f"编辑 {uid} 的备注"
-                if currentComment:
-                    prompt += f" (当前: {currentComment})"
-                prompt += ": "
-                newComment = await asyncInput(prompt)
-                userOperation("setComment" , uid , newComment)
-                await self.refreshEntries()
-            finally:
-                smcup()
-                sys.stdout.flush()
+            prompt = f"编辑 {uid} 的备注"
+            if currentComment:
+                prompt += f" (当前: {currentComment})"
+            prompt += ": "
+            newComment = await self.runChildSession(asyncInput(prompt))
+            userOperation("setComment" , uid , newComment)
+            await self.refreshEntries()
 
         return True
 

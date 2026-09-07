@@ -120,16 +120,18 @@ class ChatScreenApp(FullScreenTUIApp):
 
 
     def setupKeyBindings(self, kb: KeyBindings):
+        # 注意：所有 exit 走 safeAppExit（Alt 组合键拆键双触发时，第二次 exit 会抛
+        # "Return value already set" 崩出 TUI，见 TUISession.safeAppExit 的 docstring）
         @kb.add("c-s")
         @kb.add("escape", "enter")
         def _submit(event):
-            event.app.exit(result=self._composerArea.text)
+            self.safeAppExit(event.app, result=self._composerArea.text)
 
         @kb.add("c-c")
         @kb.add("escape")
         def _cancel(event):
             self._exitRequested = True
-            event.app.exit(result=None)
+            self.safeAppExit(event.app, result=None)
 
         @kb.add("c-x", eager=True)
         def _clear(event):
@@ -158,14 +160,14 @@ class ChatScreenApp(FullScreenTUIApp):
             """Alt+← 切换到上一个聊天对象"""
             self._switchDirection = "prev"
             self._exitRequested = True
-            event.app.exit(result=None)
+            self.safeAppExit(event.app, result=None)
 
         @kb.add("escape", "right")
         def _switchNext(event):
             """Alt+→ 切换到下一个聊天对象"""
             self._switchDirection = "next"
             self._exitRequested = True
-            event.app.exit(result=None)
+            self.safeAppExit(event.app, result=None)
 
 
     def createApplication(self) -> Application:
@@ -218,7 +220,21 @@ class ChatScreenApp(FullScreenTUIApp):
     async def runOnce(self):
         # 覆写基类 runOnce：保留 _exitRequested 守卫（不能照搬基类直接 return result，
         # 否则 exit 信号丢失，主循环的 if userInput is None 永不触发，聊天退不出）
-        result = await self._app.run_async()
+        try:
+            result = await self._app.run_async()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            # 键处理层意外异常（未知转义序列 / 平台输入怪癖等）不崩整个聊天会话：
+            # 记 WARNING 后按本轮无输入继续。raise 的场景应有 safeAppExit 守卫拦截在先，
+            # 这里是最后防线
+            from utils.core.logger import logSystemEvent, LogLevel
+            await logSystemEvent(
+                "chatScreen 输入轮异常",
+                f"{type(e).__name__}: {e}",
+                LogLevel.WARNING,
+            )
+            return None
         # 退出全屏后重置终端状态，清除残留的状态栏
         self._app.output.reset_attributes()
         self._app.output.flush()

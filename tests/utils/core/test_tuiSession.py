@@ -511,3 +511,134 @@ def test_console_callback_single_slot_nested_clobber():
 
     finally:
         state.setConsoleOutputCallback(original)
+
+
+# ============================================================================
+# safeAppExit：Alt 组合键拆键双触发 exit 的幂等守卫
+# ============================================================================
+
+class _FakeFuture:
+    """可控 done 状态的 future 替身。"""
+
+    def __init__(self, done: bool):
+        self._done = done
+
+    def done(self) -> bool:
+        return self._done
+
+
+class _FakeApp:
+    """只带 future 与 exit 记录的 app 替身。"""
+
+    def __init__(self, future):
+        self.future = future
+        self.exitCalls: list[dict] = []
+
+    def exit(self, **kwargs):
+        self.exitCalls.append(kwargs)
+        if self.future is not None:
+            self.future._done = True
+
+
+def test_safeAppExit_firstCallExits():
+    """future 未定：正常透传 exit 及 kwargs"""
+    app = _FakeApp(_FakeFuture(done=False))
+
+    TUISession.safeAppExit(app, result="文本")
+
+    assert app.exitCalls == [{"result": "文本"}]
+
+
+def test_safeAppExit_futureDoneSkips():
+    """future 已定（拆键双触发的第二次）：静默跳过，不调 exit"""
+    app = _FakeApp(_FakeFuture(done=True))
+
+    TUISession.safeAppExit(app, result="文本")
+
+    assert app.exitCalls == []
+
+
+def test_safeAppExit_futureNoneSkips():
+    """future 为 None（app 未运行）：静默跳过"""
+    app = _FakeApp(None)
+
+    TUISession.safeAppExit(app, result=None)
+
+    assert app.exitCalls == []
+
+
+def test_safeAppExit_doubleTriggerSimulated():
+    """模拟 Alt+Ctrl+S 拆键：Escape 绑定先 exit（future 落定），Ctrl+S 绑定再 exit 不抛"""
+    app = _FakeApp(_FakeFuture(done=False))
+
+    TUISession.safeAppExit(app, result=None)       # 第一次（escape 绑定）
+    TUISession.safeAppExit(app, result="文本")     # 第二次（c-s 绑定）——修复前此处抛异常
+
+    assert app.exitCalls == [{"result": None}]     # 只有第一次生效
+
+
+
+# ============================================================================
+# runChildSession：嵌套子会话的屏幕让位与恢复
+# ============================================================================
+
+class ChildSessionHookRecorder(TUISession):
+    """记录 prepare/restore 调用顺序的空范式。"""
+
+    def __init__(self):
+        self.calls: list[str] = []
+        super().__init__()
+
+    def prepareChildSession(self):
+        self.calls.append("prepare")
+
+    def restoreChildSession(self):
+        self.calls.append("restore")
+
+    async def mainLoop(self):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_runChildSession_wrapsPrepareAwaitRestore(fakeStateManager):
+    """正常路径：prepare → await 子会话 → restore，返回子会话结果"""
+    session = ChildSessionHookRecorder()
+    session._stateManager = fakeStateManager
+
+    async def childWork():
+        session.calls.append("child")
+        return "child-result"
+
+    result = await session.runChildSession(childWork())
+
+    assert result == "child-result"
+    assert session.calls == ["prepare", "child", "restore"]
+
+
+@pytest.mark.asyncio
+async def test_runChildSession_restoresOnChildException(fakeStateManager):
+    """子会话抛异常也保证 restore（屏幕让位后必须恢复——列表残留的根因修复）"""
+    session = ChildSessionHookRecorder()
+    session._stateManager = fakeStateManager
+
+    async def childRaises():
+        session.calls.append("child")
+        raise RuntimeError("编辑器炸了")
+
+    with pytest.raises(RuntimeError, match="编辑器炸了"):
+        await session.runChildSession(childRaises())
+
+    assert session.calls == ["prepare", "child", "restore"]
+
+
+@pytest.mark.asyncio
+async def test_runChildSession_defaultHooksNoop(fakeStateManager):
+    """基类默认钩子为空实现：不覆写钩子的范式跑 runChildSession 不报错"""
+    session = makeSession(fakeStateManager, mainLoopResult=None)
+
+    async def childWork():
+        return 42
+
+    result = await session.runChildSession(childWork())
+
+    assert result == 42

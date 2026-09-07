@@ -190,13 +190,13 @@ class QuoteTUIController(ListMenuController):
                     self.pendingAction = ("add",)
                 else:
                     self.pendingAction = ("edit",)
-                event.app.exit()
+                self.safeAppExit(event.app)
 
     async def handlePendingAction(self):
         actionType = self.pendingAction[0]
 
         if actionType == "add":
-            res = await editQuoteViaEditor("", 1.0)
+            res = await self.runChildSession(editQuoteViaEditor("", 1.0))
             if res:
                 t, w = res
                 userOperation("add", payload={"text": t, "weight": w})
@@ -213,7 +213,9 @@ class QuoteTUIController(ListMenuController):
             except ValueError:
                 return True
 
-            res = await editQuoteViaEditor(raw.get("text", ""), raw.get("weight", 1.0))
+            res = await self.runChildSession(
+                editQuoteViaEditor(raw.get("text", ""), raw.get("weight", 1.0))
+            )
             if res:
                 newT, newW = res
                 userOperation("set", index=idx, payload={"text": newT, "weight": newW})

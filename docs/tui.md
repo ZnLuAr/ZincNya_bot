@@ -1,6 +1,6 @@
 # TUI 框架技术文档
 
-> 最后更新：2026-07-26
+> 最后更新：2026-09-07
 >
 > 这份文档是项目里所有交互式终端界面（TUI）的总纲——讲清楚框架长什么样、三种交互范式各自怎么管屏幕和生命周期、横切关注点归谁管，以及想加一种全新交互类型时要动哪里。聊天界面 chatScreen 是其中一种范式的复杂实例，实现细节写在 [docs/chatScreen.md](chatScreen.md)，本文不重复。
 >
@@ -63,6 +63,18 @@
 交互模式旗标、后台任务清单、收尾顺序这些东西，散落在各范式里就是灾难——早先列表菜单手工管旗标、chatScreen 的编排层手工管旗标+回调+任务、编辑器完全不管（靠父菜单持有），三套做法并存。
 
 `TUISession.runSession` 把这些收到一处：进会话存旧旗标→置 True，出会话按固定顺序收尾（`onExit`→恢复旗标→cancel+await 后台任务）。范式只管覆写 `onEnter`/`mainLoop`/`onExit` 表达自己的交互，横切的脏活留给基类。
+
+### 嵌套子会话：`runChildSession` 与屏幕让位
+
+列表菜单的管理操作会中途唤起另一个交互（编辑器、行内输入）——这叫嵌套子会话。问题在于屏幕：listMenu 自己 `smcup` 进了 ANSI 备用屏，子会话（如 textEditor）又让 pt 开一层自己的 alt-screen，退出时嵌套错位，列表残留。
+
+契约：**唤起子会话一律走 `self.runChildSession(awaitable)`**——它按 `prepareChildSession` → await 子会话 → `restoreChildSession` 的顺序包裹，子会话抛异常也保证恢复（`finally`）。listMenu 覆写这两个钩子做 `rmcup` 让位 + `smcup` 重绘；fullScreen 范式用默认空实现（pt 自管屏幕嵌套，无需让位）。
+
+### 键绑定 exit 一律走 `safeAppExit`
+
+终端把 Alt 组合键编码为 ESC+键 两字节，prompt_toolkit 解析不出「Alt+Ctrl+X」整体时会拆成 Escape 与后续键**两个事件依次派发**——两个绑定先后 `event.app.exit()`，第二次撞上 pt 的 `"Return value already set"` 异常直接崩出 TUI（chatScreen 里 Ctrl+Alt+S 稳定复现）。
+
+契约：**键绑定里的 `event.app.exit(...)` 一律写 `self.safeAppExit(event.app, ...)`**（`TUISession` 的 staticmethod）——future 已定时静默跳过。全项目所有范式与三家列表子类均已统一。chatScreen 的 `runOnce` 另有一层兜底：输入轮抛非取消异常时记 WARNING 后按无输入继续，未知转义序列不再崩整个会话。
 
 ---
 
@@ -177,9 +189,9 @@ class TextEditorApp(FullScreenTUIApp):
     def setupKeyBindings(self, kb):
         @kb.add("c-s")
         @kb.add("escape", "enter")      # 保存退出
-        def _save(event): ...写回文件...; event.app.exit(result=True)
+        def _save(event): ...写回文件...; self.safeAppExit(event.app, result=True)
         @kb.add("c-c")                   # 放弃
-        def _cancel(event): event.app.exit(result=False)
+        def _cancel(event): self.safeAppExit(event.app, result=False)
         @kb.add("escape")                # 单独 Esc 吞掉（不与 esc+enter 冲突）
         def _swallow(event): pass
 
@@ -261,7 +273,7 @@ async def runSession(self):
 
 ## 已知局限
 
-1. **列表菜单唤起编辑器后的退出屏幕恢复**。`textEditor` 范式的全屏编辑器从列表菜单（手动 `smcup` 备用屏幕）里唤起时，pt 自管的 alt-screen 和手动的 `rmcup` 状态在最终退出时恢复得不够彻底，偶有残留。这是 ANSI 备用屏幕与 pt `full_screen` 嵌套的已知交互，列表浏览本身不受影响。统一修法是在 `TUISession` 加 `prepareChildSession`/`restoreChildSession` 钩子包裹嵌套唤起——暂未做，等真实使用中确认值得修再说。
+1. **~~列表菜单唤起编辑器后的退出屏幕恢复~~（已修复）**。原先 `textEditor` 从列表菜单（手动 `smcup` 备用屏幕）里唤起时，pt 自管的 alt-screen 和手动的 `rmcup` 状态嵌套错位，退出时列表残留。现已由 `TUISession.runChildSession`（`prepareChildSession`/`restoreChildSession` 钩子）修复：listMenu 覆写钩子做 rmcup 让位 + smcup 重绘，三家子类（whitelist / quote / memory）的 `asyncInput` / `editFile` 唤起统一走 `runChildSession` 包裹，子会话抛异常也保证恢复。
 2. **控制台输出回调是单槽**。`stateManager` 的 `consoleOutputCallback` 是全局单值，不是 per-key 字典。chatScreen 的 `onEnter` 注册自己的回调、`onExit` 注销（置 None）。如果两个 chatScreen 实例嵌套（目前不会发生），内层注销会把外层的回调也清掉。这条以 `test_tuiSession.py` 的 xfail 文档化钉着；真有嵌套路由需求时，修法是改成引用计数。
 3. **chatScreen 在 Windows 10 及以下的传统 PowerShell / conhost 里渲染不正常**。表现是滚动历史时整屏上移或下移一行、原画面不重绘。原因在 `utils/chatScreen/ui.py` 的 `createApplication` 硬传了 `output=Vt100_Output.from_pty(sys.stdout)`——这绕过了 prompt_toolkit 自己的平台探测（`create_output` 在 win32 上本会按 VT 是否开启依次选 `Windows10_Output` / `ConEmuOutput` / `Win32Output`，最后那个用 Win32 API 直接操作屏幕缓冲、根本不发 ANSI）。老 conhost 读不懂这些转义序列，于是画面错位。
    **只影响 chatScreen 一家**：`FullScreenTUIApp` 的默认 `createApplication` 与 `TextEditorApp` 都不传 `output=`，走 pt 自动探测，所以列表菜单和编辑器在同样的终端里是正常的。

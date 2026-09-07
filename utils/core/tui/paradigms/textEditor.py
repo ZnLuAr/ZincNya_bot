@@ -56,11 +56,11 @@ class TextEditorApp(FullScreenTUIApp):
             text = self._editor.text.replace("\r\n", "\n")
             with open(self._filePath, "w", encoding="utf-8") as f:
                 f.write(text)
-            event.app.exit(result=True)
+            self.safeAppExit(event.app, result=True)
 
         @kb.add("c-c")
         def _cancel(event):
-            event.app.exit(result=False)
+            self.safeAppExit(event.app, result=False)
 
         @kb.add("escape")
         def _swallow(event):

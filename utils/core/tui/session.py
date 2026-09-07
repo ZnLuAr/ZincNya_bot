@@ -63,6 +63,52 @@ class TUISession(ABC):
         self._backgroundTasks.append(task)
 
 
+    async def runChildSession(self, awaitable):
+        """包裹一次嵌套子会话：prepare → await 子会话 → restore。
+
+        子会话抛异常也保证 restore（finally）——屏幕让位后不恢复，本会话的
+        备用屏状态就永久错位（列表残留的根因）。awaitable 通常是
+        editFile(...) / asyncInput(...) 这类全屏或行内交互的 await 表达式。
+        """
+        self.prepareChildSession()
+        try:
+            return await awaitable
+        finally:
+            self.restoreChildSession()
+
+
+    @staticmethod
+    def safeAppExit(app, **kwargs):
+        """幂等的 event.app.exit（键绑定专用），在 future 已定时静默跳过。
+
+        终端把 Alt 组合键编码为 ESC+键 两字节，prompt_toolkit 解析不出
+        「Alt+Ctrl+X」整体时会拆成 Escape 与后续键两个事件依次派发——两个
+        绑定先后 exit，第二次撞上 pt 的 "Return value already set" 异常会崩出
+        TUI（chatScreen Ctrl+Alt+S 稳定复现）。键绑定里 exit 一律走这里。
+        """
+        if app.future is None or app.future.done():
+            return
+        app.exit(**kwargs)
+
+
+    # ========================================================================
+    # 嵌套子会话包裹（范式按需覆写）
+    # ========================================================================
+
+    def prepareChildSession(self):
+        """本会话中途唤起另一个全屏子会话（编辑器等）前的屏幕让位。
+
+        listMenu 范式覆写为 rmcup 切回主屏（自己的备用屏让位给子会话的 pt alt-screen）；
+        默认空实现——fullScreen 范式的 pt 自管屏幕嵌套，无需让位。
+        """
+
+    def restoreChildSession(self):
+        """子会话结束后恢复本会话的屏幕（与 prepareChildSession 成对）。
+
+        listMenu 范式覆写为 smcup + redraw；默认空实现。
+        """
+
+
     # ========================================================================
     # 生命周期入口
     # ========================================================================

@@ -270,25 +270,25 @@ class MemoryTUIController(ListMenuController):
                     self.pendingAction = ("add",)
                 else:
                     self.pendingAction = ("edit",)
-                event.app.exit()
+                self.safeAppExit(event.app)
 
         @kb.add("delete")
         def _del(event):
             if self.selected < len(self.entries) and not self.entries[self.selected].get("isAddRow"):
                 self.pendingAction = ("delete",)
-                event.app.exit()
+                self.safeAppExit(event.app)
 
         @kb.add("left")
         def _left(event):
             if self.selected < len(self.entries) and not self.entries[self.selected].get("isAddRow"):
                 self.pendingAction = ("toggle",)
-                event.app.exit()
+                self.safeAppExit(event.app)
 
         @kb.add("right")
         def _right(event):
             if self.selected < len(self.entries) and not self.entries[self.selected].get("isAddRow"):
                 self.pendingAction = ("toggle",)
-                event.app.exit()
+                self.safeAppExit(event.app)
 
 
     async def handlePendingAction(self):
@@ -302,7 +302,9 @@ class MemoryTUIController(ListMenuController):
         elif actionType == "delete":
             entry = self.entries[self.selected]
 
-            confirm = await asyncInput(f"真的要删除 memory #{entry['id']} 吗？(y/N): ")
+            confirm = await self.runChildSession(
+                asyncInput(f"真的要删除 memory #{entry['id']} 吗？(y/N): ")
+            )
             if confirm.strip().lower() == "y":
                 ok = await deleteMemory(entry["id"])
                 print("已删除\n" if ok else "❌ 删除失败\n")
@@ -311,7 +313,9 @@ class MemoryTUIController(ListMenuController):
                 self.selected = min(self.selected, len(self.entries) - 1)
 
         elif actionType == "add":
-            scopeInput = await asyncInput("Scope (global/chat/user/session) [global]: ")
+            scopeInput = await self.runChildSession(
+                asyncInput("Scope (global/chat/user/session) [global]: ")
+            )
             scopeType = scopeInput.strip().lower() or "global"
 
             if scopeType not in VALID_SCOPE_TYPES:
@@ -321,13 +325,15 @@ class MemoryTUIController(ListMenuController):
 
             scopeID = None
             if scopeType != "global":
-                scopeID = (await asyncInput(f"Scope ID ({scopeType}): ")).strip()
+                scopeID = (await self.runChildSession(
+                    asyncInput(f"Scope ID ({scopeType}): ")
+                )).strip()
                 if not scopeID:
                     print("❌ scope ID 是不能为空的\n")
                     await asyncio.sleep(_ACTION_NOTICE_DELAY)
                     return True
 
-            result = await editMemoryViaEditor()
+            result = await self.runChildSession(editMemoryViaEditor())
             if result is None:
                 return True
 
@@ -341,11 +347,11 @@ class MemoryTUIController(ListMenuController):
         elif actionType == "edit":
             entry = self.entries[self.selected]
 
-            result = await editMemoryViaEditor(
+            result = await self.runChildSession(editMemoryViaEditor(
                 entry["content"],
                 entry["tags"],
                 entry["priority"],
-            )
+            ))
             if result is None:
                 return True
 
