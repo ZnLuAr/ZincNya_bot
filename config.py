@@ -196,6 +196,7 @@ LLM_IMAGE_MAX_BYTES = 20 * 1024 * 1024                         # 图片大小上
 LLM_IMAGE_SUPPORTED_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 LLM_REQUEST_MAX_RETRIES = 2                                    # LLM 请求最大重试次数（不含首次）
 LLM_REQUEST_RETRY_DELAY = 3                                    # 重试间隔（秒）
+LLM_MAX_TOKENS_HARD_CAP = 32768                                # 截断提额重试时 max_tokens 上限（防冲破中转/模型上限）
 LLM_KNOWLEDGE_DB_PATH = os.path.join(DATA_DIR, "llm", "knowledge.db")  # 知识库数据库
 LLM_KNOWLEDGE_DIR = os.path.join(DATA_DIR, "llm", "knowledge")         # 知识库 Markdown 文件目录
 # LLM 记忆操作约束（原散落于 memory/action.py / contextBuilder.py）

@@ -463,6 +463,18 @@ _pendingTasks: dict[str, asyncio.Task]
 - 点击 retry 产生新的网络请求；
 - 网页内容在审核前后变化导致语义漂移。
 
+### 空生成兜底
+
+retry 按钮 / `:fb` 补充反馈成功返回但 `reply` 为空串时（思考模型经中转可能思考吃光 `max_tokens` 预算，provider 层的截断提额重试也救不回时发生）：
+
+- **不写回空 reply 到 `bot_data`**——旧回复保留，管理员可直接点「✅ 发送」发旧版或再试一次；
+- 卡片恢复为旧 reply + `⚠️ 重新生成为空喵，请再试一次` 后缀（`:fb` 的消息本身仍删除，标签已消费）；
+- 记 WARNING 日志（`LLM 审核重试生成为空` / `LLM 补充反馈重试生成为空`）。
+
+与首生成路径的空输出检测（`dispatchGeneratedOutput` 的 🤔 reaction + return）同语义但表现不同——retry/`:fb` 从既有审核卡触发，没有可挂 reaction 的用户消息，改为卡片内提示。
+
+provider 层的截断提额重试（三个 provider 同款）则在**更早一层**拦截同类问题：响应被截断且无文本块时（Anthropic: `stop_reason=max_tokens` 仅 thinking block / openai: `finish_reason=length` 且 content 空 / gemini: `text=None`），提升 `max_tokens`（×2，封顶 `LLM_MAX_TOKENS_HARD_CAP`）原样重试一次；仍截断则抛错走错误提示路径。OpenAI 侧仅 `length`+空 触发——`stop`+空可能是模型有意空回，交给上层空检测处理。
+
 ---
 
 ## 图片处理

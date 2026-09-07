@@ -9,7 +9,15 @@ import base64
 from google import genai
 from google.genai import types
 
+from config import LLM_MAX_TOKENS_HARD_CAP
+
+from utils.core.logger import logSystemEvent, LogLevel
+
 from ._base import LLMProvider
+
+
+# 截断提额重试轮数（首次 + 重试）
+_TRUNCATION_RETRY_ROUNDS = 2
 
 
 
@@ -59,14 +67,42 @@ class GeminiProvider(LLMProvider):
         else:
             contents = userContent
 
-        response = await client.aio.models.generate_content(
-            model=model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=systemText,
-                max_output_tokens=maxTokens,
-                temperature=temperature,
-            ),
-        )
+        # 截断提额重试：思考模型（思考计入 max_output_tokens 预算）思考过长时，
+        # 会有 finish_reason=MAX_TOKENS 且生成的文本为 None。此时需要提升
+        # max_output_tokens 后原样重试一次；仍空则抛错（requestWithRetry 判定
+        # RuntimeError 不可重试，直接冒泡给既有错误提示路径）。
+        effectiveMaxTokens = maxTokens
+        response = None
+        for attempt in range(_TRUNCATION_RETRY_ROUNDS):
+            response = await client.aio.models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=systemText,
+                    max_output_tokens=effectiveMaxTokens,
+                    temperature=temperature,
+                ),
+            )
 
-        return response.text or ""
+            if (response.text or "").strip():
+                break
+
+            finishReason = ""
+            if response.candidates:
+                finishReason = str(response.candidates[0].finish_reason or "")
+            await logSystemEvent(
+                "LLM 响应无文本，提额重试",
+                f"model={model}, attempt={attempt + 1}, max_output_tokens={effectiveMaxTokens} → {min(effectiveMaxTokens * 2, LLM_MAX_TOKENS_HARD_CAP)}, "
+                f"finish_reason={finishReason}",
+                LogLevel.WARNING,
+            )
+            effectiveMaxTokens = min(effectiveMaxTokens * 2, LLM_MAX_TOKENS_HARD_CAP)
+
+        responseText = response.text or ""
+        if not responseText.strip():
+            raise RuntimeError(
+                f"LLM 响应被截断且提额后仍无文本（model={model}, max_output_tokens 提额至 {effectiveMaxTokens}）"
+                "——thinking 模型可能需要更高的 max_tokens 配置"
+            )
+
+        return responseText

@@ -7,7 +7,15 @@ OpenAI 兼容提供商实现。
 
 from openai import AsyncOpenAI
 
+from config import LLM_MAX_TOKENS_HARD_CAP
+
+from utils.core.logger import logSystemEvent, LogLevel
+
 from ._base import LLMProvider
+
+
+# 截断提额重试轮数（首次 + 重试）
+_TRUNCATION_RETRY_ROUNDS = 2
 
 
 
@@ -63,18 +71,44 @@ class OpenAICompatProvider(LLMProvider):
         else:
             content = userContent
 
-        response = await client.chat.completions.create(
-            model=model,
-            max_tokens=maxTokens,
-            temperature=temperature,
-            messages=[
-                {"role": "system", "content": systemText},
-                {"role": "user", "content": content},
-            ],
-        )
+        # 截断提额重试：推理模型（reasoning token 计入 max_tokens 预算）思考过长时，
+        # 会有 finish_reason=length 且 content 为空。此时需要提升 max_tokens
+        # 后原样重试一次。仅 length+空 触发——stop+空可能是模型有意空回，交上层空检测处理。
+        # 仍截断则抛错（requestWithRetry 判定 RuntimeError 不可重试，直接冒泡给错误提示路径）。
+        effectiveMaxTokens = maxTokens
+        choice = None
+        for attempt in range(_TRUNCATION_RETRY_ROUNDS):
+            response = await client.chat.completions.create(
+                model=model,
+                max_tokens=effectiveMaxTokens,
+                temperature=temperature,
+                messages=[
+                    {"role": "system", "content": systemText},
+                    {"role": "user", "content": content},
+                ],
+            )
 
-        choice = response.choices[0] if response.choices else None
+            choice = response.choices[0] if response.choices else None
+            if choice and choice.message and (choice.message.content or "").strip():
+                break
+            if not choice or choice.finish_reason != "length":
+                break  # 非截断形态（无 choice / stop 但空），跳出交由末尾统一处理
+
+            await logSystemEvent(
+                "LLM 响应被截断（finish_reason=length），提额重试",
+                f"model={model}, attempt={attempt + 1}, max_tokens={effectiveMaxTokens} → {min(effectiveMaxTokens * 2, LLM_MAX_TOKENS_HARD_CAP)}",
+                LogLevel.WARNING,
+            )
+            effectiveMaxTokens = min(effectiveMaxTokens * 2, LLM_MAX_TOKENS_HARD_CAP)
+
         if not choice or not choice.message:
             return ""
 
-        return choice.message.content or ""
+        contentText = choice.message.content or ""
+        if not contentText.strip() and choice.finish_reason == "length":
+            raise RuntimeError(
+                f"LLM 响应被截断且提额后仍无文本（model={model}, max_tokens 提额至 {effectiveMaxTokens}, "
+                f"finish_reason=length）——reasoning 模型可能需要更高的 max_tokens 配置"
+            )
+
+        return contentText

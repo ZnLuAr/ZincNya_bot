@@ -395,6 +395,22 @@ async def handleReviewCallback(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
             return
 
+        # 成功但生成为空：不放行空的 reply（保留旧回复供发送/再试），恢复卡片并提示
+        # （与 :fb 路径同款；首生成路径的空输出检测在 dispatchGeneratedOutput）
+        if not newItem["reply"].strip():
+            emptyText, emptyMarkup = renderReviewCard(
+                reviewData["originalMsg"], reviewData["reply"], chatID,
+                suffix="\n\n⚠️ 重新生成是空的喵，再试一次吧",
+                displayBlocks=reviewData.get("displayBlocks"),
+            )
+            await safeEditMessage(query.message, emptyText, reply_markup=emptyMarkup, parse_mode="HTML")
+            await logSystemEvent(
+                "LLM 审核重试生成为空",
+                f"chatID={chatID}",
+                LogLevel.WARNING,
+            )
+            return
+
         # memoryFailedCount 由 reviewRetry 写回（includeContext=False 时显式置 0）
         failedCount = newItem.get("memoryFailedCount", 0)
         warningText = MEMORY_FAILED_WARNING.format(failedCount) if failedCount > 0 else ""
@@ -570,6 +586,30 @@ async def handleFeedbackRetry(message, context: ContextTypes.DEFAULT_TYPE) -> bo
                 LogLevel.ERROR,
                 exception=e,
             )
+        return True
+
+    # 成功但生成为空：不写回空 reply（保留旧回复供发送/再试），恢复卡片并提示
+    # 与首生成路径 dispatchGeneratedOutput 的空输出检测同语义——:fb 从既有卡片
+    # 重试，无法走 🤔 reaction，改为卡片内 ⚠️ 提示
+    if not newItem["reply"].strip():
+        emptyText, emptyMarkup = renderReviewCard(
+            originalMsg, currentReply, chatIDRetry,
+            suffix="\n\n⚠️ 重新生成是空的喵，再试一次吧",
+            displayBlocks=reviewData.get("displayBlocks"),
+        )
+        await context.bot.edit_message_text(
+            chat_id=senderID,
+            message_id=replyToID,
+            text=emptyText,
+            reply_markup=emptyMarkup,
+            parse_mode="HTML",
+        )
+        await message.delete()
+        await logSystemEvent(
+            "LLM 补充反馈重试生成为空",
+            f"chatID={chatIDRetry}, feedback={feedback[:_LOG_LEN]}",
+            LogLevel.WARNING,
+        )
         return True
 
     # 成功：memoryFailedCount 由 reviewRetryWithFeedback 写回

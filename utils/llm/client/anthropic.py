@@ -10,7 +10,15 @@ import re
 
 from anthropic import AsyncAnthropic
 
+from config import LLM_MAX_TOKENS_HARD_CAP
+
+from utils.core.logger import logSystemEvent, LogLevel
+
 from ._base import LLMProvider
+
+
+# 截断提额重试轮数（首次 + 重试）
+_TRUNCATION_RETRY_ROUNDS = 2
 
 
 
@@ -78,19 +86,42 @@ class AnthropicProvider(LLMProvider):
         else:
             content = userContent
 
-        response = await client.messages.create(
-            model=model,
-            max_tokens=maxTokens,
-            temperature=temperature,
-            system=systemText,
-            messages=[
-                {"role": "user", "content": content}
-            ],
-        )
+        # 截断提额重试：思考模型（思考 token 计入 max_tokens 预算）思考过长时，
+        # 响应会被截断且只有 thinking block、无 text block。再使用相同的参数重试会同样失败，
+        # 故提升 max_tokens 后原样重试一次；仍空则抛错（上层 requestWithRetry 判定
+        # RuntimeError 不可重试，直接冒泡给既有错误提示路径）。
+        effectiveMaxTokens = maxTokens
+        response = None
+        for attempt in range(_TRUNCATION_RETRY_ROUNDS):
+            response = await client.messages.create(
+                model=model,
+                max_tokens=effectiveMaxTokens,
+                temperature=temperature,
+                system=systemText,
+                messages=[
+                    {"role": "user", "content": content}
+                ],
+            )
+
+            textBlock = next((b for b in response.content if b.type == "text"), None)
+            if textBlock and textBlock.text.strip():
+                break
+
+            hasThinkingOnly = any(b.type == "thinking" for b in response.content)
+            await logSystemEvent(
+                "LLM 响应无文本块，提额重试",
+                f"model={model}, attempt={attempt + 1}, max_tokens={effectiveMaxTokens} → {min(effectiveMaxTokens * 2, LLM_MAX_TOKENS_HARD_CAP)}, "
+                f"stop_reason={response.stop_reason}, thinkingOnly={hasThinkingOnly}",
+                LogLevel.WARNING,
+            )
+            effectiveMaxTokens = min(effectiveMaxTokens * 2, LLM_MAX_TOKENS_HARD_CAP)
 
         textBlock = next((b for b in response.content if b.type == "text"), None)
-        if not textBlock:
-            return ""
+        if not textBlock or not textBlock.text.strip():
+            raise RuntimeError(
+                f"LLM 响应被截断且提额后仍无文本（model={model}, max_tokens 提额至 {effectiveMaxTokens}, "
+                f"stop_reason={response.stop_reason}）——思考模型可能需要更高的 max_tokens 配置"
+            )
 
         text = textBlock.text
 
