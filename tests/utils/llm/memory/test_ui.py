@@ -58,10 +58,12 @@ async def test_edit_memory_multi_tags_and_priority():
         result = await editMemoryViaEditor()
 
     assert result is not None
-    body, tags, priority = result
+    body, tags, priority, mode, hint = result
     assert body == "body text"
     assert tags == ["a", "b", "c"]
     assert priority == 5
+    assert mode == "contextual"
+    assert hint is None
 
 
 @pytest.mark.asyncio
@@ -72,7 +74,7 @@ async def test_edit_memory_illegal_priority_keeps_old():
         result = await editMemoryViaEditor(initialPriority=3)
 
     assert result is not None
-    body, tags, priority = result
+    body, tags, priority, _, _ = result
     assert body == "body"
     assert priority == 3  # 非法值，保留传入的旧值
 
@@ -85,7 +87,7 @@ async def test_edit_memory_no_tags_line():
         result = await editMemoryViaEditor()
 
     assert result is not None
-    body, tags, priority = result
+    body, tags, priority, _, _ = result
     assert body == "body"
     assert tags == []
     assert priority == 5
@@ -99,7 +101,7 @@ async def test_edit_memory_no_priority_line():
         result = await editMemoryViaEditor(initialPriority=7)
 
     assert result is not None
-    body, tags, priority = result
+    body, tags, priority, _, _ = result
     assert tags == ["x"]
     assert priority == 7  # 未提供，保留初始值
 
@@ -112,7 +114,7 @@ async def test_edit_memory_no_separator_all_content():
         result = await editMemoryViaEditor()
 
     assert result is not None
-    body, tags, priority = result
+    body, tags, priority, _, _ = result
     assert tags == ["a"]
     # 无分隔符：所有行（含 # tags 行）都进 content
     assert "# tags: a" in body
@@ -128,7 +130,7 @@ async def test_edit_memory_separator_boundary():
         result = await editMemoryViaEditor()
 
     assert result is not None
-    body, tags, priority = result
+    body, tags, priority, _, _ = result
     assert tags == ["a", "b"]  # 只解析分隔符之前的
     assert "# tags: c" in body  # 分隔符之后的 # tags 当正文
     assert "正文" in body
@@ -174,13 +176,30 @@ async def test_edit_memory_template_prefill():
         return True  # 不改动，直接保存
 
     with patch('utils.llm.memory.ui.editFile', new=capture):
-        await editMemoryViaEditor(initialContent="正文的喵", initialTags=["x", "y"], initialPriority=7)
+        await editMemoryViaEditor(
+            initialContent="正文的喵",
+            initialTags=["x", "y"],
+            initialPriority=7,
+            initialMode="pinned",
+            initialRetrievalHint="昵称话题",
+        )
 
     template = captured["template"]
     assert "# tags: x, y" in template
     assert "# priority: 7" in template
+    assert "# mode: pinned" in template
+    assert "# hint: 昵称话题" in template
     assert "---" in template
     assert "正文的喵" in template
+
+
+@pytest.mark.asyncio
+async def test_edit_memory_parses_mode_and_explicit_empty_hint():
+    content = "# mode: pinned\n# hint:\n---\nbody"
+    with patch('utils.llm.memory.ui.editFile', new=_editFileWriting(content)):
+        result = await editMemoryViaEditor(initialRetrievalHint="旧说明")
+
+    assert result == ("body", [], 0, "pinned", "")
 
 
 
@@ -189,7 +208,10 @@ async def test_edit_memory_template_prefill():
 # MemoryTUIController.collectViewModel() 测试
 # ============================================================================
 
-def _memRow(id_, scopeType, scopeId, content, priority=0, enabled=True, tags=None):
+def _memRow(
+    id_, scopeType, scopeId, content, priority=0, enabled=True, tags=None,
+    mode="contextual", retrievalHint=None,
+):
     """构造一条 memory row（mock getMemories 返回元素）。"""
     return {
         "id": id_,
@@ -200,6 +222,8 @@ def _memRow(id_, scopeType, scopeId, content, priority=0, enabled=True, tags=Non
         "enabled": enabled,
         "priority": priority,
         "source": None,
+        "mode": mode,
+        "retrievalHint": retrievalHint,
     }
 
 
@@ -228,6 +252,7 @@ async def test_collect_view_model_sorting_and_addrow_and_preview():
     chatEntry = entries[3]
     assert chatEntry["preview"].endswith("…")
     assert len(chatEntry["preview"]) == 41
+    assert chatEntry["mode"] == "contextual"
 
 
 @pytest.mark.asyncio
@@ -254,8 +279,16 @@ def test_buildTable_memory_renders_rows_status_scope_help(capsys):
     """buildTable 渲染：标题 + (+) 行 + scope + ON/OFF 状态 + 帮助行"""
     entries = [
         {"isAddRow": True},
-        {"id": 1, "scope_type": "global", "scope_id": None, "enabled": True, "priority": 5, "preview": "hello"},
-        {"id": 2, "scope_type": "chat", "scope_id": "123", "enabled": False, "priority": 3, "preview": "world"},
+        {
+            "id": 1, "scope_type": "global", "scope_id": None,
+            "enabled": True, "priority": 5, "mode": "pinned",
+            "retrievalHint": "称呼", "preview": "hello",
+        },
+        {
+            "id": 2, "scope_type": "chat", "scope_id": "123",
+            "enabled": False, "priority": 3, "mode": "contextual",
+            "retrievalHint": None, "preview": "world",
+        },
     ]
     controller = MemoryTUIController(mode="manage")
     controller.entries = entries
@@ -270,5 +303,6 @@ def test_buildTable_memory_renders_rows_status_scope_help(capsys):
     assert "hello" in out and "world" in out    # preview
     assert "global" in out and "chat:123" in out  # scope 渲染（global 直显，非 global 拼 type:id）
     assert "ON" in out and "OFF" in out         # enabled 状态标记
+    assert "pinned" in out and "称呼" in out
     # memory 恒显示帮助行
     assert "Enter 编辑" in out and "Esc 退出" in out

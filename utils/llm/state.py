@@ -6,7 +6,8 @@ LLM 运行时状态管理：
       utils/llm/review.py——队列项是审核域契约，生产端与消费端同文件演进）
     - 每用户速率限制
     - 消息防抖缓冲（聚合短时间内分多次发送的消息，按 dict 记录
-      text / includeContext / images / urlIntentText / urlCandidateText；
+      text / includeContext / images / urlIntentText / urlCandidateText /
+      replyLine / currentText / memoryTurn；
       collectDebouncedBatch 聚合为 DebouncedBatch）
     - 全局 one-shot context 标记（memory -once）
 """
@@ -16,6 +17,8 @@ import asyncio
 from dataclasses import dataclass, field
 
 from config import LLM_RATE_LIMIT_SECONDS, LLM_PENDING_MSG_LIMIT
+
+from utils.llm.memory.types import MemoryQuery, MemoryTurn
 
 
 
@@ -27,7 +30,7 @@ _llmReviewQueue: asyncio.Queue = asyncio.Queue()
 _lastCallTime: dict[str, float] = {}
 
 # 消息防抖状态（聚合短时间内分多次发送的消息）
-_pendingMessages: dict[str, list[dict]] = {}   # debounceKey -> [{"text": str, "includeContext": bool, "images": list, "urlIntentText": str, "urlCandidateText": str, "replyLine": str, "currentText": str}]
+_pendingMessages: dict[str, list[dict]] = {}   # debounceKey -> [{"text": str, "includeContext": bool, "images": list, "urlIntentText": str, "urlCandidateText": str, "replyLine": str, "currentText": str, "memoryTurn": MemoryTurn | None}]
 _pendingTasks: dict[str, asyncio.Task] = {}   # debounceKey -> 当前防抖 Task
 
 # 全局 one-shot context 标记：下一次 LLM 调用强制带记忆，触发后自动清除
@@ -105,6 +108,7 @@ class DebouncedBatch:
         urlCandidateText: 各消息 urlCandidateText 换行拼接（URL 提取候选）
         displayPairs:     展示线。各消息 {"replyLine", "currentText"} 的列表，
                           双空条目已过滤——审核卡按此逐条渲染引用/当前配对
+        memoryQuery:      检索线。按原消息顺序保留 current/reply 配对
     """
     combinedText: str
     includeContext: bool
@@ -112,6 +116,7 @@ class DebouncedBatch:
     urlIntentText: str
     urlCandidateText: str
     displayPairs: list[dict] = field(default_factory=list)
+    memoryQuery: MemoryQuery | None = None
 
 
 def addRateLimit(userID: str | int):
@@ -133,6 +138,7 @@ def appendPendingMessage(
     urlCandidateText: str | None = None,
     replyLine: str | None = None,
     currentText: str | None = None,
+    memoryTurn: MemoryTurn | None = None,
 ) -> bool:
     """
     将消息追加到防抖缓冲区。
@@ -143,6 +149,7 @@ def appendPendingMessage(
         urlCandidateText: 当前用户消息 + 被回复消息文本，用于提取 URL
         replyLine: 引用行（"<@发送者> 文本"，无引用为空串）——审核卡结构化展示用，prompt 侧不用
         currentText: 当前消息纯文本（含图片 notes）——同上
+        memoryTurn: 当前消息与未截断引用的结构化检索输入；图片 notes 不进入
 
     返回 False 表示已达上限，消息被丢弃。
     """
@@ -157,6 +164,7 @@ def appendPendingMessage(
         "urlCandidateText": urlCandidateText or "",
         "replyLine": replyLine or "",
         "currentText": currentText or "",
+        "memoryTurn": memoryTurn,
     })
     return True
 
@@ -193,6 +201,13 @@ def collectDebouncedBatch(debounceKey: str) -> DebouncedBatch | None:
         for p in parts
         if p.get("replyLine") or p.get("currentText")
     ]
+    # 检索线不从 combinedText 反向拆分；直接保留每条消息的 current/reply 配对，
+    # 防止防抖聚合后的字符串标记和展示截断破坏语义边界。
+    memoryTurns = tuple(
+        p["memoryTurn"]
+        for p in parts
+        if p.get("memoryTurn") is not None
+    )
 
     return DebouncedBatch(
         combinedText=combinedText,
@@ -201,6 +216,7 @@ def collectDebouncedBatch(debounceKey: str) -> DebouncedBatch | None:
         urlIntentText=combinedURLIntentText,
         urlCandidateText=combinedURLCandidateText,
         displayPairs=displayPairs,
+        memoryQuery=MemoryQuery(turns=memoryTurns) if memoryTurns else None,
     )
 
 

@@ -28,7 +28,7 @@ VISION_DESCRIBE_PROMPT: list[str] = [
 MEMORY_ACTION_INSTRUCTIONS: list[str] = [
     (
         "当且仅当当前对话带有 memory/context 时，你可以在回复末尾追加 <MEMORY_ACTION> JSON 块来申请修改长期记忆。"
-        "所有操作都需要审核后才生效。"
+        "常驻记忆操作必须由人类独立审核，其他操作按系统审核设置处理。"
     ),
     (
         "格式要求：每个 <MEMORY_ACTION> 块包含一个 JSON 对象（不是数组）。"
@@ -43,10 +43,10 @@ MEMORY_ACTION_INSTRUCTIONS: list[str] = [
         "字段定义（按 action 类型分组）：\n"
         "\n【add 操作】必需字段：\n"
         '  {"action": "add", "scope_type": "global", "scope_id": "global", "content": "记忆内容"}\n'
-        "  可选字段：tags, priority, reason\n"
+        "  可选字段：tags, priority, mode, retrieval_hint, reason\n"
         "\n【update 操作】必需字段：\n"
         '  {"action": "update", "scope_type": "global", "scope_id": "global", "memory_id": 123}\n'
-        "  可选字段：content, tags, priority, reason（至少提供一个可选字段）\n"
+        "  可选字段：content, tags, priority, mode, retrieval_hint, reason（至少提供一个可选字段）\n"
         "\n【delete 操作】必需字段：\n"
         '  {"action": "delete", "scope_type": "global", "scope_id": "global", "memory_id": 123}\n'
         "  可选字段：reason\n"
@@ -55,13 +55,18 @@ MEMORY_ACTION_INSTRUCTIONS: list[str] = [
         "  - scope_id: 字符串，global 时必须为 \"global\"，chat/user 时为对应 ID\n"
         "  - priority: 整数 0-3（0=日常闲聊，1=一般偏好，2=重要事实，3=关键信息）\n"
         "  - memory_id: 整数，update/delete 时为目标记忆的 ID\n"
-        "  - tags: 字符串数组，如 [\"标签1\", \"标签2\"]"
+        "  - tags: 字符串数组，如 [\"标签1\", \"标签2\"]\n"
+        "  - mode: \"contextual\"（按对话相关性召回，默认）或 \"pinned\"（常驻）\n"
+        "  - retrieval_hint: 可选的单行检索说明，最多 80 字；只描述未来可能相关的话题、措辞或别名，不增加事实"
     ),
     (
         "约束：\n"
         "  - 你只能修改通过推断产生的记忆（source=inferred），不能修改手动创建的记忆（source=manual）\n"
         "  - priority 上限为 3\n"
         "  - 每次回复最多 3 个操作\n"
+        "  - 只有确有持续常驻价值时才申请 mode=pinned；新增、升级、修改、降级或删除 pinned 记忆都必须人工审核\n"
+        "  - retrieval_hint 只在本来就要 add/update 时顺带给出，不要为补写说明单独制造记忆操作\n"
+        "  - retrieval_hint 不得推断 content 未支持的新事实；不确定时省略\n"
         "  - update 操作中 tags 字段语义：\n"
         "    · 不写 tags 字段 = 保留原有标签\n"
         '    · 写 "tags": [] = 清空所有标签\n'

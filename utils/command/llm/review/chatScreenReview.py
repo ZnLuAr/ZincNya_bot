@@ -56,7 +56,10 @@ async def handleChatScreenReviewCommand(command: str, bot, ui) -> dict | None:
 
     if command == ":ra":
         try:
-            await reviewSend(bot, item)
+            success = await reviewSend(bot, item)
+            if not success:
+                queue.put_nowait(item)
+                ui.showStatus(" 记忆目标已刷新，请重新确认")
         except Exception as e:
             queue.put_nowait(item)
             ui.showStatus(f" 操作失败喵：{e}")

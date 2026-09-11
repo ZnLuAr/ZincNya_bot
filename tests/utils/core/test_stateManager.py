@@ -36,3 +36,22 @@ class TestInteractiveChatID:
         sm.setInteractiveChatID("123")
         sm.setInteractiveChatID(None)
         assert sm.getInteractiveChatID() is None
+
+
+class TestMemoryRuntime:
+
+    def test_default_set_and_clear(self, sm):
+        runtime = object()
+
+        assert sm.getMemoryRuntime() is None
+        sm.setMemoryRuntime(runtime)
+        assert sm.getMemoryRuntime() is runtime
+        sm.setMemoryRuntime(None)
+        assert sm.getMemoryRuntime() is None
+
+    def test_stats_only_report_presence(self, sm):
+        runtime = object()
+
+        assert sm.getStats()["hasMemoryRuntime"] is False
+        sm.setMemoryRuntime(runtime)
+        assert sm.getStats()["hasMemoryRuntime"] is True

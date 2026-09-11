@@ -23,6 +23,7 @@ from config import LLM_REVIEW_FEEDBACK_MAX_LENGTH, LLM_MEMORY_MAX_ACTIONS, TG_ME
 
 from utils.core.logger import LogLevel
 from utils.llm.memory.action import MemoryAction
+from utils.llm.memory.types import MemoryQuery, MemoryTurn
 from utils.llm.messagePrep import DisplayBlocks
 from utils.llm.review import (
     DispatchTarget,
@@ -36,7 +37,10 @@ from utils.llm.review import (
     dispatchMemoryActionsToConsole,
     dispatchTextReply,
     extractValidatedMemoryActions,
+    formatReviewItemText,
+    _approveMemoryReview,
     queueMemoryActionsToConsole,
+    reviewEditSubmit,
     reviewRetry,
     reviewRetryWithFeedback,
 )
@@ -182,6 +186,70 @@ class TestQueueMemoryActionsToConsole:
         assert firstKwargs["action"]["content"] == "A"
 
 
+@pytest.mark.asyncio
+@patch("utils.llm.review.logSystemEvent", new_callable=AsyncMock)
+@patch("utils.llm.review.logAction", new_callable=AsyncMock)
+@patch("utils.llm.review.executeAction", new_callable=AsyncMock, return_value=True)
+@patch("utils.llm.review.addMemoryReviewItem")
+@patch("utils.llm.memory.action.getMemoryByID", new_callable=AsyncMock)
+async def test_consoleRetrySnapshotsUpdateAndDeleteTargets(
+    mockGetMemory, mockAdd, mockExecute, mockLogAction, mockLogSystemEvent,
+):
+    targets = {
+        11: {
+            "id": 11,
+            "scope_type": "user",
+            "scope_id": "42",
+            "content": "用户事实",
+            "tags": ["事实"],
+            "retrieval_hint": None,
+            "enabled": True,
+            "priority": 1,
+            "mode": "contextual",
+            "source": "inferred",
+        },
+        12: {
+            "id": 12,
+            "scope_type": "global",
+            "scope_id": "global",
+            "content": "全局事实",
+            "tags": [],
+            "retrieval_hint": None,
+            "enabled": True,
+            "priority": 0,
+            "mode": "pinned",
+            "source": "inferred",
+        },
+    }
+    mockGetMemory.side_effect = lambda memoryID: targets[memoryID]
+    actions = [
+        MemoryAction(
+            action="update", scopeType="user", scopeID="42", memoryID=11,
+            content="更新后的事实",
+        ),
+        MemoryAction(
+            action="delete", scopeType="global", scopeID="global", memoryID=12,
+        ),
+    ]
+
+    await dispatchMemoryActionsToConsole(
+        actions, chatID="chat", originalMsg="触发消息", opsID="ops", userID="user",
+        logLabel="console retry",
+    )
+
+    assert mockAdd.call_count == 2
+    payloads = [call.kwargs["action"] for call in mockAdd.call_args_list]
+    assert all(payload.get("targetState") for payload in payloads)
+
+    for payload in payloads:
+        assert await _approveMemoryReview({"kind": "memory", "action": payload}) is True
+
+    assert mockExecute.await_count == 2
+    for call, payload in zip(mockExecute.await_args_list, payloads):
+        assert call.kwargs["humanApproved"] is True
+        assert call.kwargs["expectedState"] == payload["targetState"]
+
+
 # ===========================================================================
 # reviewRetryWithFeedback
 # ===========================================================================
@@ -301,6 +369,30 @@ class TestReviewRetryWithFeedback:
         assert result["reply"] == "新回复"
         mockGenerate.assert_awaited_once()
 
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    @patch("utils.llm.review.generateReply", new_callable=AsyncMock)
+    async def test_feedback_only_updates_query_feedback_text(self, mockGenerate, mockLogAction):
+        mockGenerate.return_value = "新回复"
+        originalQuery = MemoryQuery(
+            turns=(MemoryTurn(currentText="当前", replyText="引用"),),
+            history=({"content": "历史"},),
+        )
+        item = {
+            "originalMsg": "msg",
+            "chatID": "123",
+            "includeContext": False,
+            "memoryQuery": originalQuery,
+        }
+
+        result = await reviewRetryWithFeedback(item, "  补充条件  ")
+
+        retriedQuery = mockGenerate.await_args.kwargs["memoryQuery"]
+        assert retriedQuery.turns == originalQuery.turns
+        assert retriedQuery.history == originalQuery.history
+        assert retriedQuery.feedbackText == "补充条件"
+        assert originalQuery.feedbackText == ""
+        assert result["memoryQuery"] is retriedQuery
+
 
 
 
@@ -373,6 +465,25 @@ class TestReviewRetry:
         second = await reviewRetry(first, memoryDispatcher=spy)
         assert second["memoryFailedCount"] == 0
 
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    @patch("utils.llm.review.generateReply", new_callable=AsyncMock)
+    async def test_retry_reuses_original_memory_query(self, mockGenerate, mockLogAction):
+        mockGenerate.return_value = "新回复"
+        memoryQuery = MemoryQuery(
+            turns=(MemoryTurn(currentText="当前", replyText="引用"),),
+        )
+        item = {
+            "originalMsg": "原文",
+            "chatID": "123",
+            "includeContext": False,
+            "memoryQuery": memoryQuery,
+        }
+
+        result = await reviewRetry(item)
+
+        assert mockGenerate.await_args.kwargs["memoryQuery"] is memoryQuery
+        assert result["memoryQuery"] is memoryQuery
+
 
 
 
@@ -411,6 +522,40 @@ class TestDispatchMemoryActions:
         )
         assert mockExec.await_count == 2
         spy.assert_not_called()
+
+    @patch("utils.llm.review.buildMemoryActionReviewPayload", new_callable=AsyncMock)
+    @patch("utils.llm.review.executeAction", new_callable=AsyncMock)
+    @patch("utils.llm.review.getMemoryAutoApprove", return_value=True)
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    async def test_autoapproveStillRoutesPinnedActionToHuman(
+        self, mockLogAction, mockAuto, mockExec, mockBuild,
+    ):
+        mockExec.return_value = True
+        mockBuild.return_value = {"action": "add", "mode": "pinned"}
+        sendReview = AsyncMock()
+        actions = [
+            MemoryAction(
+                action="add", scopeType="global", scopeID="global",
+                content="普通事实", mode="contextual",
+            ),
+            MemoryAction(
+                action="add", scopeType="global", scopeID="global",
+                content="常驻事实", mode="pinned",
+            ),
+        ]
+
+        await dispatchMemoryActions(
+            actions,
+            autoMode="on",
+            opsList=["1"],
+            chatID=1,
+            originalMsg="msg",
+            userID=1,
+            sendTGMemoryReview=sendReview,
+        )
+
+        mockExec.assert_awaited_once_with(actions[0], humanApproved=False)
+        sendReview.assert_awaited_once_with({"action": "add", "mode": "pinned"})
 
     @patch("utils.llm.review.logSystemEvent", new_callable=AsyncMock)
     @patch("utils.llm.review.getMemoryAutoApprove", return_value=False)
@@ -483,6 +628,95 @@ class TestDispatchMemoryActions:
         spy.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_editingMemoryReviewClearsOldRetrievalHint():
+    item = {
+        "kind": "memory",
+        "action": {
+            "action": "update",
+            "content": "旧事实",
+            "retrievalHint": "旧检索说明",
+            "targetState": "state",
+        },
+    }
+
+    edited = await reviewEditSubmit(item, "新事实")
+
+    assert edited["action"]["content"] == "新事实"
+    assert edited["action"]["retrievalHint"] == ""
+    assert edited["action"]["targetState"] == "state"
+
+
+@pytest.mark.asyncio
+async def test_editingMemoryReviewDoesNotLogEditedPrivateText():
+    secret = "绝密编辑正文 secret-hint-42"
+    item = {
+        "kind": "memory",
+        "action": {
+            "action": "update",
+            "scopeType": "user",
+            "scopeID": "42",
+            "memoryID": 7,
+            "content": "旧事实",
+            "retrievalHint": "旧检索说明",
+            "targetState": "state",
+        },
+    }
+
+    with patch("utils.llm.review.logAction", new_callable=AsyncMock) as mockLog:
+        edited = await reviewEditSubmit(item, secret)
+
+    assert edited["action"]["content"] == secret
+    loggedText = " ".join(
+        str(argument)
+        for call in mockLog.await_args_list
+        for argument in (*call.args, *call.kwargs.values())
+    )
+    assert secret not in loggedText
+    assert "secret-hint-42" not in loggedText
+    assert "scope=user:42" in loggedText
+    assert "id=#7" in loggedText
+
+
+@pytest.mark.asyncio
+async def test_failedMemoryApprovalRefreshesTargetSnapshot():
+    item = {
+        "kind": "memory",
+        "action": {
+            "action": "update",
+            "scopeType": "user",
+            "scopeID": "42",
+            "memoryID": 7,
+            "content": "拟议事实",
+            "targetState": "old-state",
+        },
+    }
+    refreshed = {
+        **item["action"],
+        "originalContent": "当前事实",
+        "targetState": "new-state",
+    }
+
+    with (
+        patch(
+            "utils.llm.review.executeAction",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "utils.llm.review.buildMemoryActionReviewPayload",
+            new_callable=AsyncMock,
+            return_value=refreshed,
+        ) as mockBuild,
+        patch("utils.llm.review.logAction", new_callable=AsyncMock),
+    ):
+        success = await _approveMemoryReview(item)
+
+    assert success is False
+    assert item["action"] == refreshed
+    mockBuild.assert_awaited_once()
+
+
 
 
 # ===========================================================================
@@ -534,13 +768,14 @@ def _target():
     return DispatchTarget(chatID="100", userID=42, username="cur", triggerMsgID=77)
 
 
-def _generated(reply="回复内容", memoryActions=None):
+def _generated(reply="回复内容", memoryActions=None, memoryQuery=None):
     return GeneratedOutput(
         reply=reply,
         memoryActions=memoryActions or [],
         displayOriginalMsg="原始消息",
         includeContext=False,
         urlContexts=None,
+        memoryQuery=memoryQuery,
     )
 
 
@@ -613,8 +848,10 @@ class TestDispatchTextReply:
     async def test_console_mode_queues_item(self, mockAdd, mockLog):
         """console 分支：addReviewItem 透传 + 👀"""
         sendReaction = AsyncMock()
+        memoryQuery = MemoryQuery(turns=(MemoryTurn(currentText="当前"),))
         await dispatchTextReply(
-            _generated(), target=_target(), autoMode="console", opsList=["9", "2"], bot=MagicMock(),
+            _generated(memoryQuery=memoryQuery),
+            target=_target(), autoMode="console", opsList=["9", "2"], bot=MagicMock(),
             sendReaction=sendReaction,
         )
 
@@ -624,6 +861,7 @@ class TestDispatchTextReply:
         assert kwargs["opsID"] == "9"                 # 首个 ops
         assert kwargs["userID"] == 42
         assert kwargs["includeContext"] is False
+        assert kwargs["memoryQuery"] is memoryQuery
         sendReaction.assert_awaited_once_with("👀")
 
     @patch("utils.llm.review.logAction", new_callable=AsyncMock)
@@ -813,6 +1051,34 @@ class TestRenderMemoryReviewCard:
         assert "ADD" in text
         assert "global" in text
         assert "记住这件事" in text
+        assert "优先级</b>：0" in text
+
+    def test_update_card_shows_current_and_proposed_values(self):
+        action = {
+            "action": "update",
+            "scopeType": "global",
+            "scopeID": "global",
+            "memoryID": 9,
+            "originalContent": "当前事实",
+            "content": "拟议事实",
+            "originalMode": "contextual",
+            "mode": "pinned",
+        }
+
+        text, _ = renderMemoryReviewCard(action, "触发", 1)
+
+        assert "当前内容</b>：当前事实" in text
+        assert "新内容</b>：拟议事实" in text
+        assert "当前模式</b>：contextual" in text
+        assert "新模式</b>：pinned" in text
+
+    def test_console_memory_text_shows_priority_zero(self):
+        text = formatReviewItemText({
+            "kind": "memory",
+            "action": self._addAction(),
+            "originalMsg": "触发",
+        })
+        assert "优先级: 0" in text
 
     def test_memory_card_has_edit_but_no_fb(self):
         """记忆卡片只有 :edit 提示，无 :fb（memory 不支持 :fb）"""

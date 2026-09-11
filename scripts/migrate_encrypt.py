@@ -2,14 +2,15 @@
 """
 scripts/migrate_encrypt.py
 
-一次性迁移脚本：把 llmMemory.db / todos.db 中【历史明文】的 content 列
+一次性迁移脚本：把 llmMemory.db / todos.db 中【历史明文】的隐私列
 加密为 Fernet 密文（与 utils/core/crypto.py 共用 data/.chatKey）。
 
 ================================================================================
 背景
 ================================================================================
 
-加密改造前，llmMemory.db（长期记忆）和 todos.db（用户待办）的 content 列是明文。
+加密改造前，llmMemory.db（长期记忆）和 todos.db（用户待办）的 content 列是明文；
+memory_entries 的可选 retrieval_hint 列也可能存在历史明文。
 改造后，写入路径已自动加密，但库里已有的历史行仍是明文，读取时会被
 _decryptContent 当作"解密失败"走兜底分支——能用但不彻底。本脚本把这些历史明文
 就地加密回写，使全库一致。
@@ -50,9 +51,10 @@ from config import LLM_MEMORY_DB_PATH, TODOS_DB_PATH
 from utils.core.crypto import encryptText, decryptText
 
 
-# (db 路径, 表名, 主键列, content 列) —— content 列已在改造中改为 BLOB
+# (db 路径, 表名, 主键列, 隐私列)
 TARGETS = [
     (LLM_MEMORY_DB_PATH, "memory_entries", "id", "content"),
+    (LLM_MEMORY_DB_PATH, "memory_entries", "id", "retrieval_hint"),
     (TODOS_DB_PATH, "todos", "id", "content"),
 ]
 
@@ -79,6 +81,11 @@ def _toPlaintext(value) -> str:
     return str(value)
 
 
+def _columnExists(cursor, table: str, column: str) -> bool:
+    """检查旧数据库是否存在待迁移列，使迁移兼容不同 schema 版本。"""
+    return any(row[1] == column for row in cursor.execute(f"PRAGMA table_info({table})").fetchall())
+
+
 def migrateTable(dbPath: str, table: str, pkCol: str, contentCol: str, dryRun: bool) -> tuple[int, int]:
     """
     迁移单个表的 content 列。
@@ -96,6 +103,9 @@ def migrateTable(dbPath: str, table: str, pkCol: str, contentCol: str, dryRun: b
 
     try:
         cursor = conn.cursor()
+        if not _columnExists(cursor, table, contentCol):
+            print(f"  [跳过] 表 {table} 没有列 {contentCol}")
+            return (0, 0)
         cursor.execute(f"SELECT {pkCol}, {contentCol} FROM {table}")
         rows = cursor.fetchall()
 
@@ -125,12 +135,12 @@ def migrateTable(dbPath: str, table: str, pkCol: str, contentCol: str, dryRun: b
 
 
 def main():
-    parser = argparse.ArgumentParser(description="加密 llmMemory / todos 的历史明文 content")
+    parser = argparse.ArgumentParser(description="加密 llmMemory / todos 的历史明文隐私字段")
     parser.add_argument("--dry-run", action="store_true", help="只统计，不写入")
     args = parser.parse_args()
 
     mode = "DRY-RUN（不写入）" if args.dry_run else "实际执行"
-    print(f"=== content 加密迁移 [{mode}] ===\n")
+    print(f"=== memory 隐私字段加密迁移 [{mode}] ===\n")
 
     totalEncrypted = 0
     for dbPath, table, pkCol, contentCol in TARGETS:

@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS memory_entries (
     enabled INTEGER NOT NULL DEFAULT 1,
     priority INTEGER NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT 'manual',
+    mode TEXT NOT NULL DEFAULT 'contextual',
+    retrieval_hint BLOB,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

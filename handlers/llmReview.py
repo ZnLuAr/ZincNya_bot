@@ -31,6 +31,7 @@ from utils.llm.review import (
     renderMemoryReviewCard,
     renderOriginalMsgBlock,
     renderReviewCard,
+    refreshMemoryReviewItem,
     reviewRetry,
     reviewRetryWithFeedback,
     truncateCardText,
@@ -66,7 +67,25 @@ def _reviewMsgIDFromKey(key: str) -> str:
     return key.rsplit("_", 1)[-1]
 
 
-def _putReplyReview(bot_data: dict, *, chatID, reviewMsgID, reply, originalMsg, opsID, triggerMsgID, userID, includeContext, urlContexts=None, autoMode=None, displayBlocks=None) -> str:
+def _putReplyReview(
+    bot_data: dict,
+    *,
+    chatID,
+    reviewMsgID,
+    reply,
+    originalMsg,
+    opsID,
+    triggerMsgID,
+    userID,
+    includeContext,
+    urlContexts=None,
+    autoMode=None,
+    displayBlocks=None,
+    memoryQuery=None,
+) -> str:
+    """保存 Telegram 回复审核项及 message ID 反向索引。"""
+    # bot_data 只保存审核期间的短生命周期状态：key 指向 reply 审核项，
+    # 审核卡片的 message_id 由 callback 反查；重启后状态丢失是可接受的。
     key = _replyReviewKey(chatID, reviewMsgID)
     bot_data[key] = {
         "reply": reply,
@@ -79,6 +98,7 @@ def _putReplyReview(bot_data: dict, *, chatID, reviewMsgID, reply, originalMsg, 
         "urlContexts": urlContexts or [],
         "autoMode": autoMode,
         "displayBlocks": displayBlocks,
+        "memoryQuery": memoryQuery,
         "createdAt": time.time(),
     }
     bot_data[_editIndexKey(reviewMsgID)] = key
@@ -86,6 +106,9 @@ def _putReplyReview(bot_data: dict, *, chatID, reviewMsgID, reply, originalMsg, 
 
 
 def _putMemoryReview(bot_data: dict, *, chatID, reviewMsgID, action, originalMsg, opsID, userID, displayBlocks=None) -> str:
+    """保存 Telegram memory 审核项及其独立的反向索引。"""
+    # memory 审核与 reply 审核使用独立 key 前缀，避免同一聊天中两个审核卡片
+    # 的编辑/批准回调互相覆盖；action 内含 targetState 供批准时做乐观锁校验。
     key = _memoryReviewKey(chatID, reviewMsgID)
     bot_data[key] = {
         "action": action,
@@ -144,6 +167,8 @@ async def handleEditReply(message, context: ContextTypes.DEFAULT_TYPE) -> bool:
             if actionData.get("action") not in ("add", "update"):
                 return True
             context.bot_data[reviewKey]["action"]["content"] = newText
+            # hint 是从原正文派生的检索元数据；人工改写正文后旧 hint 不再可信。
+            context.bot_data[reviewKey]["action"]["retrievalHint"] = ""
             textEdit, markupEdit = renderMemoryReviewCard(
                 context.bot_data[reviewKey]["action"], reviewData["originalMsg"], chatIDEdit,
                 displayBlocks=reviewData.get("displayBlocks"),
@@ -180,11 +205,13 @@ async def sendReviewMessage(
     urlContexts: list[dict] | None = None,
     autoMode: str | None = None,
     displayBlocks=None,
+    memoryQuery=None,
 ):
     """
     发送 Telegram 审核消息（带 inline keyboard），并存储审核状态到 bot_data
 
     displayBlocks: 审核卡结构化展示块（None 走退化路径）
+    memoryQuery: 首生成的结构化检索轮次，随审核项保存供 retry 复用
     """
     # 一次发送带 keyboard（callback_data 不含 msgID，无需先发再改）
     text, markup = renderReviewCard(originalMsg, reply, chatID, displayBlocks=displayBlocks)
@@ -205,6 +232,7 @@ async def sendReviewMessage(
         urlContexts=urlContexts,
         autoMode=autoMode,
         displayBlocks=displayBlocks,
+        memoryQuery=memoryQuery,
     )
 
 
@@ -420,6 +448,7 @@ async def handleReviewCallback(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         await safeEditMessage(query.message, textRetry, reply_markup=markupRetry, parse_mode="HTML")
         context.bot_data[key]["reply"] = newItem["reply"]
+        context.bot_data[key]["memoryQuery"] = newItem.get("memoryQuery")
         await logAction("System", f"LLM 生成内容审核重试：{chatID}", f"原文：{reviewData['originalMsg']}", LogLevel.INFO, LogChildType.WITH_CHILD)
         await logAction("System", "", f"生成的消息：{newItem['reply']}", LogLevel.INFO, LogChildType.LAST_CHILD)
 
@@ -433,7 +462,7 @@ async def handleReviewCallback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 @handleTelegramErrors(errorReply="……诶、操作好像出了点问题喵……")
 async def handleMemoryReviewCallback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """处理记忆审核按钮点击（批准 / 取消）。无权用户点击时静默忽略。"""
+    """处理记忆审核按钮；批准使用目标快照，冲突时刷新卡片并要求再次确认。"""
     query = update.callback_query
     clickerID = str(query.from_user.id) if query.from_user else None
     if not clickerID:
@@ -467,23 +496,52 @@ async def handleMemoryReviewCallback(update: Update, context: ContextTypes.DEFAU
 
     if action == "approve":
         memAction = MemoryAction.fromDict(actionData)
-        success = await executeAction(memAction)
-        status = "成功" if success else "失败"
+        success = await executeAction(
+            memAction,
+            humanApproved=True,
+            expectedState=actionData.get("targetState"),
+        )
+        if not success:
+            refreshed = await refreshMemoryReviewItem(reviewData)
+            warning = (
+                "目标状态已变化，需要核对当前内容后再次批准"
+                if refreshed else
+                "操作不能成功执行，目标可能已删除或不再允许修改"
+            )
+            retryText, retryMarkup = renderMemoryReviewCard(
+                reviewData["action"],
+                reviewData["originalMsg"],
+                chatID,
+                suffix=f"\n\n⚠️ {warning}",
+                displayBlocks=reviewData.get("displayBlocks"),
+            )
+            await safeEditMessage(
+                query.message,
+                retryText,
+                reply_markup=retryMarkup,
+                parse_mode="HTML",
+            )
+            await logAction(
+                "System",
+                "LLM 记忆操作需要重新确认",
+                f"action={actionData.get('action')}, scope={actionData.get('scopeType')}:{actionData.get('scopeID', '')}, id={actionData.get('memoryID')}",
+                LogLevel.WARNING,
+                LogChildType.WITH_ONE_CHILD,
+            )
+            return
 
         resultText = (
-            f"[记忆操作已批准 · {escapeHtml(status)}]\n\n"
+            "[记忆操作已批准 · 成功]\n\n"
             f"<b>操作</b>：{escapeHtml(actionData.get('action', '?').upper())}\n"
             f"<b>范围</b>：{escapeHtml(actionData.get('scopeType', '?'))}:{escapeHtml(actionData.get('scopeID', 'global'))}\n"
         )
-        if actionData.get("content"):
-            resultText += f"<b>内容</b>：{escapeHtml(truncateCardText(actionData['content'], _RESULT_CONTENT_LEN))}\n"
         await safeEditMessage(query.message, truncateCardText(resultText, _TG_MAX_LEN), parse_mode="HTML")
 
         _deleteReviewEntry(context.bot_data, key)
         await logAction(
             "System",
-            f"LLM 记忆操作审核通过 ({status})",
-            f"action={actionData.get('action')}, scope={actionData.get('scopeType')}:{actionData.get('scopeID', '')}, content={str(actionData.get('content', ''))[:_LOG_LEN]}",
+            "LLM 记忆操作审核通过 (成功)",
+            f"action={actionData.get('action')}, scope={actionData.get('scopeType')}:{actionData.get('scopeID', '')}, id={actionData.get('memoryID')}",
             LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
         )
 
@@ -627,6 +685,7 @@ async def handleFeedbackRetry(message, context: ContextTypes.DEFAULT_TYPE) -> bo
         parse_mode="HTML",
     )
     context.bot_data[reviewKey]["reply"] = newItem["reply"]
+    context.bot_data[reviewKey]["memoryQuery"] = newItem.get("memoryQuery")
     await message.delete()
 
     await logAction(

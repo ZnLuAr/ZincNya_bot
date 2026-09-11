@@ -63,6 +63,7 @@ docs/internal
 download/
 temp/
 tmp/
+.cache/llmMemory/
 
 
 # ============================================================

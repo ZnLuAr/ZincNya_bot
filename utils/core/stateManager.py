@@ -36,6 +36,7 @@ class StateManager:
         self._interactiveMode: bool = False
         self._interactiveChatID: Optional[str] = None
         self._messageQueue: Optional[asyncio.Queue] = None
+        self._memoryRuntime = None
 
         # 控制台输出回调（用于聊天界面接管 logger 输出）
         self._consoleOutputCallback: Optional[Callable[[str], None]] = None
@@ -202,6 +203,18 @@ class StateManager:
             return self._messageQueue
 
 
+    def setMemoryRuntime(self, runtime):
+        """设置 LLM memory 运行时引用；None 表示清除"""
+        with self._stateLock:
+            self._memoryRuntime = runtime
+
+
+    def getMemoryRuntime(self):
+        """获取可选的 LLM memory 运行时引用"""
+        with self._stateLock:
+            return self._memoryRuntime
+
+
     # ========================================================================
     # 统计信息
     # ========================================================================
@@ -212,6 +225,7 @@ class StateManager:
             return {
                 "interactiveMode": self._interactiveMode,
                 "hasMessageQueue": self._messageQueue is not None,
+                "hasMemoryRuntime": self._memoryRuntime is not None,
             }
 
 

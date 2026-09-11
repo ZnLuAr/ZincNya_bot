@@ -55,6 +55,7 @@ _DEFAULT_CONFIG = {
     "groupTriggerKeywords": [],
     "memoryEnabled": False,
     "memoryAutoApprove": False,
+    "memoryRetrievalMode": "legacy",
     "urlReadEnabled": False,
     "urlReadMaxUrls": 3,
     "urlReadMaxBytes": 512 * 1024,
@@ -269,6 +270,28 @@ def getMemoryAutoApprove() -> bool:
 
 def setMemoryAutoApprove(enabled: bool):
     _setConfig(memoryAutoApprove=enabled)
+
+
+def getMemoryRetrievalMode() -> str:
+    """读取检索模式；未知配置值按兼容模式 `legacy` 处理。"""
+    mode = loadLLMConfig().get("memoryRetrievalMode", "legacy")
+    return mode if mode in {"legacy", "hybrid"} else "legacy"
+
+
+def setMemoryRetrievalMode(mode: str):
+    """保存检索模式，并尝试唤醒已注册 runtime 重新评估工作状态。"""
+    mode = str(mode).strip().lower()
+    if mode not in {"legacy", "hybrid"}:
+        raise ValueError(f"无效的 memoryRetrievalMode：{mode}")
+    _setConfig(memoryRetrievalMode=mode)
+    # 配置持久化不依赖 runtime；通知失败时，后台仍会在下一次正常唤醒后读取新值。
+    try:
+        from utils.core.stateManager import getStateManager
+        runtime = getStateManager().getMemoryRuntime()
+        if runtime is not None:
+            runtime.notifyModeChanged()
+    except Exception:
+        pass
 
 
 
@@ -557,4 +580,3 @@ def setKnowledgeMinScore(value: float):
     if not isinstance(value, (int, float)) or value < 0:
         raise ValueError("knowledgeMinScore 必须是大于等于 0 的数")
     _setConfig(knowledgeMinScore=float(value))
-

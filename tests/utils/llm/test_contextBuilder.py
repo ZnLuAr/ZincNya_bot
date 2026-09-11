@@ -14,6 +14,7 @@ from utils.llm.contextBuilder import (
     buildKnowledgeContext,
     buildConversationContext,
 )
+from utils.llm.memory.types import MemoryQuery, MemoryRetrievalResult, MemoryTurn
 
 
 # ============================================================================
@@ -88,37 +89,59 @@ def test_format_history_string_timestamp():
 @pytest.mark.asyncio
 async def test_build_structured_memory_context_empty():
     """无记忆返回空字符串"""
-    with patch("utils.llm.contextBuilder.retrieveMemories", new_callable=AsyncMock) as mock_retrieve:
-        with patch("utils.llm.contextBuilder.logSystemEvent", new_callable=AsyncMock):
-            mock_retrieve.return_value = []
+    retrievalResult = MemoryRetrievalResult(
+        contextBlock="",
+        diagnostics={"selectedCount": 0},
+    )
+    with (
+        patch(
+            "utils.llm.contextBuilder.retrieveMemoryContext",
+            new_callable=AsyncMock,
+            return_value=retrievalResult,
+        ) as mockRetrieve,
+        patch("utils.llm.contextBuilder.logSystemEvent", new_callable=AsyncMock),
+    ):
+        result = await buildStructuredMemoryContext(
+            chatID="test_chat",
+            userID=123,
+            sessionID=456,
+        )
 
-            result = await buildStructuredMemoryContext(
-                chatID="test_chat",
-                userID=123,
-                sessionID=456
-            )
-
-            assert result == ""
+    assert result == ""
+    assert mockRetrieve.await_args.kwargs["query"] == MemoryQuery()
 
 
 @pytest.mark.asyncio
 async def test_build_structured_memory_context_with_memories():
-    """有记忆时返回格式化块"""
-    with patch("utils.llm.contextBuilder.retrieveMemories", new_callable=AsyncMock) as mock_retrieve:
-        with patch("utils.llm.contextBuilder.buildMemoryContextBlock") as mock_build:
-            with patch("utils.llm.contextBuilder.logSystemEvent", new_callable=AsyncMock):
-                mock_retrieve.return_value = [{"id": 1, "content": "test memory"}]
-                mock_build.return_value = "Memory content"
+    """统一检索入口产出的预算内块原样返回，不再二次包装。"""
+    query = MemoryQuery(turns=(MemoryTurn(currentText="当前问题"),))
+    contextBlock = "<UNTRUSTED_MEMORY>\nMemory content\n</UNTRUSTED_MEMORY>"
+    retrievalResult = MemoryRetrievalResult(
+        items=[{"id": 1, "content": "test memory"}],
+        contextBlock=contextBlock,
+        diagnostics={"selectedCount": 1},
+    )
+    with (
+        patch(
+            "utils.llm.contextBuilder.retrieveMemoryContext",
+            new_callable=AsyncMock,
+            return_value=retrievalResult,
+        ) as mockRetrieve,
+        patch("utils.llm.contextBuilder.logSystemEvent", new_callable=AsyncMock),
+    ):
+        result = await buildStructuredMemoryContext(
+            chatID="test_chat",
+            userID=123,
+            query=query,
+            llmConfig={"memoryRetrievalMode": "hybrid"},
+        )
 
-                result = await buildStructuredMemoryContext(
-                    chatID="test_chat",
-                    userID=123
-                )
-
-                assert "<UNTRUSTED_MEMORY>" in result
-                assert "</UNTRUSTED_MEMORY>" in result
-                assert "Memory content" in result
-                assert "低信任长期记忆" in result
+    assert result == contextBlock
+    assert result.count("<UNTRUSTED_MEMORY>") == 1
+    assert mockRetrieve.await_args.kwargs["query"] is query
+    assert mockRetrieve.await_args.kwargs["llmConfig"] == {
+        "memoryRetrievalMode": "hybrid",
+    }
 
 
 # ============================================================================
@@ -165,6 +188,16 @@ async def test_build_history_context_limit():
         await buildHistoryContext("test_chat", limit=5)
 
         mock_load.assert_called_once_with("test_chat", limit=5)
+
+
+@pytest.mark.asyncio
+async def test_build_history_context_explicit_empty_snapshot_does_not_reload():
+    """显式空快照也是有效输入，不能误判后再次读取数据库。"""
+    with patch("utils.llm.contextBuilder.loadHistory", new_callable=AsyncMock) as mockLoad:
+        result = await buildHistoryContext("test_chat", history=[])
+
+    assert result == ""
+    mockLoad.assert_not_awaited()
 
 
 # ============================================================================
@@ -254,48 +287,130 @@ async def test_build_conversation_context_with_knowledge():
 
 @pytest.mark.asyncio
 async def test_build_conversation_context_include_context():
-    """includeContext=True 时包含 memory 和 history"""
-    with patch("utils.llm.contextBuilder.buildKnowledgeContext", new_callable=AsyncMock) as mock_knowledge:
-        with patch("utils.llm.contextBuilder.buildStructuredMemoryContext", new_callable=AsyncMock) as mock_memory:
-            with patch("utils.llm.contextBuilder.buildHistoryContext", new_callable=AsyncMock) as mock_history:
-                mock_knowledge.return_value = ""
-                mock_memory.return_value = "<UNTRUSTED_MEMORY>\nMemory\n</UNTRUSTED_MEMORY>"
-                mock_history.return_value = "<UNTRUSTED_HISTORY>\nHistory\n</UNTRUSTED_HISTORY>"
+    """一次历史快照同时进入 memory query 与 history renderer。"""
+    history = [
+        {
+            "timestamp": datetime(2026, 5, 26, 14, 30, 0),
+            "sender": "User",
+            "content": "History",
+        }
+    ]
+    memoryQuery = MemoryQuery(
+        turns=(MemoryTurn(currentText="Hello", replyText="Quoted"),),
+    )
+    llmConfig = {"memoryRetrievalMode": "hybrid"}
+    with (
+        patch(
+            "utils.llm.contextBuilder.buildKnowledgeContext",
+            new_callable=AsyncMock,
+            return_value="",
+        ),
+        patch(
+            "utils.llm.contextBuilder.loadHistory",
+            new_callable=AsyncMock,
+            return_value=history,
+        ) as mockLoad,
+        patch(
+            "utils.llm.contextBuilder.buildStructuredMemoryContext",
+            new_callable=AsyncMock,
+            return_value="<UNTRUSTED_MEMORY>\nMemory\n</UNTRUSTED_MEMORY>",
+        ) as mockMemory,
+        patch(
+            "utils.llm.contextBuilder.buildHistoryContext",
+            new_callable=AsyncMock,
+            return_value="<UNTRUSTED_HISTORY>\nHistory\n</UNTRUSTED_HISTORY>",
+        ) as mockHistory,
+    ):
+        result = await buildConversationContext(
+            userMessage="Hello",
+            chatID="test_chat",
+            userID=123,
+            sessionID=456,
+            includeContext=True,
+            llmConfig=llmConfig,
+            memoryQuery=memoryQuery,
+            telegramContext=None,
+        )
 
-                result = await buildConversationContext(
-                    userMessage="Hello",
-                    chatID="test_chat",
-                    userID=123,
-                    sessionID=456,
-                    includeContext=True,
-                    telegramContext=None,
-                )
+    assert "<UNTRUSTED_MEMORY>" in result
+    assert "<UNTRUSTED_HISTORY>" in result
+    mockLoad.assert_awaited_once_with("test_chat", limit=30)
+    retrievalQuery = mockMemory.await_args.kwargs["query"]
+    assert retrievalQuery.turns == memoryQuery.turns
+    assert retrievalQuery.history == tuple(history)
+    assert retrievalQuery.history[0] is not history[0]
+    assert mockMemory.await_args.kwargs["llmConfig"] is llmConfig
+    mockHistory.assert_awaited_once_with("test_chat", history=history)
 
-                assert "<UNTRUSTED_MEMORY>" in result
-                assert "<UNTRUSTED_HISTORY>" in result
-                mock_memory.assert_called_once()
-                mock_history.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_build_conversation_context_missing_query_uses_plain_user_message():
+    """兼容入口不反解析 prompt 展示标记，只构造一个普通 current turn。"""
+    userMessage = "[引用的消息]\n<@someone> 旧话\n\n[当前用户消息]\n<@me> 新话"
+    with (
+        patch(
+            "utils.llm.contextBuilder.buildKnowledgeContext",
+            new_callable=AsyncMock,
+            return_value="",
+        ),
+        patch(
+            "utils.llm.contextBuilder.loadHistory",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
+            "utils.llm.contextBuilder.buildStructuredMemoryContext",
+            new_callable=AsyncMock,
+            return_value="",
+        ) as mockMemory,
+        patch(
+            "utils.llm.contextBuilder.buildHistoryContext",
+            new_callable=AsyncMock,
+            return_value="",
+        ),
+    ):
+        await buildConversationContext(
+            userMessage=userMessage,
+            chatID="test_chat",
+            includeContext=True,
+            telegramContext=None,
+        )
+
+    retrievalQuery = mockMemory.await_args.kwargs["query"]
+    assert retrievalQuery.turns == (MemoryTurn(currentText=userMessage),)
 
 
 @pytest.mark.asyncio
 async def test_build_conversation_context_exclude_context():
     """includeContext=False 时不包含 memory 和 history"""
-    with patch("utils.llm.contextBuilder.buildKnowledgeContext", new_callable=AsyncMock) as mock_knowledge:
-        with patch("utils.llm.contextBuilder.buildStructuredMemoryContext", new_callable=AsyncMock) as mock_memory:
-            with patch("utils.llm.contextBuilder.buildHistoryContext", new_callable=AsyncMock) as mock_history:
-                mock_knowledge.return_value = ""
+    with (
+        patch(
+            "utils.llm.contextBuilder.buildKnowledgeContext",
+            new_callable=AsyncMock,
+            return_value="",
+        ),
+        patch("utils.llm.contextBuilder.loadHistory", new_callable=AsyncMock) as mockLoad,
+        patch(
+            "utils.llm.contextBuilder.buildStructuredMemoryContext",
+            new_callable=AsyncMock,
+        ) as mockMemory,
+        patch(
+            "utils.llm.contextBuilder.buildHistoryContext",
+            new_callable=AsyncMock,
+        ) as mockHistory,
+    ):
+        result = await buildConversationContext(
+            userMessage="Hello",
+            chatID="test_chat",
+            includeContext=False,
+            telegramContext=None,
+        )
 
-                result = await buildConversationContext(
-                    userMessage="Hello",
-                    chatID="test_chat",
-                    includeContext=False,
-                    telegramContext=None,
-                )
-
-                assert "<UNTRUSTED_MEMORY>" not in result
-                assert "<UNTRUSTED_HISTORY>" not in result
-                mock_memory.assert_not_called()
-                mock_history.assert_not_called()
+    assert "<UNTRUSTED_MEMORY>" not in result
+    assert "<UNTRUSTED_HISTORY>" not in result
+    mockLoad.assert_not_awaited()
+    mockMemory.assert_not_awaited()
+    mockHistory.assert_not_awaited()
 
 
 @pytest.mark.asyncio

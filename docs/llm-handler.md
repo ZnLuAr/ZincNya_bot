@@ -1,6 +1,6 @@
 # LLM Handler 架构文档
 
-> 最后更新：2026-08-25
+> 最后更新：2026-09-09
 >
 > Written by ZincNya~ ❤
 
@@ -27,7 +27,7 @@
   - [为什么三种 auto mode 不合并](#为什么三种-auto-mode-不合并)
 - [文件结构](#文件结构)
 - [处理流水线总览](#处理流水线总览)
-- [四个数据载体](#四个数据载体)
+- [数据载体与检索查询](#数据载体与检索查询)
 - [变量生命周期（谁在哪一步、叫什么名字）](#变量生命周期谁在哪一步叫什么名字)
 - [同步阶段：`handleLLMMessage`](#同步阶段handlellmmessage)
 - [后台阶段：`_runLLMPipeline`](#后台阶段_runllmpipeline)
@@ -128,8 +128,13 @@ utils/llm/
 │   ├── _guardrails.py  # SYSTEM_GUARDRAILS 安全规则
 │   └── _request.py     # 重试策略
 ├── memory/
+│   ├── types.py        # MemoryTurn / MemoryQuery 等跨入口数据契约
 │   ├── action.py       # 记忆操作解析、校验、执行
-│   ├── database.py     # memory_entries 存储与格式化
+│   ├── database.py     # memory_entries 存储、候选读取与 CRUD
+│   ├── lexical.py      # memory 专用词面评分
+│   ├── encoder.py      # 可选本地 embedding 编码器
+│   ├── retrieval.py    # 完整候选、准入、融合与字符预算
+│   ├── runtime.py      # 单编码器、增量索引与有界缓存
 │   └── ui.py           # Memory TUI 管理界面（控制台编辑器，非 TG 卡片）
 └── knowledge/
     ├── database.py     # knowledge_entries 存储
@@ -172,11 +177,11 @@ utils/llm/
 │                _runLLMPipeline (后台任务)              │
 │                                                         │
 │  1. sleep LLM_DEBOUNCE_SECONDS                          │
-│  2. 聚合 batch（合并多条 pending）                      │
+│  2. 聚合 batch（合并多条 pending，生成 memoryQuery）   │
 │  3. URL 读取（按意图和候选文本）                        │
 │  4. 构造 displayOriginalMsg（+ URL 摘要）               │
 │  5. typing action                                       │
-│  6. generateReply（传递 urlContexts / images）          │
+│  6. generateReply（传递 memoryQuery / URL / images）    │
 │  7. addRateLimit（仅成功时）                            │
 │  8. 从 reply 中解析并校验 memory actions                │
 │  9. 分发 output（文字回复 + 记忆操作）                  │
@@ -186,9 +191,10 @@ utils/llm/
 
 ---
 
-## 四个数据载体
+## 数据载体与检索查询
 
-一条消息从入口到分发，全程经由四个 frozen dataclass 传递（PTB-free，定义随域模块）：
+一条消息从入口到分发，全程经由四个阶段 frozen dataclass 传递（PTB-free，定义随域模块）。
+此外，memory 使用独立的 `MemoryTurn` / `MemoryQuery` 检索契约；它们保留检索所需的当前消息、原始引用和审核反馈，不把检索输入混进展示字符串。
 
 ```
 入口（handleLLMMessage）
@@ -203,11 +209,15 @@ DebouncedBatch         ← utils/llm/state.py
   ↓ _runLLMPipeline 生成输入
 GeneratedOutput        ← utils/llm/review.py（管线组装）
   ↓ dispatchGeneratedOutput（文字 / 记忆分流）
+
+检索线（与阶段载体并行）
+  PromptPayload.memoryTurn → 防抖 parts → DebouncedBatch.memoryQuery
+  → generateReply → buildConversationContext → retrieveMemoryContext
 ```
 
 为什么拆成四个而不是一个大对象：字段实际上是分阶段出现的——入口阶段只有消息文本（PromptPayload）与定位（DispatchTarget），在防抖窗口结束时聚合出批次（DebouncedBatch），直到生成完成才有产出（GeneratedOutput）。如果把这些都塞进一个大对象里，「哪些字段何时有效」这一点就变成隐性契约了。
 
-四个载体均为 `@dataclass(frozen=True, kw_only=True)`，以防字段顺序调整引发位置构造错位；frozen 则预防 in-flight 改写（需要更新字段时用 `dataclasses.replace`）。
+四个阶段载体均为 `@dataclass(frozen=True, kw_only=True)`，以防字段顺序调整引发位置构造错位；frozen 则预防 in-flight 改写（需要更新字段时用 `dataclasses.replace`）。`MemoryTurn` 与 `MemoryQuery` 同样是不可变纯数据对象，审核重试通过 `replace()` 追加反馈。
 
 **引用/当前的结构化拆分**（展示侧）：`ReplyContext`（messagePrep）在入口切分引用行/当前文本，`PromptPayload.replyLine/currentText` → 防抖缓冲 → `DebouncedBatch.displayPairs` → `GeneratedOutput.displayBlocks`（DisplayBlocks：prefix 标注行 + pairs 配对）→ 审核卡结构化渲染（渲染函数在 `utils/llm/review.py`：每条消息一个 blockquote，引用与当前消息**合并在同一块内**、以粗体小节「引用消息」「当前消息」区分——分块会在内容长短悬殊时右边缘参差，合块只留一条边缘）。prompt 字符串**不动**（含引用标记的 combinedText——「引用标记」指 `[引用的消息]` / `[当前用户消息]` 这对方括号标签，是 `injectReplyTextContext` 拼接引用文本时加的分隔，告诉 LLM 哪段是被引用的话、哪段是当前用户说的）；displayBlocks 为 None 时渲染层走退化路径（对 originalMsg 按引用标记切分，同样合并为双小节块）。TODO（Design A 预留）：prompt 组装未来改用 ReplyContext 结构化注入（引用可独立进上下文 tier / 针对性指令），见 messagePrep 模块 docstring。
 
@@ -219,7 +229,7 @@ GeneratedOutput        ← utils/llm/review.py（管线组装）
 
 一条用户消息的文本从 Telegram update 进来到审核卡出去，要换好几手名字。这一节是全链的变量流程图——在这里就可以查到哪个名字是谁在哪个环节的产物。
 
-文本处理有**两条线**，在 `preparePurePromptText` 分岔、在 `GeneratedOutput` 汇合。prompt 线的 `combinedText` 会被复用进展示线的 `displayOriginalMsg`（它含引用标记，恰好是退化路径解析的原料）——这是两条线唯一的交叉点，除此之外，两条线**不应混用**。
+文本处理有 prompt、展示和 memory 检索三条用途支路。prompt 与展示线在 `preparePurePromptText` 分岔、在 `GeneratedOutput` 汇合；prompt 的 `combinedText` 只在展示退化路径复用。memory 线始终沿 `MemoryTurn` / `MemoryQuery` 传递原始结构，不从前两条字符串支路反解析。
 
 ### 全链流程图
 
@@ -252,10 +262,10 @@ pureText
   | preparePurePromptText() 负责将这些产出打包
   ↓
 PromptPayload.pureText
-  | appendPendingMessage 入防抖缓冲（pureText 在此改名 text，共 7 键）
+  | appendPendingMessage 入防抖缓冲（pureText 在此改名 text，共 8 键）
   ↓
 缓冲 dict（text 键）
-  | collectDebouncedBatch：多消息换行 join
+    | collectDebouncedBatch：多消息换行 join，并生成 memoryQuery
   ↓
 DebouncedBatch.combinedText
   | _generateReplyOrNotify → generateReply（作为 userMessage，附上下文/图片/URL）
@@ -349,8 +359,9 @@ payload = preparePurePromptText(message, rawText, botUsername)  # -> PromptPaylo
 | `includeContext` | 是否启用记忆、历史对话上下文 | 入口阶段：`#context` 标记 + `memoryEnabled` 全局开关；`contextOnce` 单次标记在后续防抖聚合时才叠加（见「消息合并规则」） |
 | `urlIntentText` | 仅用来判断网页抓取意图 | 去 mention/`#context` 后的纯 current 文本 |
 | `urlCandidateText` | 用来提取全部待抓取链接 | `pureText`（去 mention）+ reply-to text/caption |
+| `memoryTurn` | memory 检索的结构化当前/引用配对 | 原始 current 文本、未截断 reply 文本及发送者；不含图片下载说明 |
 
-四类文本用途完全隔离，**不能混用**，在安全边界一节会再细说
+各类文本用途完全隔离，**不能混用**，在安全边界一节会再细说
 
 ---
 
@@ -372,11 +383,11 @@ async def _runLLMPipeline(*, debounceKey, target: DispatchTarget, context):
 | 序号 | 调用 | 备注 |
 |------|------|------|
 | 1 | `asyncio.sleep(LLM_DEBOUNCE_SECONDS)` | 用户连续发消息时会被新任务取消 |
-| 2 | `collectDebouncedBatch(debounceKey)` | 返回 `DebouncedBatch`（combinedText / includeContext / images / urlIntentText / urlCandidateText / displayPairs）；空则 return |
+| 2 | `collectDebouncedBatch(debounceKey)` | 返回 `DebouncedBatch`（combinedText / includeContext / images / URL 字段 / displayPairs / memoryQuery）；空则 return |
 | 3 | `readURLContextsForUserText(intentText, candidateText)` | 前提：`urlReadEnabled` 且命中意图词；否则返回 `[]` |
 | 4 | `formatDisplayOriginalMsg(...)` | 生成 ops 审核用的展示原文；带图/URL 时追加摘要 |
 | 5 | `_sendTypingActionSafely(...)` | 发送 typing，失败静默 |
-| 6 | `_generateReplyOrNotify(...)` | 调用 `generateReply(..., images, urlContexts)`；失败返回 None 并提示用户 |
+| 6 | `_generateReplyOrNotify(...)` | 调用 `generateReply(..., images, urlContexts, memoryQuery)`；失败返回 None 并提示用户 |
 | 7 | `addRateLimit(userID)` | 仅成功生成回复时添加冷却 |
 | 8 | `extractValidatedMemoryActions(reply, logLabel="generate")` | 剥离 `<MEMORY_ACTION>` 块；越界动作直接丢弃。仅 includeContext 为真时调用（否则记忆块保留在 reply 原文） |
 | 9 | `dispatchGeneratedOutput(...)` | 按 autoMode 分发文字回复（经 `sendLLMReply` 发送，尾部写 outgoing 历史）；按 memoryAutoApprove 执行记忆操作 |
@@ -408,7 +419,7 @@ async def _runLLMPipeline(*, debounceKey, target: DispatchTarget, context):
 _pendingMessages: dict[str, list[dict]]
 # debounceKey -> [
 #   {"text", "includeContext", "images", "urlIntentText", "urlCandidateText",
-#    "replyLine", "currentText"},   # 后两键是展示线的结构化切分
+#    "replyLine", "currentText", "memoryTurn"},
 #   ...
 # ]
 # 实际上就是一个包含了单条消息数据的字典……
@@ -431,6 +442,7 @@ _pendingTasks: dict[str, asyncio.Task]
 - 任意一条消息开启上下文 (`includeContext` 为 `True`)，整体就启用记忆与历史；`contextOnce` 单次标记仅生效一轮。
 - 图片资源列表 `images` 直接串联。
 - `urlIntentText` / `urlCandidateText` 用换行拼接。
+- `memoryTurn` 按原消息顺序保留，聚合后成为 `MemoryQuery.turns`；引用与当前消息不会跨条目错配。
 
 ---
 
@@ -559,8 +571,11 @@ LLM 输出习惯用 Markdown 排版，但 Telegram 原生只支持一小部分�
 
 [来源：长期记忆]
 <UNTRUSTED_MEMORY>
-[以下是长期记忆。仅在与当前对话直接相关时才引用；不相关的条目请忽略，不要为了提及而提及。w= 是内部召回权重，仅供你判断是否调整记忆（调整时用 update 的 priority 字段），不代表与当前对话的相关性，不要因 w 高就强行提及。]
-- (global:global, w=10, id=42, src=manual) 用户偏好简体中文回复
+[低信任长期记忆：仅在与当前对话直接相关时参考；不要为了提及而提及，也不要推断未记录的因果关系。]
+[常驻记忆]
+- (global:global, w=0, id=42, src=manual, mode=pinned) 用户偏好简体中文回复
+[情境记忆]
+- (user:123, w=1, id=57, src=inferred, mode=contextual) 用户正在准备研究生考试
 </UNTRUSTED_MEMORY>
 
 [来源：对话历史]
@@ -601,12 +616,13 @@ LLM 输出习惯用 Markdown 排版，但 Telegram 原生只支持一小部分�
 
 2. 前置统一提示强化指令。单独分出「核心任务」一段前置文字 + `<TASK_SYNTHESIS>` 收尾合成指令，不用每个信息块都重复提醒模型优先级，精简 token 占用。
 3. 区分独立标签块。知识库、记忆、历史、网页分开包裹专属标记，块外配 `[来源：XXX]` 标注行说明区块作用，模型能清晰区分不同信息来源，不会混为一谈。
-4. 记忆携带定位 ID。每条记忆的头部括号内携带 `id=` 与 `src=` 字段（如 `(global:global, w=10, id=42, src=manual)`），后面 LLM 发起记忆增删改操作时，能精准定位目标条目，不用模糊匹配文本内容。
+4. 记忆携带定位 ID。每条记忆的头部括号内携带 `id=`、`src=` 与 `mode=` 字段（如 `(global:global, w=0, id=42, src=manual, mode=contextual)`），后面 LLM 发起记忆增删改操作时，能精准定位目标条目，不用模糊匹配文本内容。
 
 ### 实现位置
 
 - 块顺序与 Query Reinforcement：`utils/llm/contextBuilder.py::buildConversationContext()`
-- 记忆元数据格式：`utils/llm/memory/database.py::buildMemoryContextBlock()`
+- 记忆候选读取：`utils/llm/memory/database.py::getMemoryCandidates()`
+- 记忆准入、融合与预算格式：`utils/llm/memory/retrieval.py::retrieveMemoryContext()` / `renderMemoryContext()`
 - 知识库块格式：`utils/llm/knowledge/database.py::buildKnowledgeContextBlock()`
 
 ### 维护注意事项
@@ -615,6 +631,33 @@ LLM 输出习惯用 Markdown 排版，但 Telegram 原生只支持一小部分�
 - **块标记不可合并**：`<UNTRUSTED_MEMORY>` / `<TRUSTED_KNOWLEDGE>` / `<UNTRUSTED_URL_CONTENT>` 语义不同，不能统一成单一 `<CONTEXT>` 标签，模型没法区分信息可信度；
 - **记忆 id 字段必须保留**：在每条记忆头部的括号里（`id=` 字段），`<MEMORY_ACTION>` 指令依赖它来修改记忆
 - **`[来源：…]` 标注行与块首低信任提示不可删除**：它们提供块含义与信任度说明，删掉会让 LLM 失去上下文类型信息
+
+### 记忆检索：完整候选、保守准入与有限预算
+
+memory 与知识库的职责不同：知识库可以接受“先召回、再作为备选参考”的语义断层；memory 会直接影响当前对话，因此不能用一次额外的生成调用让模型替检索器补救，也不能把低置信候选全部塞进 prompt。当前正式入口是 `retrieveMemoryContext()`，流程如下：
+
+1. 按当前 `chatID`、`userID`、`sessionID` 读取 global/chat/user/session scope 的全部 `enabled` 记录。这里不按 `priority` 或旧的数量上限截断，先解决候选池过早被挤满的问题。
+2. `mode=pinned` 的记录进入常驻分支，按 `priority`、scope 专属度和更新时间排序；`priority` 只参与准入后的排序，不是相关性门槛。`mode=contextual` 的记录进入情境分支。
+3. 情境分支独立计算三个通道：当前消息语义、当前消息加明确引用和短历史的辅助语义、当前消息加引用/反馈的 memory 专用词面分数。词面使用独立的 BM25 实现，`tags` 参与加权，`retrieval_hint` 只进入语义索引，不进入词面评分。
+4. 每个通道只接受自己的绝对校准阈值；未过阈值的记录没有该通道贡献，不用“本轮最高分比例”或 `priority` 放宽准入。通过通道的 rank 用 RRF 融合，同一事实在同一 scope 内去重。
+5. 语义通道由 `runtime.py` 中的可选本地 encoder 提供，不访问外部 embedding API，也不新增生成型 LLM 调用。模型未安装、向量未就绪、队列满或超时，保留已完成的严格词面结果与 pinned，不自动调用旧 priority 选择器冒充 hybrid。
+6. 渲染按完整包装后的 Unicode 字符数计算：memory 总块不超过 1500 字，pinned 段不超过 500 字；条目整条放入，超预算就跳过，不截断事实正文。渲染前按 ID 批量复核 enabled 与完整状态指纹，过期结果直接移除。
+
+当前配置默认是 `legacy`，所以线上默认行为仍是旧 priority 检索；只有管理员显式切换到 `hybrid` 才会执行新准入链。`retrievalCalibration.json` 目前没有数据集散列和阈值，`hybrid` 的语义/词面通道会报告不可用原因并降级，不能据此宣称语义质量已校准。
+
+### memory 查询输入与历史复用
+
+`MemoryTurn` 保存一条消息的 `currentText`、未截断 `replyText` 及双方发送者；展示给管理员的 `replyLine` 仍可截断，两者不能互相替代。多条防抖消息聚合为 `MemoryQuery.turns`，并按原顺序保留引用配对。`MemoryQuery.history` 与 `feedbackText` 只在需要时加入，图片 base64、URL 抓取结果和工具结果不进入 memory 查询。
+
+在 `includeContext=True` 时，`buildConversationContext()` 只调用一次 `loadHistory()`；同一份已加载列表同时供历史块和 memory 的短历史查询使用。memory 查询会在这份列表内过滤 reaction、时间窗外/时间异常和与本轮 current/reply 完全重复的文本，再取末尾窗口，不为凑条数再次读库。`includeContext=False` 不读历史、不读 memory、不启动查询编码。
+
+`MemoryQuery` 随回复审核项保存。普通 retry 复用原始 turns 并重新读取当时可用的短历史；`:fb` 反馈通过 `dataclasses.replace()` 写入 `feedbackText` 后再生成。这样 retry/feedback 不需要从管理员展示串反解析，也不会丢失原始引用配对。
+
+### 运行时更新与管理
+
+`addMemory()`、`updateMemory()`、`deleteMemory()` 统一通过 database CRUD 提交成功后通知当前 `MemoryRuntime`。运行时按 ID 合并待办，异步重读最新记录并增量编码；正文、tags 或 hint 变化会使旧指纹失效，priority/mode-only 更新不重复编码，删除/禁用不会被迟到矩阵复活。运行时不存在时，CRUD 仍正常完成，下一次对账或查询可恢复索引，不需要离线扩展脚本。
+
+管理入口包括 `/llm memory add|edit|list|del|ui`、`/llm memory retrieval legacy|hybrid` 和 `/llm memory status`。`status` 只读取模式、校准原因、条目计数、向量覆盖率、队列和最近降级原因，不创建 encoder；`-hint` 是可选的短检索说明，清空必须显式使用 `-clearhint`。说明不进入最终 memory prompt、日志或普通明文导出。
 
 ---
 
@@ -626,7 +669,8 @@ LLM 在回复里夹带 `<MEMORY_ACTION>` 标签、想要新增 / 修改 / 删除
 
 | 条件 | 行为 |
 |------|------|
-| `memoryAutoApprove == True` | `executeAction(...)` 立即执行，无需管理员插手 |
+| `memoryAutoApprove == True` 且操作不涉及 pinned | `executeAction(...)` 立即执行，无需管理员插手 |
+| `memoryAutoApprove == True` 但操作涉及 pinned | 不自动执行，仍进入下方 console 或 Telegram 人工审核分支 |
 | `memoryAutoApprove == False` 且 `autoMode == "console"` | 推入控制台审核队列，等管理员手动确认 |
 | `memoryAutoApprove == False` 且非 console | 给管理员推送 Telegram 记忆审核卡片 |
 | 无 ops 且非 auto-approve | 静默丢弃本次记忆操作，仅打印 `Warning` 日志 |
@@ -706,10 +750,15 @@ def register():
 /llm trigger mention|keyword 群聊触发模式
 /llm keyword add|del <词>    触发关键词
 /llm memory -on | -off       长期记忆
+/llm memory add ...           新增记忆（可选 -mode / -hint）
+/llm memory edit ...          编辑记忆（可选 -mode / -hint / -clearhint）
+/llm memory list              列出记忆及 mode/hint
+/llm memory retrieval legacy|hybrid
+/llm memory status            检索运行时诊断（只读）
 /llm url -on | -off          URL 读取
 ```
 
-像记忆管理、域名黑名单这类精细化限制，Telegram 指令不对外暴露，只能进到控制台里执行 /llm 查看修改，防止误触，把安全边界改乱。
+记忆管理命令仍受现有管理员权限保护。`retrieval hybrid` 只切换运行时配置，不安装模型；默认保持 `legacy`。`status` 不输出正文或 hint，也不会因为查看状态而启动编码器。
 
 ---
 
@@ -718,6 +767,8 @@ def register():
 这里记录当前版本管线没法完美解决、或是设计上遗留的小短板，后续迭代可以对照着优化：
 
 - **历史写入机制**（原「memoryEnabled 对 Telegram 无效」已修复）：`handleLLMMessage` 门禁通过后写 incoming（`interactiveChatID` 守卫——`/send -c` receiver 活跃于该聊天时让位，防双写）；outgoing 挂在 `sendLLMReply` 咽喉（`recordBotMessage`），四条发送路径（on 直发 / off 审核通过 / console·chatScreen / NetworkError 重试）统一覆盖，`:edit` 定稿在审核通过发送时落库、取消与中间重试不落库。
+- **hybrid 尚未校准**：当前 `retrievalCalibration.json` 的数据集散列与三个通道阈值为空，显式切换 hybrid 时可能只有 pinned 或严格已启用通道结果；这不是 legacy 的隐式回退，也不是语义质量通过的证明。需完成脱敏 holdout、目标机资源和受控人工回复验收后再启用。
+- **语义索引是进程内缓存**：重启后需要后台重新对账/增量建立，未覆盖的记录仍可参加词面通道；超过缓存容量时不会把缓存覆盖率伪装成全量语义库。
 - `handleTelegramErrors` 不保护 `_runLLMPipeline`。里面任何未 catch 的异常都会触发 asyncio 的 "Task exception was never retrieved" warning，需要依赖自身的 try/except。
 - URL reader 的意图判断是基于关键词的保守策略：不加意图词的"再试一次"类追问不会触发 URL 读取。必要时需要用户显式说"再读一次"或加 `#url` 标记。
 - 调试 bug 时，由于拆分后调用链较深，需要结合 `_runLLMPipeline` 的日志（`System` 标签）和 Telegram API 的报错一起看。

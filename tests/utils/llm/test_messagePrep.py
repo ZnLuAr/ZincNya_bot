@@ -14,6 +14,7 @@ import re
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from utils.llm.memory.types import MemoryTurn
 from utils.llm.messagePrep import (
     PromptPayload,
     extractPureMessage,
@@ -299,6 +300,8 @@ class TestExtractReplyTextContext:
         ctx = extractReplyTextContext(msg, "当前")
 
         assert ctx.replyLine == f"<@rep> {'字' * 300}……"
+        assert ctx.replyText == "字" * 400
+        assert ctx.replySender == "@rep"
 
     def test_payload_carries_structured_fields(self):
         """preparePurePromptText 产出 PromptPayload 携带 replyLine/currentText（双调用不漂移）"""
@@ -309,5 +312,21 @@ class TestExtractReplyTextContext:
 
             assert payload.replyLine == "<@rep> 引用"
             assert payload.currentText == "当前"
+            assert payload.memoryTurn == MemoryTurn(
+                currentText="当前",
+                replyText="引用",
+                currentSender="@cur",
+                replySender="@rep",
+            )
             # prompt 字符串仍与 inject 一致（Design B：prompt 不动）
             assert payload.pureText == injectReplyTextContext(msg, "当前")
+
+    def test_payload_without_reply_still_carries_current_turn(self):
+        with patch("utils.llm.messagePrep.getMemoryEnabled", return_value=False):
+            msg = _message(text="当前", fromUser=_user("cur"))
+            payload = preparePurePromptText(msg, "当前", "ZincNyaBot")
+
+        assert payload.memoryTurn == MemoryTurn(
+            currentText="当前",
+            currentSender="@cur",
+        )

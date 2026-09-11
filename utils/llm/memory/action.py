@@ -45,11 +45,16 @@ from .database import (
     addMemory,
     deleteMemory,
     getMemoryByID,
+    normalizeMemoryMode,
+    normalizeRetrievalHint,
     updateMemory,
+    MEMORY_MODE_CONTEXTUAL,
+    MEMORY_MODE_PINNED,
     MEMORY_SCOPE_CHAT,
     MEMORY_SCOPE_GLOBAL,
     MEMORY_SCOPE_USER,
 )
+from .types import MemoryWriteGuard, buildMemoryStateFingerprint
 
 
 _VALID_ACTIONS = {"add", "update", "delete"}
@@ -63,15 +68,18 @@ MEMORY_ACTION_PATTERN = re.compile(
     re.DOTALL,
 )
 
-_LOG_CONTENT_LEN = 100
-_LOG_BLOCK_LEN = 300
-_LOG_PREVIEW_LEN = 200
-
 
 
 
 @dataclass
 class MemoryAction:
+    """LLM 请求的单个 memory 操作的内部表示。
+
+    模型输出使用 snake_case JSON，审核队列和数据库调用使用驼峰法；
+    `_parseActionDict` 与 `toDict`/`fromDict` 是这两个边界之间的转换层。
+    类保持可变，是因为校验阶段会把 mode 和 retrievalHint 规范化到最终值。
+    """
+
     action: str
     scopeType: str
     scopeID: str = ""
@@ -79,6 +87,8 @@ class MemoryAction:
     tags: Optional[list[str]] = None
     priority: Optional[int] = None
     memoryID: Optional[int] = None
+    mode: Optional[str] = None              # mode 可能的值为：
+    retrievalHint: Optional[str] = None
     reason: str = ""
 
     def toDict(self) -> dict:
@@ -91,6 +101,8 @@ class MemoryAction:
             "tags": self.tags,
             "priority": self.priority,
             "memoryID": self.memoryID,
+            "mode": self.mode,
+            "retrievalHint": self.retrievalHint,
             "reason": self.reason,
         }
 
@@ -105,6 +117,8 @@ class MemoryAction:
             tags=data.get("tags"),
             priority=data.get("priority"),
             memoryID=data.get("memoryID"),
+            mode=data.get("mode"),
+            retrievalHint=data.get("retrievalHint"),
             reason=data.get("reason", ""),
         )
 
@@ -112,6 +126,7 @@ class MemoryAction:
 
 
 def _normalizeTags(tags) -> Optional[list[str]]:
+    """把不可信 tags 转为去重字符串列表，并按模型写入上限截断。"""
     if tags is None:
         return None
     if not isinstance(tags, list):
@@ -131,9 +146,12 @@ def _normalizeTags(tags) -> Optional[list[str]]:
 
 
 def _parseActionDict(data: dict) -> MemoryAction:
+    """将模型的 snake_case JSON 对象规范化为内部的 `MemoryAction`。"""
     if not isinstance(data, dict):
         raise ValueError("MEMORY_ACTION 必须是 JSON 对象")
 
+    # 这里是 LLM 不可信输出的第一道边界：先容忍类型差异并转成内部形态，
+    # 再由 validateAction 统一检查 action、scope、长度和目标记录。
     action = str(data.get("action", "")).strip().lower()
     scopeType = str(data.get("scope_type", "")).strip().lower()
 
@@ -157,6 +175,24 @@ def _parseActionDict(data: dict) -> MemoryAction:
 
     reason = str(data.get("reason", "")).strip()
 
+    modeRaw = data.get("mode")
+    mode = None if modeRaw is None else str(modeRaw).strip().lower()
+
+    retrievalHintRaw = data.get("retrieval_hint")
+    # 空字符串有“清除旧 hint”的语义，不能与字段缺失混为一谈；数据库更新
+    # 会据此区分显式清空、保留原值和内容变更后的自动失效。
+    if isinstance(retrievalHintRaw, str) and not retrievalHintRaw.strip():
+        retrievalHint = ""
+        hintReason = None
+    else:
+        retrievalHint, hintReason = normalizeRetrievalHint(retrievalHintRaw)
+    if hintReason:
+        _fireAndForget(logSystemEvent(
+            "LLM memory 检索说明已弃用",
+            f"action={action or '?'}, reason={hintReason}",
+            LogLevel.WARNING,
+        ))
+
     return MemoryAction(
         action=action,
         scopeType=scopeType,
@@ -165,6 +201,8 @@ def _parseActionDict(data: dict) -> MemoryAction:
         tags=_normalizeTags(data.get("tags")),
         priority=priority,
         memoryID=memoryID,
+        mode=mode,
+        retrievalHint=retrievalHint,
         reason=reason,
     )
 
@@ -174,8 +212,8 @@ def formatActionDetail(act: MemoryAction) -> str:
     detail = f"{act.action} | scope={act.scopeType}:{act.scopeID}"
     if act.memoryID is not None:
         detail += f" | id=#{act.memoryID}"
-    if act.content:
-        detail += f" | {act.content[:_LOG_CONTENT_LEN]}"
+    if act.mode is not None:
+        detail += f" | mode={act.mode}"
     return detail
 
 
@@ -209,12 +247,11 @@ def parseMemoryActions(text: str) -> tuple[str, list[MemoryAction]]:
         try:
             raw = json.loads(block)
         except Exception as e:
-            details = block if len(block) <= _LOG_BLOCK_LEN else block[:_LOG_BLOCK_LEN] + "……"
             try:
                 _fireAndForget(
                     logSystemEvent(
                         "LLM memory action JSON 解析失败",
-                        f"{e} | {details}",
+                        f"errorType={type(e).__name__}, inputType=memoryActionBlock",
                         LogLevel.WARNING,
                         childType=LogChildType.WITH_ONE_CHILD,
                     )
@@ -230,12 +267,11 @@ def parseMemoryActions(text: str) -> tuple[str, list[MemoryAction]]:
             try:
                 act = _parseActionDict(item)
             except Exception as e:
-                preview = json.dumps(item, ensure_ascii=False)[:_LOG_PREVIEW_LEN] if isinstance(item, dict) else str(item)[:_LOG_PREVIEW_LEN]
                 try:
                     _fireAndForget(
                         logSystemEvent(
                             "LLM memory action item 解析失败",
-                            f"{e} | {preview}",
+                            f"errorType={type(e).__name__}, inputType={type(item).__name__}",
                             LogLevel.WARNING,
                             childType=LogChildType.WITH_ONE_CHILD,
                         )
@@ -289,6 +325,7 @@ def parseMemoryActions(text: str) -> tuple[str, list[MemoryAction]]:
 
 
 def _normalizeScopeID(scopeType: str, scopeID: str) -> str:
+    """统一 action scope ID；global 始终使用固定值 `global`。"""
     if scopeType == MEMORY_SCOPE_GLOBAL:
         return "global"
     return str(scopeID).strip()
@@ -314,6 +351,27 @@ async def validateAction(action: MemoryAction) -> str | None:
         if action.priority > LLM_MEMORY_PRIORITY_CAP:
             return f"priority 不能超过 {LLM_MEMORY_PRIORITY_CAP}"
 
+    if action.mode is not None:
+        try:
+            action.mode = normalizeMemoryMode(action.mode)
+        except ValueError as exc:
+            return str(exc)
+
+    if action.retrievalHint is not None:
+        if action.retrievalHint == "":
+            pass
+        else:
+            normalizedHint, hintReason = normalizeRetrievalHint(action.retrievalHint)
+            if hintReason:
+                action.retrievalHint = None
+                await logSystemEvent(
+                    "LLM memory 检索说明已弃用",
+                    f"action={action.action}, reason={hintReason}",
+                    LogLevel.WARNING,
+                )
+            else:
+                action.retrievalHint = normalizedHint
+
     if action.action in {"add", "update"}:
         if action.content is not None:
             if not action.content.strip():
@@ -329,6 +387,8 @@ async def validateAction(action: MemoryAction) -> str | None:
     if action.memoryID is None:
         return f"{action.action} 必须提供 memory_id"
 
+    # update/delete 必须重新读取目标，而不是相信模型提交的 scope；这样 scope
+    # 校验和 inferred 限制都基于数据库真实状态。
     target = await getMemoryByID(action.memoryID)
     if not target:
         return f"memory #{action.memoryID} 不存在"
@@ -342,17 +402,64 @@ async def validateAction(action: MemoryAction) -> str | None:
         return f"memory #{action.memoryID} 的 scope 不匹配"
 
     if action.action == "update":
-        if action.content is None and action.tags is None and action.priority is None:
-            return "update 至少要包含 content / tags / priority 之一"
+        if all(value is None for value in (
+            action.content,
+            action.tags,
+            action.priority,
+            action.mode,
+            action.retrievalHint,
+        )):
+            return "update 至少要包含 content / tags / priority / mode / retrieval_hint 之一"
 
     return None
 
 
 
 
-async def executeAction(action: MemoryAction) -> bool:
-    """执行已审核通过的记忆操作"""
+async def requiresHumanReview(
+    action: MemoryAction,
+    target: Optional[dict] = None,
+) -> bool:
+    """判断操作是否越过 contextual memory 的自动写入边界。"""
     if action.action == "add":
+        return action.mode == MEMORY_MODE_PINNED
+
+    if target is None and action.memoryID is not None:
+        target = await getMemoryByID(action.memoryID)
+    if target and target.get("mode") == MEMORY_MODE_PINNED:
+        return True
+    return action.action == "update" and action.mode == MEMORY_MODE_PINNED
+
+
+async def executeAction(
+    action: MemoryAction,
+    *,
+    humanApproved: bool = False,
+    expectedState: Optional[str] = None,
+) -> bool:
+    """校验并执行模型申请的 memory 操作。
+
+    涉及 pinned 的操作只接受 `humanApproved=True`；update/delete 总是通过
+    `MemoryWriteGuard` 绑定执行前状态，人工批准还必须带审核卡保存的
+    `expectedState`，防止旧审核覆盖新数据。
+    """
+    validationError = await validateAction(action)
+    if validationError:
+        await logSystemEvent(
+            "LLM memory 执行前校验失败",
+            f"action={action.action}, reason=validation",
+            LogLevel.WARNING,
+        )
+        return False
+
+    if action.action == "add":
+        if await requiresHumanReview(action) and not humanApproved:
+            await logSystemEvent(
+                "LLM memory pinned 操作被拒绝",
+                "action=add, reason=humanApprovalRequired",
+                LogLevel.WARNING,
+            )
+            return False
         memoryID = await addMemory(
             action.scopeType,
             _normalizeScopeID(action.scopeType, action.scopeID),
@@ -360,8 +467,39 @@ async def executeAction(action: MemoryAction) -> bool:
             tags=action.tags or [],
             priority=action.priority if action.priority is not None else 0,
             source="inferred",
+            mode=action.mode or MEMORY_MODE_CONTEXTUAL,
+            retrievalHint=action.retrievalHint,
         )
         return memoryID is not None
+
+    target = await getMemoryByID(action.memoryID) if action.memoryID is not None else None
+    if target is None:
+        return False
+
+    protected = await requiresHumanReview(action, target)
+    if protected and not humanApproved:
+        await logSystemEvent(
+            "LLM memory pinned 操作被拒绝",
+            f"action={action.action}, id={action.memoryID}, reason=humanApprovalRequired",
+            LogLevel.WARNING,
+        )
+        return False
+    if humanApproved and expectedState is None:
+        await logSystemEvent(
+            "LLM memory 审核状态缺失",
+            f"action={action.action}, id={action.memoryID}",
+            LogLevel.WARNING,
+        )
+        return False
+
+    # 非 pinned 的 inferred memory 可以自动更新，但所有已有记录仍使用同一
+    # 状态快照，防止模型生成到审核批准之间发生静默覆盖。
+    guard = MemoryWriteGuard(
+        expectedState=expectedState or buildMemoryStateFingerprint(target),
+        scopeType=action.scopeType,
+        scopeID=_normalizeScopeID(action.scopeType, action.scopeID),
+        allowPinned=humanApproved,
+    )
 
     if action.action == "update" and action.memoryID is not None:
         return await updateMemory(
@@ -369,10 +507,13 @@ async def executeAction(action: MemoryAction) -> bool:
             content=action.content,
             tags=action.tags,
             priority=action.priority,
+            mode=action.mode,
+            retrievalHint=action.retrievalHint,
+            guard=guard,
         )
 
     if action.action == "delete" and action.memoryID is not None:
-        return await deleteMemory(action.memoryID)
+        return await deleteMemory(action.memoryID, guard=guard)
 
     return False
 
@@ -385,8 +526,10 @@ async def buildMemoryActionReviewPayload(act: MemoryAction) -> dict:
     update/delete）补 originalContent（查库取原内容），供审核卡片显示「改前内容」。
     """
     actDict = act.toDict()
-    if act.memoryID is not None and not act.content:
+    if act.memoryID is not None:
         target = await getMemoryByID(act.memoryID)
         if target:
             actDict["originalContent"] = target.get("content", "")
+            actDict["originalMode"] = target.get("mode", MEMORY_MODE_CONTEXTUAL)
+            actDict["targetState"] = buildMemoryStateFingerprint(target)
     return actDict

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "modelRevision": "46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59",
+  "encodingVersion": "bge-small-zh-v1.5-cls-v1",
+  "lexicalVersion": "memory-bm25-v1",
+  "datasetSha256": null,
+  "thresholds": {
+    "semanticCurrent": null,
+    "semanticAssisted": null,
+    "lexical": null
+  }
+}

@@ -82,6 +82,9 @@ TODOS_REQUIRED_COLUMNS = {
 
 VALID_MEMORY_SCOPE_TYPES = {"global", "chat", "user", "session"}
 VALID_MEMORY_SOURCES = {"manual", "inferred"}
+VALID_MEMORY_MODES = {"contextual", "pinned"}
+MEMORY_HINT_MAX_CHARS = 80
+MEMORY_PRIORITY_MAX = 3
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 TIMESTAMP_SHORT_FORMAT = "%Y%m%d%H%M%S"
 _BUSY_TIMEOUT_MS = 5000  # SQLite busy_timeout（ms），与 utils/core/database.py 同源（script 不 import config 避免触发 BOT_TOKEN 检查）
@@ -328,7 +331,18 @@ def wal_preflight(ctx: ScriptContext) -> tuple[list[str], list[str]]:
 
 
 def ensure_memory_schema(conn: sqlite3.Connection) -> None:
+    """幂等创建 memory schema，并为旧库补齐本次引入的检索字段。"""
     conn.executescript(_loadSchema("llmMemory"))
+    columns = table_columns(conn, "memory_entries")
+    if "mode" not in columns:
+        conn.execute(
+            "ALTER TABLE memory_entries "
+            "ADD COLUMN mode TEXT NOT NULL DEFAULT 'contextual'"
+        )
+    if "retrieval_hint" not in columns:
+        conn.execute(
+            "ALTER TABLE memory_entries ADD COLUMN retrieval_hint BLOB"
+        )
 
 
 
@@ -364,6 +378,35 @@ def read_table_rows(
 
 
 
+def read_memory_rows(db_path: Path) -> tuple[list[dict[str, Any]], str | None]:
+    """读取 memory 行；旧库缺少新列时填充兼容默认值。"""
+    if not db_path.exists():
+        return [], "missing"
+    conn = None
+    try:
+        conn = connect_readonly(db_path)
+        if not table_exists(conn, "memory_entries"):
+            raise MergeError("table memory_entries does not exist")
+        require_columns(conn, "memory_entries", MEMORY_REQUIRED_COLUMNS)
+        columns = table_columns(conn, "memory_entries")
+        modeExpression = "mode" if "mode" in columns else "'contextual' AS mode"
+        hintExpression = (
+            "retrieval_hint"
+            if "retrieval_hint" in columns else "NULL AS retrieval_hint"
+        )
+        sql = (
+            "SELECT id, scope_type, scope_id, content, tags_json, enabled, priority, "
+            f"source, {modeExpression}, {hintExpression}, created_at, updated_at "
+            "FROM memory_entries ORDER BY scope_type, scope_id, source, id"
+        )
+        return fetch_rows(conn, sql), None
+    except sqlite3.Error as exc:
+        raise MergeError(f"failed to read {db_path.name}: {exc}") from exc
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def normalize_tags(value: Any) -> tuple[list[str], tuple[str, ...]]:
     try:
         parsed = json.loads(value or "[]")
@@ -385,7 +428,32 @@ def normalize_tags(value: Any) -> tuple[list[str], tuple[str, ...]]:
 
 
 
+def normalize_memory_hint(value: Any) -> str | None:
+    """规范化已解密 hint，并拒绝换行或超过共享长度上限的内容。"""
+    if value is None:
+        return None
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        value = bytes(value).decode("utf-8", errors="replace")
+    text = str(value).strip()
+    if not text:
+        return None
+    if "\n" in text or "\r" in text:
+        raise MergeError("retrieval_hint contains a newline")
+    if len(text) > MEMORY_HINT_MAX_CHARS:
+        raise MergeError("retrieval_hint is too long")
+    return text
+
+
+def normalize_memory_mode(value: Any) -> str:
+    """规范化 memory mode；旧库缺失值按 ``contextual`` 处理。"""
+    mode = str(value or "contextual").strip().lower()
+    if mode not in VALID_MEMORY_MODES:
+        raise MergeError(f"invalid memory mode: {mode}")
+    return mode
+
+
 def normalize_memory_row(row: dict[str, Any]) -> dict[str, Any]:
+    """校验已解密 memory 行，并生成跨数据库去重使用的稳定业务键。"""
     scope_type = str(row.get("scope_type") or "").strip().lower()
     if scope_type not in VALID_MEMORY_SCOPE_TYPES:
         raise MergeError(f"invalid scope_type: {scope_type}")
@@ -406,8 +474,20 @@ def normalize_memory_row(row: dict[str, Any]) -> dict[str, Any]:
         raise MergeError(f"invalid source: {source}")
 
     tags, tags_key = normalize_tags(row.get("tags_json"))
-    enabled = int(row.get("enabled") if row.get("enabled") is not None else 1)
-    priority = int(row.get("priority") if row.get("priority") is not None else 0)
+    try:
+        enabled = int(row.get("enabled") if row.get("enabled") is not None else 1)
+    except (TypeError, ValueError) as exc:
+        raise MergeError("enabled must be an integer") from exc
+    try:
+        priority = int(row.get("priority") if row.get("priority") is not None else 0)
+    except (TypeError, ValueError) as exc:
+        raise MergeError("priority must be an integer") from exc
+    if enabled not in (0, 1):
+        raise MergeError("enabled must be 0 or 1")
+    if priority < 0 or priority > MEMORY_PRIORITY_MAX:
+        raise MergeError(f"priority must be between 0 and {MEMORY_PRIORITY_MAX}")
+    mode = normalize_memory_mode(row.get("mode"))
+    retrievalHint = normalize_memory_hint(row.get("retrieval_hint"))
     key = (scope_type, scope_id, content, source, tags_key)
 
     return {
@@ -421,6 +501,8 @@ def normalize_memory_row(row: dict[str, Any]) -> dict[str, Any]:
         "enabled": enabled,
         "priority": priority,
         "source": source,
+        "mode": mode,
+        "retrieval_hint": retrievalHint,
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
@@ -438,12 +520,15 @@ def preview_text(text: str, *, full: bool, limit: int = 100) -> str:
 
 
 def format_memory_insert(row: dict[str, Any], *, full: bool) -> list[str]:
+    """渲染待插入 memory 的预览；不输出私有 retrieval hint。"""
     source_id = row.get("id")
     tags = json.dumps(row["tags"], ensure_ascii=False)
     return [
         (
             f"+ memory source_id={source_id} scope={row['scope_type']}:{row['scope_id']} "
-            f"source={row['source']} enabled={row['enabled']} priority={row['priority']} tags={tags}"
+            f"source={row['source']} mode={row.get('mode', 'contextual')} "
+            f"enabled={row['enabled']} "
+            f"priority={row['priority']} tags={tags}"
         ),
         f"+   content: {preview_text(row['content'], full=full)}",
     ]
@@ -452,6 +537,12 @@ def format_memory_insert(row: dict[str, Any], *, full: bool) -> list[str]:
 
 
 def plan_llm_memory(ctx: ScriptContext) -> SectionPlan:
+    """
+    规划 memory 增量合并。
+
+    source/target 必须共享 ``.chatKey``：规划阶段先严格解密 content 与 hint，
+    再以明文业务字段去重；计划只携带明文，真正写回时由目标密钥重新加密。
+    """
     source_path = ctx.source_data / LLM_MEMORY_DB
     target_path = ctx.target_data / LLM_MEMORY_DB
     plan = SectionPlan(
@@ -470,6 +561,22 @@ def plan_llm_memory(ctx: ScriptContext) -> SectionPlan:
     # 去重 key 无意义（且 --apply 时无法用 target key 正确回写）。与 chat-history 同此前提。
     source_key_path = ctx.source_data / CHAT_KEY
     target_key_path = ctx.target_data / CHAT_KEY
+    if not source_path.exists():
+        plan.apply_capable = False
+        plan.warnings.append("source llmMemory.db not found; skipping llm-memory")
+        plan.preview_lines.append("# 跳过：源 llmMemory.db 不存在")
+        return plan
+    if not source_key_path.exists():
+        plan.apply_capable = False
+        plan.warnings.append("source .chatKey not found; skipping llm-memory")
+        plan.preview_lines.append("# 跳过：源 .chatKey 不存在，无法安全解密记忆")
+        return plan
+    if not target_key_path.exists():
+        plan.apply_capable = False
+        plan.warnings.append("target .chatKey not found; skipping llm-memory")
+        plan.preview_lines.append("# 跳过：目标 .chatKey 不存在，无法安全写入记忆")
+        return plan
+
     source_key = source_key_path.read_bytes() if source_key_path.exists() else None
     target_key = target_key_path.read_bytes() if target_key_path.exists() else None
     if source_key is not None and target_key is not None and source_key != target_key:
@@ -477,40 +584,25 @@ def plan_llm_memory(ctx: ScriptContext) -> SectionPlan:
         plan.warnings.append("source and target .chatKey differ; skipping llm-memory")
         plan.preview_lines.append("# 跳过：源与目标 .chatKey 不一致，无法对齐加密的记忆 content")
         return plan
-    # 解密用 source/target 任一可用 key（已确认一致）；写回用 target key（见 apply_llm_memory）。
-    fernet = load_shared_fernet(ctx.target_data) or load_shared_fernet(ctx.source_data)
-
-    sql = (
-        "SELECT id, scope_type, scope_id, content, tags_json, enabled, priority, "
-        "source, created_at, updated_at FROM memory_entries "
-        "ORDER BY scope_type, scope_id, source, id"
-    )
 
     try:
-        source_rows, source_state = read_table_rows(
-            source_path,
-            table="memory_entries",
-            required_columns=MEMORY_REQUIRED_COLUMNS,
-            sql=sql,
-        )
+        fernet = load_shared_fernet(ctx.target_data)
+        if fernet is None:
+            raise MergeError("cryptography is not installed; cannot decrypt llmMemory.db")
+        source_rows, source_state = read_memory_rows(source_path)
         if source_state == "missing":
             plan.apply_capable = False
             plan.warnings.append("source llmMemory.db not found; skipping llm-memory")
             plan.preview_lines.append("# 跳过：源 llmMemory.db 不存在")
             return plan
 
-        target_rows, target_state = read_table_rows(
-            target_path,
-            table="memory_entries",
-            required_columns=MEMORY_REQUIRED_COLUMNS,
-            sql=sql,
-        )
+        target_rows, target_state = read_memory_rows(target_path)
         if target_state == "missing":
             plan.warnings.append("target llmMemory.db not found; --apply will create it")
 
         # 读取收口：解密 content，使下游 normalize / 去重 key / 预览全部基于明文。
-        decrypt_content_in_rows(source_rows, fernet)
-        decrypt_content_in_rows(target_rows, fernet)
+        decrypt_content_in_rows(source_rows, fernet, strict=True)
+        decrypt_content_in_rows(target_rows, fernet, strict=True)
 
         target_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
         skipped_target = 0
@@ -542,9 +634,18 @@ def plan_llm_memory(ctx: ScriptContext) -> SectionPlan:
 
             duplicates += 1
             changed = []
-            for field_name in ("enabled", "priority", "created_at", "updated_at"):
+            for field_name in (
+                "enabled", "priority", "mode", "retrieval_hint",
+                "created_at", "updated_at",
+            ):
                 if str(target_match.get(field_name)) != str(normalized.get(field_name)):
-                    changed.append(f"{field_name} target={target_match.get(field_name)!r} source={normalized.get(field_name)!r}")
+                    if field_name == "retrieval_hint":
+                        changed.append("retrieval_hint differs")
+                    else:
+                        changed.append(
+                            f"{field_name} target={target_match.get(field_name)!r} "
+                            f"source={normalized.get(field_name)!r}"
+                        )
             if changed:
                 metadata_differences += 1
                 if len(metadata_preview) < ctx.max_preview:
@@ -580,6 +681,8 @@ def plan_llm_memory(ctx: ScriptContext) -> SectionPlan:
                 "enabled": normalized["enabled"],
                 "priority": normalized["priority"],
                 "source": normalized["source"],
+                "mode": normalized["mode"],
+                "retrieval_hint": normalized["retrieval_hint"],
                 "created_at": normalized["created_at"],
                 "updated_at": normalized["updated_at"],
             }
@@ -599,6 +702,8 @@ def plan_llm_memory(ctx: ScriptContext) -> SectionPlan:
                     "enabled": normalized["enabled"],
                     "priority": normalized["priority"],
                     "source": normalized["source"],
+                    "mode": normalized["mode"],
+                    "retrieval_hint": normalized["retrieval_hint"],
                     "created_at": normalized["created_at"],
                     "updated_at": normalized["updated_at"],
                 }
@@ -667,42 +772,69 @@ def load_shared_fernet(data_dir: Path) -> Any:
         from cryptography.fernet import Fernet
     except ImportError:
         return None
-    return Fernet(key_path.read_bytes())
+    try:
+        return Fernet(key_path.read_bytes())
+    except (OSError, TypeError, ValueError) as exc:
+        raise MergeError(f"invalid {CHAT_KEY} in {data_dir}") from exc
 
 
 
 
-def decrypt_content_in_rows(rows: list[dict[str, Any]], fernet: Any) -> None:
+def decrypt_content_in_rows(
+    rows: list[dict[str, Any]],
+    fernet: Any,
+    *,
+    strict: bool = False,
+) -> None:
     """
     就地解密一批行的 content 列（用于 memory_entries / todos）。
 
     读取收口：调用方在 read_table_rows 之后立即调用本函数，使下游的
     normalize / 去重 key / 预览全部基于明文 content，无需各自感知加密。
 
-    fernet 为 None（无密钥）时不做任何处理——视为历史明文库。
+    fernet 为 None（无密钥）时把 bytes 规范为文本——视为历史明文库。
     单行解密失败（如历史明文行）回退为原文，不影响其它行。
     """
-    if fernet is None:
-        return
-    for row in rows:
-        value = row.get("content")
+    def _text_value(value: Any) -> str:
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return bytes(value).decode("utf-8", errors="replace")
+        return str(value)
+
+    def _decrypt_value(value: Any, column: str):
         if value is None:
-            continue
+            return None
+        if fernet is None:
+            if strict and isinstance(value, (bytes, bytearray, memoryview)):
+                raise MergeError(f"encrypted {column} requires {CHAT_KEY}")
+            return _text_value(value)
+        raw = value
+        if isinstance(raw, memoryview):
+            raw = raw.tobytes()
+        elif isinstance(raw, str):
+            raw = raw.encode("utf-8")
+        else:
+            raw = bytes(raw)
         try:
-            if isinstance(value, memoryview):
-                value = value.tobytes()
-            elif isinstance(value, str):
-                value = value.encode("utf-8")
-            else:
-                value = bytes(value)
-            row["content"] = fernet.decrypt(value).decode("utf-8")
-        except Exception:
-            # 历史明文行或解密失败：尽量还原为可读文本
-            raw = row.get("content")
-            if isinstance(raw, (bytes, bytearray, memoryview)):
-                row["content"] = bytes(raw).decode("utf-8", errors="replace")
-            else:
-                row["content"] = str(raw)
+            return fernet.decrypt(raw).decode("utf-8")
+        except Exception as exc:
+            fallback = _text_value(value)
+            if strict and not (
+                isinstance(value, str) and not fallback.startswith("gAAAA")
+            ):
+                raise MergeError(
+                    f"memory row {column} could not be decrypted with {CHAT_KEY}"
+                ) from exc
+            if column == "retrieval_hint" and fallback.startswith("gAAAA"):
+                return None
+            return fallback
+
+    for row in rows:
+        if "content" in row:
+            row["content"] = _decrypt_value(row.get("content"), "content")
+        if "retrieval_hint" in row:
+            row["retrieval_hint"] = _decrypt_value(
+                row.get("retrieval_hint"), "retrieval_hint"
+            )
 
 
 
@@ -716,6 +848,15 @@ def encrypt_content_value(fernet: Any, plaintext: Any) -> Any:
     if fernet is None:
         return plaintext
     return fernet.encrypt(str(plaintext).encode("utf-8"))
+
+
+def encrypt_memory_hint_value(fernet: Any, hint: Any) -> Any:
+    """用目标库共享密钥加密 hint；明文库场景保持原值。"""
+    if hint is None:
+        return None
+    if fernet is None:
+        return hint
+    return fernet.encrypt(str(hint).encode("utf-8"))
 
 
 
@@ -1174,11 +1315,14 @@ def write_manifest(
 
 
 def apply_llm_memory(plan: SectionPlan) -> int:
+    """事务写入 memory 合并计划，并用目标数据库密钥重新加密私有字段。"""
     if not plan.inserts or plan.target_path is None:
         return 0
     # content 在读取时已解密为明文（见 plan_llm_memory），回写前用 target 库的
     # .chatKey 重新加密。source/target key 一致性已在 plan_llm_memory 校验。
     fernet = load_shared_fernet(plan.target_path.parent)
+    if fernet is None:
+        raise MergeError(f"target {CHAT_KEY} is required for llm-memory")
     conn = connect_writable(plan.target_path)
     try:
         ensure_memory_schema(conn)
@@ -1187,8 +1331,9 @@ def apply_llm_memory(plan: SectionPlan) -> int:
         conn.executemany(
             """
             INSERT INTO memory_entries (
-                scope_type, scope_id, content, tags_json, enabled, priority, source, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                scope_type, scope_id, content, tags_json, enabled, priority,
+                source, mode, retrieval_hint, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -1199,6 +1344,8 @@ def apply_llm_memory(plan: SectionPlan) -> int:
                     item.values["enabled"],
                     item.values["priority"],
                     item.values["source"],
+                    item.values.get("mode", "contextual"),
+                    encrypt_memory_hint_value(fernet, item.values.get("retrieval_hint")),
                     item.values["created_at"],
                     item.values["updated_at"],
                 )
@@ -1648,6 +1795,8 @@ def show_file_comparison(
 
 @dataclass
 class DiffResult:
+    """交互式数据库比较结果；memory 行在分析阶段已转换为明文业务视图。"""
+
     db_name: str
     local_count: int
     remote_count: int
@@ -1655,31 +1804,41 @@ class DiffResult:
     remote_only: list[dict[str, Any]]
     local_only_plain: list[str] = field(default_factory=list)
     remote_only_plain: list[str] = field(default_factory=list)
+    metadata_conflicts: list[dict[str, Any]] = field(default_factory=list)
 
 
 def analyze_memory_diff(local_path: Path, remote_path: Path) -> DiffResult:
-    sql = (
-        "SELECT id, scope_type, scope_id, content, tags_json, enabled, priority, "
-        "source, created_at, updated_at FROM memory_entries "
-        "ORDER BY scope_type, scope_id, source, id"
-    )
-    local_rows, local_state = read_table_rows(
-        local_path, table="memory_entries",
-        required_columns=MEMORY_REQUIRED_COLUMNS, sql=sql,
-    )
-    remote_rows, remote_state = read_table_rows(
-        remote_path, table="memory_entries",
-        required_columns=MEMORY_REQUIRED_COLUMNS, sql=sql,
-    )
+    """比较两个 memory 库；密钥缺失或不一致时拒绝产生可合并结果。"""
+    local_key_path = local_path.parent / CHAT_KEY
+    remote_key_path = remote_path.parent / CHAT_KEY
+    local_key = local_key_path.read_bytes() if local_key_path.exists() else None
+    remote_key = remote_key_path.read_bytes() if remote_key_path.exists() else None
+    if local_key is None or remote_key is None:
+        missingSides = []
+        if local_key is None:
+            missingSides.append("local")
+        if remote_key is None:
+            missingSides.append("remote")
+        raise MergeError(
+            f"{' and '.join(missingSides)} {CHAT_KEY} missing; "
+            "refusing llm-memory analysis"
+        )
+    if local_key is not None and remote_key is not None and local_key != remote_key:
+        raise MergeError("local and remote .chatKey differ; refusing llm-memory merge")
+
+    local_rows, local_state = read_memory_rows(local_path)
+    remote_rows, remote_state = read_memory_rows(remote_path)
     if local_state == "missing":
         local_rows = []
     if remote_state == "missing":
         remote_rows = []
 
-    # 读取收口：解密 content（local/remote 各用各自 .chatKey），下游 normalize / 去重
-    # key 基于明文。remote_only 的行随后由 _merge_memory 用 target key 重新加密回写。
-    decrypt_content_in_rows(local_rows, load_shared_fernet(local_path.parent))
-    decrypt_content_in_rows(remote_rows, load_shared_fernet(remote_path.parent))
+    local_fernet = load_shared_fernet(local_path.parent)
+    remote_fernet = load_shared_fernet(remote_path.parent)
+    if local_fernet is None or remote_fernet is None:
+        raise MergeError("cryptography is not installed; cannot analyze llmMemory.db")
+    decrypt_content_in_rows(local_rows, local_fernet, strict=True)
+    decrypt_content_in_rows(remote_rows, remote_fernet, strict=True)
 
     local_by_key: dict[tuple, dict] = {}
     for row in local_rows:
@@ -1697,6 +1856,24 @@ def analyze_memory_diff(local_path: Path, remote_path: Path) -> DiffResult:
         except MergeError:
             pass
 
+    metadataConflicts = []
+    for key in local_by_key.keys() & remote_by_key.keys():
+        local = normalize_memory_row(local_by_key[key])
+        remote = normalize_memory_row(remote_by_key[key])
+        fields = []
+        for fieldName in (
+            "enabled", "priority", "mode", "retrieval_hint",
+            "created_at", "updated_at",
+        ):
+            if str(local.get(fieldName)) != str(remote.get(fieldName)):
+                fields.append(fieldName)
+        if fields:
+            metadataConflicts.append({
+                "local_id": local.get("id"),
+                "remote_id": remote.get("id"),
+                "fields": fields,
+            })
+
     local_only = [row for key, row in local_by_key.items() if key not in remote_by_key]
     remote_only = [row for key, row in remote_by_key.items() if key not in local_by_key]
 
@@ -1706,6 +1883,7 @@ def analyze_memory_diff(local_path: Path, remote_path: Path) -> DiffResult:
         remote_count=len(remote_rows),
         local_only=local_only,
         remote_only=remote_only,
+        metadata_conflicts=metadataConflicts,
     )
 
 
@@ -1813,6 +1991,8 @@ def show_diff_summary(diff: DiffResult) -> None:
     local_str = c(f"{local_only_count} 条", Color.RED) if local_only_count else "0 条"
     remote_str = c(f"{remote_only_count} 条", Color.GREEN) if remote_only_count else "0 条"
     print(f"    本端独有: {local_str}   远端独有: {remote_str}")
+    if diff.metadata_conflicts:
+        print(f"    元数据冲突（仅报告，不自动覆盖）: {len(diff.metadata_conflicts)} 条")
 
 
 def show_record_diff(diff: DiffResult, settings: InteractiveSettings) -> None:
@@ -1873,6 +2053,7 @@ def _show_chat_records(diff: DiffResult, settings: InteractiveSettings, max_show
 
 
 def _show_memory_records(diff: DiffResult, max_show: int) -> None:
+    """展示 memory 差异与元数据冲突，hint 只显示是否存在而不回显正文。"""
     shown = 0
     if diff.remote_only:
         print(c("  远端独有:", Color.GREEN))
@@ -1901,6 +2082,20 @@ def _show_memory_records(diff: DiffResult, max_show: int) -> None:
 
     if not diff.remote_only and not diff.local_only:
         print(c("    无差异", Color.DIM))
+    if diff.metadata_conflicts:
+        print(c("  同一事实的元数据冲突（未自动覆盖）:", Color.YELLOW))
+        for conflict in diff.metadata_conflicts[:max_show]:
+            fields = ", ".join(conflict["fields"])
+            print(
+                c(
+                    f"    local_id={conflict['local_id']} "
+                    f"remote_id={conflict['remote_id']}: {fields}",
+                    Color.YELLOW,
+                )
+            )
+        hidden = len(diff.metadata_conflicts) - max_show
+        if hidden > 0:
+            print(c(f"    ... 还有 {hidden} 条冲突未显示", Color.DIM))
 
 
 def _show_todo_records(diff: DiffResult, max_show: int) -> None:
@@ -1993,8 +2188,11 @@ def action_merge(
 
 
 def _merge_memory(diff: DiffResult, target_path: Path) -> bool:
+    """将 remote-only 明文 memory 写入目标库，并在事务内重新加密私有字段。"""
     # remote_only 的 content 已是明文（analyze_memory_diff 解密），用 target key 重新加密回写。
     fernet = load_shared_fernet(target_path.parent)
+    if fernet is None:
+        raise MergeError(f"target {CHAT_KEY} is required for llm-memory")
     conn = connect_writable(target_path)
     try:
         ensure_memory_schema(conn)
@@ -2007,10 +2205,13 @@ def _merge_memory(diff: DiffResult, target_path: Path) -> bool:
                 continue
             conn.execute(
                 "INSERT INTO memory_entries "
-                "(scope_type, scope_id, content, tags_json, enabled, priority, source, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(scope_type, scope_id, content, tags_json, enabled, priority, "
+                "source, mode, retrieval_hint, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (n["scope_type"], n["scope_id"], encrypt_content_value(fernet, n["content"]), n["tags_json"],
-                 n["enabled"], n["priority"], n["source"], n["created_at"], n["updated_at"]),
+                 n["enabled"], n["priority"], n["source"], n["mode"],
+                 encrypt_memory_hint_value(fernet, n["retrieval_hint"]),
+                 n["created_at"], n["updated_at"]),
             )
         conn.commit()
         print(c(f"    已合并 {len(diff.remote_only)} 条记忆记录", Color.GREEN))
@@ -2223,6 +2424,7 @@ def _side_by_side_chat(diff: DiffResult, settings: InteractiveSettings) -> None:
 
 
 def _side_by_side_memory(diff: DiffResult) -> None:
+    """并排展示 memory 差异；检索 hint 仅以存在标记参与人工比较。"""
     local_items: list[tuple[str, str]] = []
     for row in diff.local_only:
         scope = f"{row.get('scope_type')}:{row.get('scope_id')}"
@@ -2238,6 +2440,17 @@ def _side_by_side_memory(diff: DiffResult) -> None:
         remote_items.append((ts, f"[{scope}] {content}"))
 
     _render_side_by_side(local_items, remote_items)
+    if diff.metadata_conflicts:
+        print(c("  元数据冲突（未自动覆盖）:", Color.YELLOW))
+        for conflict in diff.metadata_conflicts:
+            print(
+                c(
+                    f"    local_id={conflict['local_id']} "
+                    f"remote_id={conflict['remote_id']}: "
+                    f"{', '.join(conflict['fields'])}",
+                    Color.YELLOW,
+                )
+            )
 
 
 def _side_by_side_todos(diff: DiffResult) -> None:
@@ -2286,7 +2499,7 @@ def interactive_merge(cfg: RemoteConfig, settings: InteractiveSettings) -> None:
                     downloaded[name] = dest
 
         key_dest = None
-        if CHAT_HISTORY_DB in downloaded:
+        if CHAT_HISTORY_DB in downloaded or LLM_MEMORY_DB in downloaded:
             key_dest = tmp_dir / CHAT_KEY
             if not ssh_download(cfg, CHAT_KEY, key_dest):
                 key_dest = None

@@ -8,6 +8,7 @@ tests/utils/llm/test_state.py
 结束后 pop 清理，避免污染其他用例。
 """
 
+from utils.llm.memory.types import MemoryQuery, MemoryTurn
 from utils.llm.state import (
     appendPendingMessage,
     collectDebouncedBatch,
@@ -109,5 +110,32 @@ class TestCollectDebouncedBatchDisplayPairs:
             batch = collectDebouncedBatch(key)
 
             assert batch.displayPairs == []
+            assert batch.memoryQuery is None
+        finally:
+            popPendingMessages(key)
+
+
+class TestCollectDebouncedBatchMemoryQuery:
+    def test_turns_keep_message_order_and_reply_pairing(self):
+        key = "test:memory-query"
+        firstTurn = MemoryTurn(
+            currentText="第一句",
+            replyText="引用一",
+            currentSender="@alice",
+            replySender="@bob",
+        )
+        secondTurn = MemoryTurn(
+            currentText="第二句",
+            replyText="引用二",
+            currentSender="@alice",
+            replySender="@carol",
+        )
+        try:
+            appendPendingMessage(key, "第一句", images=[], memoryTurn=firstTurn)
+            appendPendingMessage(key, "第二句", images=[], memoryTurn=secondTurn)
+
+            batch = collectDebouncedBatch(key)
+
+            assert batch.memoryQuery == MemoryQuery(turns=(firstTurn, secondTurn))
         finally:
             popPendingMessages(key)

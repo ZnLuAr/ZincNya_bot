@@ -227,6 +227,27 @@ def test_validate_schema_memory_entries_bad_scope():
     assert err is not None
 
 
+def test_validate_schema_memory_supports_new_fields_and_priority_zero():
+    if not edit_data.HAS_JSONSCHEMA:
+        pytest.skip("jsonschema 未安装")
+
+    data = {
+        "table": "memory_entries",
+        "records": [{
+            "scope_type": "session",
+            "scope_id": "s1",
+            "content": "hi",
+            "priority": 0,
+            "mode": "pinned",
+            "retrieval_hint": {"encrypted": "token"},
+        }],
+    }
+    ok, err = edit_data.Validator.validate_schema(data, "memory_entries")
+
+    assert ok is True
+    assert err is None
+
+
 def test_validate_schema_unknown_table_passes():
     """未定义 schema 的表名直接放行"""
     ok, err = edit_data.Validator.validate_schema({"table": "x"}, "no_such_table")
@@ -452,6 +473,28 @@ def _make_single_table_db(path):
     conn.close()
 
 
+def _make_memory_hint_db(path, fernet):
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE memory_entries ("
+        "id INTEGER PRIMARY KEY, scope_type TEXT, scope_id TEXT, content BLOB, "
+        "tags_json TEXT, enabled INTEGER, priority INTEGER, source TEXT, "
+        "mode TEXT, retrieval_hint BLOB)"
+    )
+    contentToken = fernet.encrypt("first".encode("utf-8"))
+    hintToken = fernet.encrypt("原检索说明".encode("utf-8"))
+    conn.execute(
+        "INSERT INTO memory_entries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            1, "global", "global", contentToken, json.dumps(["t1"]),
+            1, 0, "manual", "contextual", hintToken,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return hintToken
+
+
 def test_dbeditor_export_parses_tags(tmp_path, dbeditorKey):
     """export_to_json 返回单表结构并把 tags_json 解析为 list
 
@@ -468,6 +511,79 @@ def test_dbeditor_export_parses_tags(tmp_path, dbeditorKey):
     assert result["records"][0]["tags_json"] == ["t1", "t2"]
     # 明文行解密失败 → 兜底返回原文
     assert result["records"][0]["content"] == "first"
+
+
+def test_dbeditor_export_keeps_hint_encrypted(tmp_path, dbeditorKey):
+    db = tmp_path / "mem.db"
+    hintToken = _make_memory_hint_db(db, dbeditorKey)
+
+    result = edit_data.DBEditor.export_to_json(db)
+
+    record = result["records"][0]
+    assert record["content"] == "first"
+    assert record["retrieval_hint"] == {
+        "encrypted": hintToken.decode("ascii"),
+    }
+    assert "原检索说明" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_dbeditor_unchanged_hint_wrapper_roundtrips_exact_token(tmp_path, dbeditorKey):
+    db = tmp_path / "mem.db"
+    hintToken = _make_memory_hint_db(db, dbeditorKey)
+    exported = edit_data.DBEditor.export_to_json(db)
+
+    edit_data.DBEditor.import_from_json(db, exported, dry_run=False)
+
+    conn = sqlite3.connect(db)
+    rawHint = conn.execute(
+        "SELECT retrieval_hint FROM memory_entries WHERE id = 1"
+    ).fetchone()[0]
+    conn.close()
+    assert rawHint == hintToken
+
+
+def test_dbeditor_content_change_clears_unchanged_exported_hint(tmp_path, dbeditorKey):
+    db = tmp_path / "mem.db"
+    _make_memory_hint_db(db, dbeditorKey)
+    exported = edit_data.DBEditor.export_to_json(db)
+    exported["records"][0]["content"] = "updated"
+
+    edit_data.DBEditor.import_from_json(db, exported, dry_run=False)
+
+    conn = sqlite3.connect(db)
+    row = conn.execute(
+        "SELECT content, retrieval_hint FROM memory_entries WHERE id = 1"
+    ).fetchone()
+    conn.close()
+    assert dbeditorKey.decrypt(row[0]).decode("utf-8") == "updated"
+    assert row[1] is None
+
+
+def test_dbeditor_tags_change_without_hint_field_clears_hint(tmp_path, dbeditorKey):
+    db = tmp_path / "mem.db"
+    _make_memory_hint_db(db, dbeditorKey)
+    exported = edit_data.DBEditor.export_to_json(db)
+    exported["records"][0]["tags_json"] = ["new"]
+    exported["records"][0].pop("retrieval_hint")
+
+    edit_data.DBEditor.import_from_json(db, exported, dry_run=False)
+
+    conn = sqlite3.connect(db)
+    rawHint = conn.execute(
+        "SELECT retrieval_hint FROM memory_entries WHERE id = 1"
+    ).fetchone()[0]
+    conn.close()
+    assert rawHint is None
+
+
+def test_dbeditor_rejects_plaintext_hint(tmp_path, dbeditorKey):
+    db = tmp_path / "mem.db"
+    _make_memory_hint_db(db, dbeditorKey)
+    exported = edit_data.DBEditor.export_to_json(db)
+    exported["records"][0]["retrieval_hint"] = "明文说明"
+
+    with pytest.raises(ValueError, match="密文封装"):
+        edit_data.DBEditor.import_from_json(db, exported, dry_run=False)
 
 
 def test_dbeditor_export_empty_db_raises(tmp_path):

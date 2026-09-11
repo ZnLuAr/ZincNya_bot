@@ -59,6 +59,7 @@ from utils.llm import (
     getPendingTask,
     isRateLimited,
     makeDebounceKey,
+    MemoryQuery,
     setPendingTask,
 )
 from utils.llm.messagePrep import (
@@ -151,6 +152,7 @@ async def _enqueueLLMDebounce(
         urlCandidateText=payload.urlCandidateText,
         replyLine=payload.replyLine,
         currentText=payload.currentText,
+        memoryTurn=payload.memoryTurn,
     ):
         await message.reply_text("……消息太多了喵，等锌酱处理完再发吧💦")
         return False
@@ -187,9 +189,13 @@ async def _generateReplyOrNotify(
     userID: int,
     allImages: list[dict],
     urlContexts: list[dict] | None = None,
+    memoryQuery: MemoryQuery | None = None,
 ) -> str | None:
     """
     调用 LLM 生成回复；失败时向用户发送错误提示。
+
+    memoryQuery 是防抖批次保留下来的结构化检索输入，必须原样透传到生成层，
+    以便首生成与后续审核重试使用同一组 current/reply 轮次。
 
     返回:
         str - 生成成功的回复文本
@@ -212,6 +218,7 @@ async def _generateReplyOrNotify(
             userID=userID,
             images=(allImages or None),
             urlContexts=urlContexts,
+            memoryQuery=memoryQuery,
             telegramContext=context,
         )
     except Exception as e:
@@ -302,6 +309,7 @@ async def _runLLMPipeline(
             userID=target.userID,
             allImages=batch.images,
             urlContexts=urlContexts,
+            memoryQuery=batch.memoryQuery,
         )
         if reply is None:
             return
@@ -323,6 +331,7 @@ async def _runLLMPipeline(
             includeContext=batch.includeContext,
             urlContexts=urlContexts,
             displayBlocks=displayBlocks,
+            memoryQuery=batch.memoryQuery,
         )
 
         # TG 侧回调闭包：review.py 不碰 PTB，int() 类型转换留在本侧完成
@@ -340,6 +349,7 @@ async def _runLLMPipeline(
                 urlContexts=generated.urlContexts,
                 autoMode=autoMode,
                 displayBlocks=generated.displayBlocks,
+                memoryQuery=generated.memoryQuery,
             )
 
         async def _sendTGMemoryReview(actDict):

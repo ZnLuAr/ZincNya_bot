@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "repository": "Qdrant/bge-small-zh-v1.5",
+  "revision": "46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59",
+  "encodingVersion": "bge-small-zh-v1.5-cls-v1",
+  "queryPrefix": "为这个句子生成表示以用于检索相关文章：",
+  "maxTokens": 256,
+  "embeddingDimension": 512,
+  "pooling": "cls",
+  "normalization": "l2",
+  "specialTokens": {
+    "cls": "[CLS]",
+    "sep": "[SEP]",
+    "pad": "[PAD]"
+  },
+  "artifacts": [
+    {
+      "path": "model_optimized.onnx",
+      "size": 94781076,
+      "sha256": "1294ea4b6331115a353d81f96b85e8c8d7fdcc284453d5b2fab5b016230aad38"
+    },
+    {
+      "path": "tokenizer.json",
+      "size": 439125,
+      "sha256": "48cea5d44424912a6fd1ea647bf4fe50b55ab8b1e5879c3275f80e339e8fae26"
+    },
+    {
+      "path": "ort_config.json",
+      "size": 1234,
+      "sha256": "97e78d1d21c2eb719e865b018f17915df6a12ed987446eb7f3f3a783a5afb1e1"
+    }
+  ]
+}

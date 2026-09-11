@@ -13,6 +13,7 @@ from utils.core.logger import logSystemEvent, LogLevel, LogChildType
 
 from ..config import getForceFallbackPrompt, loadPrompts, loadLLMConfig, _FALLBACK_PROMPTS
 from ..contextBuilder import buildConversationContext
+from ..memory.types import MemoryQuery
 from ..promptSafety import neutralizePromptDelimiters
 from ._guardrails import SYSTEM_GUARDRAILS, MEMORY_ACTION_INSTRUCTIONS, VISION_DESCRIBE_PROMPT, OPS_FEEDBACK_INSTRUCTIONS
 from ._request import requestWithRetry
@@ -155,6 +156,7 @@ async def generateReply(
     sessionID: str | int | None = None,
     images: list[dict] | None = None,
     urlContexts: list[dict] | None = None,
+    memoryQuery: MemoryQuery | None = None,
     telegramContext = None,
 ) -> str:
     """
@@ -164,6 +166,8 @@ async def generateReply(
         images: 图片列表 [{"data": b64_str, "mimeType": "image/jpeg"}, ...]
                 为 None 或空列表时表示纯文本
         urlContexts: URL 抓取结果列表
+        memoryQuery: 防抖阶段捕获的结构化当前轮次，供 memory 检索及审核重试复用；
+                     None 时由 contextBuilder 从 userMessage 构造兼容查询
 
     图片处理策略（由 visionModel 配置决定）：
         - visionModel == model → 单调用：图片直接传给主模型
@@ -203,6 +207,7 @@ async def generateReply(
         includeContext=includeContext,
         urlContexts=urlContexts,
         llmConfig=cfg,
+        memoryQuery=memoryQuery,
         telegramContext=telegramContext,
     )
 

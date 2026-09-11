@@ -185,7 +185,7 @@ LLM_PROXY = os.getenv("LLM_PROXY", None)                        # HTTP/SOCKS 代
 LLM_CONFIG_PATH = os.path.join(DATA_DIR, "llm", "llmConfig.json")
 LLM_PROMPTS_PATH = os.path.join(DATA_DIR, "llm", "prompts.json")
 LLM_DEFAULT_MODEL = "claude-sonnet-4-6"
-LLM_MAX_CONTEXT_MESSAGES = 20                                  # 单次记忆最大读取条数
+LLM_MAX_CONTEXT_MESSAGES = 30                                  # 直接拼入 prompt 的近期历史条数上限
 LLM_RATE_LIMIT_SECONDS = 5
 LLM_DEBOUNCE_SECONDS = 1.5                                     # 防抖等待时间（秒）
 LLM_PENDING_MSG_LIMIT = 10                                     # 每用户防抖缓冲最大条数
@@ -204,8 +204,35 @@ LLM_MEMORY_PRIORITY_CAP = 3                # 单条记忆 priority 上限
 LLM_MEMORY_MAX_CONTENT_LEN = 500           # 单条记忆 content 最大长度（字符）
 LLM_MEMORY_MAX_ACTIONS = 3                 # 单轮回复最多解析的记忆操作数
 LLM_MEMORY_MAX_TAGS = 10                   # 单条记忆最多标签数
+LLM_MEMORY_HINT_MAX_CHARS = 80             # 单条记忆检索说明最大长度（字符）
 LLM_MEMORY_RETRIEVE_PER_SCOPE = 20         # 检索时每作用域候选上限
 LLM_MEMORY_RETRIEVE_TOTAL = 10             # 检索时汇池后取前 N 条
+LLM_MEMORY_CONTEXT_MAX_CHARS = 1500         # 最终 memory 块硬上限（Unicode 字符）
+LLM_MEMORY_PINNED_MAX_CHARS = 500           # 常驻记忆段默认字符预算
+LLM_MEMORY_QUERY_HISTORY_LIMIT = 20         # memory 语义检索使用的近期历史条数上限
+LLM_MEMORY_QUERY_HISTORY_SECONDS = 1800     # 检索历史时间窗口（秒）
+LLM_MEMORY_QUERY_HISTORY_MAX_CHARS = 600    # 检索历史总字符上限
+LLM_MEMORY_ENCODING_MAX_TOKENS = 256       # 本地语义编码器单次输入上限（含特殊 token）
+LLM_MEMORY_CHUNK_OVERLAP = 32              # 长记忆语义分片的重叠 token 数
+LLM_MEMORY_VECTOR_CACHE_BYTES = 32 * 1024 * 1024  # 已编码 memory 热缓存字节预算
+LLM_MEMORY_RETRIEVAL_TIMEOUT_SECONDS = 2.0         # 单次混合检索墙钟上限（秒）
+LLM_MEMORY_MAX_ACTIVE_RETRIEVALS = 2               # 允许同时占用检索容量的请求数
+LLM_MEMORY_QUERY_QUEUE_LIMIT = 4                   # 等待 native worker 的检索请求上限
+LLM_MEMORY_INDEX_QUEUE_LIMIT = 256                 # 在线索引更新队列上限
+LLM_MEMORY_INDEX_PAGE_SIZE = 128                   # 后台对账每页读取条数
+LLM_MEMORY_RECONCILE_SECONDS = 30                  # 索引对账间隔（秒）
+LLM_MEMORY_QUERY_BURST_LIMIT = 8                   # 连续查询后必须让出一次索引机会
+LLM_MEMORY_RRF_K = 60                              # 词法/语义名次融合的 RRF 平滑常量
+LLM_MEMORY_BM25_K1 = 1.2                           # BM25 词频饱和参数
+LLM_MEMORY_BM25_B = 0.75                           # BM25 文档长度归一化参数
+LLM_MEMORY_MODEL_DIR = os.path.join(PROJECT_ROOT, ".cache", "llmMemory", "model")  # 本地模型目录
+LLM_MEMORY_MODEL_MANIFEST_PATH = os.path.join(
+    PROJECT_ROOT, "utils", "llm", "memory", "modelManifest.json"
+)  # 固定模型版本与 artifact 校验信息
+LLM_MEMORY_CALIBRATION_PATH = os.path.join(
+    PROJECT_ROOT, "utils", "llm", "memory", "retrievalCalibration.json"
+)  # 已批准的通道阈值
+LLM_MEMORY_REPORT_DIR = os.path.join(PROJECT_ROOT, ".cache", "llmMemory", "reports")  # 评估报告目录
 # 视觉描述生成参数（原散落于 client/_generate.py / vision.py）
 LLM_VISION_MAX_TOKENS = 4096               # 视觉描述生成 max_tokens
 LLM_VISION_TEMPERATURE = 0.2               # 视觉描述生成 temperature
@@ -244,4 +271,3 @@ def migrateLegacyLLMPaths():
         if os.path.exists(legacy_path) and not os.path.exists(new_path):
             os.makedirs(os.path.dirname(new_path), exist_ok=True)
             os.replace(legacy_path, new_path)
-

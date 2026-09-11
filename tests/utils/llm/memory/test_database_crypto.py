@@ -20,6 +20,7 @@ from utils.core.crypto import decryptText
 from utils.llm.memory.database import (
     addMemory,
     getMemoryByID,
+    getMemoryCounts,
     getMemories,
     updateMemory,
 )
@@ -46,6 +47,8 @@ async def memoryDb(inMemoryDb):
             enabled INTEGER NOT NULL DEFAULT 1,
             priority INTEGER NOT NULL DEFAULT 0,
             source TEXT NOT NULL DEFAULT 'manual',
+            mode TEXT NOT NULL DEFAULT 'contextual',
+            retrieval_hint BLOB,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
@@ -88,6 +91,36 @@ async def test_get_memory_decrypts(tmpKey, patchRun):
 
 
 @pytest.mark.asyncio
+async def test_memory_counts_do_not_decrypt_rows(tmpKey, patchRun):
+    await addMemory("global", None, "启用")
+    await addMemory("global", None, "停用", enabled=False)
+
+    with patch("utils.llm.memory.database._rowToMemoryDict") as mockDecode:
+        counts = await getMemoryCounts()
+
+    assert counts == {"total": 2, "enabled": 1}
+    mockDecode.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retrieval_hint_is_encrypted_and_decrypted(tmpKey, patchRun):
+    memID = await addMemory(
+        "global",
+        None,
+        "用户正在准备考试",
+        retrievalHint="复习安排与临近考试压力",
+    )
+
+    raw = patchRun.execute(
+        "SELECT retrieval_hint FROM memory_entries WHERE id = ?",
+        (memID,),
+    ).fetchone()["retrieval_hint"]
+    assert raw != "复习安排与临近考试压力"
+    assert decryptText(raw) == "复习安排与临近考试压力"
+    assert (await getMemoryByID(memID))["retrievalHint"] == "复习安排与临近考试压力"
+
+
+@pytest.mark.asyncio
 async def test_update_memory_reencrypts(tmpKey, patchRun):
     """updateMemory 更新 content 后仍是加密存储且可解密。"""
     memID = await addMemory("global", None, "旧内容")
@@ -102,6 +135,34 @@ async def test_update_memory_reencrypts(tmpKey, patchRun):
 
     mem = await getMemoryByID(memID)
     assert mem["content"] == "新内容"
+
+
+@pytest.mark.asyncio
+async def test_content_change_without_new_hint_clears_old_hint(tmpKey, patchRun):
+    memID = await addMemory(
+        "global",
+        None,
+        "旧内容",
+        retrievalHint="旧检索说明",
+    )
+
+    assert await updateMemory(memID, content="新内容") is True
+    assert (await getMemoryByID(memID))["retrievalHint"] is None
+
+
+@pytest.mark.asyncio
+async def test_metadata_change_preserves_hint(tmpKey, patchRun):
+    memID = await addMemory(
+        "global",
+        None,
+        "内容",
+        retrievalHint="检索说明",
+    )
+
+    assert await updateMemory(memID, priority=2, mode="pinned") is True
+    memory = await getMemoryByID(memID)
+    assert memory["retrievalHint"] == "检索说明"
+    assert memory["mode"] == "pinned"
 
 
 @pytest.mark.asyncio

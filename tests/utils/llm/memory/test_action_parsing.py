@@ -4,8 +4,17 @@ tests/utils/llm/memory/test_action_parsing.py
 测试 LLM 记忆操作的解析与清理逻辑。
 """
 
+import asyncio
+
 import pytest
-from utils.llm.memory.action import parseMemoryActions
+from unittest.mock import AsyncMock, patch
+
+from utils.llm.memory.action import (
+    MemoryAction,
+    executeAction,
+    parseMemoryActions,
+    validateAction,
+)
 
 
 # ===========================================================================
@@ -129,6 +138,33 @@ def test_parse_memory_actions_json_errors():
     assert "<MEMORY_ACTION>" not in cleaned3
 
 
+@pytest.mark.asyncio
+@patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
+async def test_parse_errors_do_not_logMemoryBody(mockLog):
+    secret = "绝密事实 secret-hint-42"
+    malformed = (
+        f'<MEMORY_ACTION>{{"action":"add","content":"{secret}"'
+        f'</MEMORY_ACTION>'
+    )
+    malformedItem = (
+        '<MEMORY_ACTION>[{"action":"add","priority":"not-an-int",'
+        '"content":"' + secret + '"}]</MEMORY_ACTION>'
+    )
+
+    parseMemoryActions(malformed)
+    parseMemoryActions(malformedItem)
+    await asyncio.sleep(0)
+
+    loggedText = " ".join(
+        str(argument)
+        for call in mockLog.call_args_list
+        for argument in call.args
+    )
+    assert secret not in loggedText
+    assert "errorType=" in loggedText
+    assert "inputType=" in loggedText
+
+
 # ===========================================================================
 # 基线测试 — 正常路径
 # ===========================================================================
@@ -141,6 +177,51 @@ def test_normal_path_strips_memory_blocks():
     assert "<MEMORY_ACTION>" not in cleaned
     assert len(actions) == 1
     assert actions[0].content == "测试"
+
+
+def test_modeAndRetrievalHintRoundTrip():
+    text = (
+        '<MEMORY_ACTION>{"action":"add","scope_type":"global",'
+        '"scope_id":"global","content":"测试","mode":"pinned",'
+        '"retrieval_hint":"讨论测试安排时"}</MEMORY_ACTION>'
+    )
+
+    _, actions = parseMemoryActions(text)
+    restored = MemoryAction.fromDict(actions[0].toDict())
+
+    assert restored.mode == "pinned"
+    assert restored.retrievalHint == "讨论测试安排时"
+
+
+@pytest.mark.asyncio
+async def test_invalidHintDoesNotDiscardOtherwiseValidAdd():
+    text = (
+        '<MEMORY_ACTION>{"action":"add","scope_type":"global",'
+        '"scope_id":"global","content":"合法事实",'
+        '"retrieval_hint":"第一行\\n第二行"}</MEMORY_ACTION>'
+    )
+
+    _, actions = parseMemoryActions(text)
+
+    assert len(actions) == 1
+    assert actions[0].retrievalHint is None
+    assert await validateAction(actions[0]) is None
+
+
+@pytest.mark.asyncio
+@patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
+@patch("utils.llm.memory.action.addMemory", new_callable=AsyncMock)
+async def test_pinnedAddRequiresTrustedApproval(mockAdd, mockLog):
+    action = MemoryAction(
+        action="add",
+        scopeType="global",
+        scopeID="global",
+        content="常驻事实",
+        mode="pinned",
+    )
+
+    assert await executeAction(action) is False
+    mockAdd.assert_not_awaited()
 
 
 def test_multiple_memory_blocks():

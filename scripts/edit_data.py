@@ -82,14 +82,19 @@ EXCLUDE_PATTERNS = [
     "*~",
 ]
 
-# 单表数据库中需要加解密的 content 列（与 utils/core/crypto.py 加密口径一致）。
-# memory_entries（长期记忆）和 todos（用户待办）的 content 列加密存储；
-# knowledge_entries 是 bot 自身知识、明文进 git，不加密，故不在此表中。
-# DBEditor 在导出时解密这些列供编辑、导入时重新加密回写。
-ENCRYPTED_CONTENT_COLUMNS = {
-    "memory_entries": "content",
-    "todos": "content",
+# 单表数据库中的隐私字段（与 utils/core/crypto.py 加密口径一致）。
+# plaintext 字段导出为明文供既有编辑流程使用；opaque 字段只允许密文封装往返。
+ENCRYPTED_COLUMNS = {
+    "memory_entries": {
+        "content": "plaintext",
+        "retrieval_hint": "opaque",
+    },
+    "todos": {
+        "content": "plaintext",
+    },
 }
+
+_ENCRYPTED_WRAPPER_KEY = "encrypted"
 
 
 # ============================================================================
@@ -109,13 +114,27 @@ SCHEMAS = {
                     "required": ["content", "scope_type", "scope_id"],
                     "properties": {
                         "id": {"type": ["integer", "null"]},
-                        "scope_type": {"enum": ["global", "chat", "user"]},
+                        "scope_type": {"enum": ["global", "chat", "user", "session"]},
                         "scope_id": {"type": "string"},
                         "content": {"type": "string", "minLength": 1},
                         "tags_json": {"type": "array", "items": {"type": "string"}},
                         "enabled": {"type": "integer", "enum": [0, 1]},
-                        "priority": {"type": "integer", "minimum": 1, "maximum": 3},
+                        "priority": {"type": "integer", "minimum": 0, "maximum": 3},
                         "source": {"type": "string"},
+                        "mode": {"enum": ["contextual", "pinned"]},
+                        "retrieval_hint": {
+                            "oneOf": [
+                                {"type": "null"},
+                                {
+                                    "type": "object",
+                                    "required": [_ENCRYPTED_WRAPPER_KEY],
+                                    "properties": {
+                                        _ENCRYPTED_WRAPPER_KEY: {"type": "string", "minLength": 1},
+                                    },
+                                    "additionalProperties": False,
+                                },
+                            ],
+                        },
                         "created_at": {"type": "string"},
                         "updated_at": {"type": "string"},
                     }
@@ -617,6 +636,35 @@ class DBEditor:
             return str(value)
 
     @staticmethod
+    def _export_opaque_value(fernet: "Fernet", value) -> Optional[Dict[str, str]]:
+        """校验密文归属当前密钥后，以不透明封装导出而不泄露 hint 明文。"""
+        if value is None:
+            return None
+        try:
+            token = value.encode("utf-8") if isinstance(value, str) else bytes(value)
+            fernet.decrypt(token)
+            return {_ENCRYPTED_WRAPPER_KEY: token.decode("ascii")}
+        except Exception:
+            return None
+
+    @staticmethod
+    def _import_opaque_value(fernet: "Fernet", value) -> Optional[bytes]:
+        """只接受单字段密文封装，并验证 token 可由当前数据库密钥解密。"""
+        if value is None:
+            return None
+        if not isinstance(value, dict) or set(value) != {_ENCRYPTED_WRAPPER_KEY}:
+            raise ValueError("retrieval_hint 只能是 encrypted 密文封装或 null")
+        tokenText = value.get(_ENCRYPTED_WRAPPER_KEY)
+        if not isinstance(tokenText, str) or not tokenText:
+            raise ValueError("retrieval_hint 的 encrypted 密文不能为空")
+        try:
+            token = tokenText.encode("ascii")
+            fernet.decrypt(token)
+        except Exception as exc:
+            raise ValueError("retrieval_hint 的 encrypted 密文无效") from exc
+        return token
+
+    @staticmethod
     def export_to_json(db_path: Path) -> Dict:
         """
         导出数据库为 JSON
@@ -657,13 +705,17 @@ class DBEditor:
                     except json.JSONDecodeError:
                         rec['tags_json'] = []
 
-            # 解密加密的 content 列（memory_entries / todos），使编辑时看到明文。
-            enc_col = ENCRYPTED_CONTENT_COLUMNS.get(table_name)
-            if enc_col:
+            encrypted_columns = ENCRYPTED_COLUMNS.get(table_name, {})
+            if encrypted_columns:
                 fernet = DBEditor._load_fernet()
                 for rec in records:
-                    if enc_col in rec and rec[enc_col] is not None:
-                        rec[enc_col] = DBEditor._decrypt_content_value(fernet, rec[enc_col])
+                    for column, exportMode in encrypted_columns.items():
+                        if column not in rec or rec[column] is None:
+                            continue
+                        if exportMode == "plaintext":
+                            rec[column] = DBEditor._decrypt_content_value(fernet, rec[column])
+                        else:
+                            rec[column] = DBEditor._export_opaque_value(fernet, rec[column])
 
             conn.close()
             return {"table": table_name, "records": records}
@@ -704,9 +756,8 @@ class DBEditor:
         if not is_valid_table_name(table_name):
             raise ValueError(f"不安全的表名: {table_name}")
 
-        # 该表的 content 列是否需要加密回写（memory_entries / todos）
-        enc_col = ENCRYPTED_CONTENT_COLUMNS.get(table_name)
-        fernet = DBEditor._load_fernet() if enc_col else None
+        encrypted_columns = ENCRYPTED_COLUMNS.get(table_name, {})
+        fernet = DBEditor._load_fernet() if encrypted_columns else None
 
         # 连接数据库。用 try/finally 确保任何异常路径都回滚并关闭连接，
         # 否则中途抛错会泄露连接（依赖 GC 隐式回滚），在 Windows 上还会锁住 DB 文件。
@@ -721,9 +772,28 @@ class DBEditor:
             valid_columns = {row[1] for row in cur.execute(f"PRAGMA table_info({table_name})").fetchall()}
 
             def _check_columns(rec_keys):
+                """限制 JSON 字段为真实 schema 列，防止动态 SQL 列名注入。"""
                 for k in rec_keys:
                     if k not in valid_columns:
                         raise ValueError(f"不安全或未知的列名: {k}")
+
+            def _tags_value(value):
+                """将可解析的 tags_json 转为列表，便于判断标签是否真实变化。"""
+                if isinstance(value, list):
+                    return value
+                try:
+                    parsed = json.loads(value or "[]")
+                    return parsed if isinstance(parsed, list) else value
+                except (TypeError, json.JSONDecodeError):
+                    return value
+
+            def _blob_value(value):
+                """把导入值恢复为 SQLite BLOB 接受的 bytes。"""
+                if value is None:
+                    return None
+                if isinstance(value, str):
+                    return value.encode("utf-8")
+                return bytes(value)
 
             # 读取现有记录
             existing_rows = cur.execute(f"SELECT * FROM {table_name}").fetchall()
@@ -740,21 +810,62 @@ class DBEditor:
                 # 校验本条记录的所有列名都属于真实 schema（防 SQL 注入）
                 _check_columns(rec.keys())
 
-                # 序列化 JSON 字段
-                if 'tags_json' in rec and isinstance(rec['tags_json'], list):
-                    rec['tags_json'] = json.dumps(rec['tags_json'], ensure_ascii=False)
+                prepared = dict(rec)
+                existing = existing_records.get(rec_id)
+                contentChanged = bool(
+                    existing is not None
+                    and "content" in prepared
+                    and prepared["content"] is not None
+                    and str(prepared["content"])
+                    != DBEditor._decrypt_content_value(fernet, existing.get("content"))
+                ) if table_name == "memory_entries" else False
+                tagsChanged = bool(
+                    existing is not None
+                    and "tags_json" in prepared
+                    and _tags_value(prepared["tags_json"])
+                    != _tags_value(existing.get("tags_json"))
+                ) if table_name == "memory_entries" else False
 
-                # 加密 content 列回写（编辑时是明文，落库需还原为密文）。
-                # 即便 dry_run 也加密，保证预览出的 values 与实际写入一致。
-                if enc_col and enc_col in rec and rec[enc_col] is not None:
-                    rec[enc_col] = fernet.encrypt(str(rec[enc_col]).encode("utf-8"))
+                # 序列化 JSON 字段
+                if 'tags_json' in prepared and isinstance(prepared['tags_json'], list):
+                    prepared['tags_json'] = json.dumps(prepared['tags_json'], ensure_ascii=False)
+
+                for column, importMode in encrypted_columns.items():
+                    if column not in prepared or prepared[column] is None:
+                        continue
+                    if importMode == "plaintext":
+                        prepared[column] = fernet.encrypt(
+                            str(prepared[column]).encode("utf-8")
+                        )
+                    else:
+                        prepared[column] = DBEditor._import_opaque_value(
+                            fernet,
+                            prepared[column],
+                        )
+
+                if (
+                    table_name == "memory_entries"
+                    and "retrieval_hint" in valid_columns
+                    and existing is not None
+                ):
+                    # hint 是依附正文与 tags 的检索元数据。若二者改变，而 JSON
+                    # 只是原样带回 opaque hint（或省略该列），应将旧 hint 作废；
+                    # 只有显式提供另一份经当前密钥验证的密文时才保留替换值。
+                    if contentChanged or tagsChanged:
+                        oldHint = _blob_value(existing.get("retrieval_hint"))
+                        providedHint = prepared.get("retrieval_hint")
+                        if "retrieval_hint" not in prepared or providedHint == oldHint:
+                            prepared["retrieval_hint"] = None
 
                 if rec_id is None or rec_id not in existing_records:
                     # INSERT（新记录或 id 为 null）
-                    columns = [k for k in rec.keys() if k != 'id' or rec['id'] is not None]
+                    columns = [
+                        k for k in prepared.keys()
+                        if k != 'id' or prepared['id'] is not None
+                    ]
                     placeholders = ', '.join(['?'] * len(columns))
                     col_names = ', '.join(columns)
-                    values = [rec[k] for k in columns]
+                    values = [prepared[k] for k in columns]
 
                     sql = f"INSERT INTO {table_name} ({col_names}) VALUES ({placeholders})"
                     sql_statements.append((sql, values))
@@ -764,8 +875,12 @@ class DBEditor:
                         cur.execute(sql, values)
                 else:
                     # UPDATE（更新现有记录）
-                    set_clause = ', '.join([f"{k} = ?" for k in rec.keys() if k != 'id'])
-                    values = [rec[k] for k in rec.keys() if k != 'id'] + [rec_id]
+                    set_clause = ', '.join([
+                        f"{k} = ?" for k in prepared.keys() if k != 'id'
+                    ])
+                    values = [
+                        prepared[k] for k in prepared.keys() if k != 'id'
+                    ] + [rec_id]
 
                     sql = f"UPDATE {table_name} SET {set_clause} WHERE id = ?"
                     sql_statements.append((sql, values))

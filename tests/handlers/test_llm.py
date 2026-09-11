@@ -18,7 +18,17 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
-from handlers.llm import handleLLMMessage
+from handlers.llm import (
+    _downloadImagesAndAnnotatePrompt,
+    _enqueueLLMDebounce,
+    _generateReplyOrNotify,
+    _runLLMPipeline,
+    handleLLMMessage,
+)
+from utils.llm.memory.types import MemoryQuery, MemoryTurn
+from utils.llm.messagePrep import PromptPayload
+from utils.llm.review import DispatchTarget
+from utils.llm.state import DebouncedBatch
 
 
 # 同步门禁（def）——MagicMock(return_value=)
@@ -147,3 +157,144 @@ class TestIncomingHistoryWrite:
 
         mockSave.assert_awaited_once()
         assert mockSave.await_args.args[3] == "图片说明"
+
+
+class TestMemoryQueryWiring:
+
+    async def test_image_notes_do_not_pollute_memory_turn(self):
+        memoryTurn = MemoryTurn(
+            currentText="看这张图",
+            replyText="引用原文",
+            currentSender="@alice",
+            replySender="@bob",
+        )
+        payload = PromptPayload(
+            pureText="看这张图",
+            includeContext=True,
+            urlIntentText="看这张图",
+            urlCandidateText="看这张图",
+            currentText="看这张图",
+            memoryTurn=memoryTurn,
+        )
+        with patch(
+            "handlers.llm.downloadImages",
+            new_callable=AsyncMock,
+            return_value=([{"data": "image", "mimeType": "image/jpeg"}], ["[图片过大]"]),
+        ):
+            annotated, images = await _downloadImagesAndAnnotatePrompt(
+                MagicMock(),
+                [MagicMock()],
+                payload,
+            )
+
+        assert annotated.pureText == "[图片过大]\n看这张图"
+        assert annotated.currentText == "[图片过大]\n看这张图"
+        assert annotated.memoryTurn is memoryTurn
+        assert images == [{"data": "image", "mimeType": "image/jpeg"}]
+
+    async def test_enqueue_forwards_memory_turn_to_pending_buffer(self):
+        memoryTurn = MemoryTurn(currentText="当前", replyText="引用")
+        payload = PromptPayload(
+            pureText="prompt",
+            includeContext=True,
+            urlIntentText="当前",
+            urlCandidateText="当前\n引用",
+            replyLine="<@bob> 引用",
+            currentText="当前",
+            memoryTurn=memoryTurn,
+        )
+        message = AsyncMock()
+        target = DispatchTarget(
+            chatID="100",
+            userID=42,
+            username="alice",
+            triggerMsgID=9,
+        )
+        with patch("handlers.llm.appendPendingMessage", return_value=False) as mockAppend:
+            accepted = await _enqueueLLMDebounce(
+                message=message,
+                context=MagicMock(),
+                target=target,
+                payload=payload,
+                images=[],
+            )
+
+        assert accepted is False
+        assert mockAppend.call_args.kwargs["memoryTurn"] is memoryTurn
+
+    async def test_generate_helper_forwards_memory_query(self):
+        memoryQuery = MemoryQuery(turns=(MemoryTurn(currentText="当前"),))
+        context = MagicMock()
+        with patch(
+            "handlers.llm.generateReply",
+            new_callable=AsyncMock,
+            return_value="回复",
+        ) as mockGenerate:
+            result = await _generateReplyOrNotify(
+                context=context,
+                combinedText="prompt",
+                chatID="100",
+                includeContext=True,
+                userID=42,
+                allImages=[],
+                memoryQuery=memoryQuery,
+            )
+
+        assert result == "回复"
+        assert mockGenerate.await_args.kwargs["memoryQuery"] is memoryQuery
+
+    async def test_pipeline_keeps_memory_query_in_generation_and_dispatch(self):
+        memoryQuery = MemoryQuery(
+            turns=(MemoryTurn(currentText="当前", replyText="引用"),),
+        )
+        batch = DebouncedBatch(
+            combinedText="prompt",
+            includeContext=True,
+            images=[],
+            urlIntentText="当前",
+            urlCandidateText="当前\n引用",
+            memoryQuery=memoryQuery,
+        )
+        target = DispatchTarget(
+            chatID="100",
+            userID=42,
+            username="alice",
+            triggerMsgID=9,
+        )
+        context = MagicMock()
+        with (
+            patch("handlers.llm.asyncio.sleep", new_callable=AsyncMock),
+            patch("handlers.llm.collectDebouncedBatch", return_value=batch),
+            patch(
+                "utils.llm.urlReader.readURLContextsForUserText",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch("handlers.llm._sendTypingActionSafely", new_callable=AsyncMock),
+            patch(
+                "handlers.llm._generateReplyOrNotify",
+                new_callable=AsyncMock,
+                return_value="回复",
+            ) as mockGenerate,
+            patch(
+                "handlers.llm.extractValidatedMemoryActions",
+                new_callable=AsyncMock,
+                return_value=("回复", [], 0),
+            ),
+            patch("handlers.llm.addRateLimit"),
+            patch("handlers.llm.getAutoMode", return_value="on"),
+            patch("handlers.llm.getOperatorsWithPermission", return_value=[]),
+            patch(
+                "handlers.llm.dispatchGeneratedOutput",
+                new_callable=AsyncMock,
+            ) as mockDispatch,
+        ):
+            await _runLLMPipeline(
+                debounceKey="100:42",
+                target=target,
+                context=context,
+            )
+
+        assert mockGenerate.await_args.kwargs["memoryQuery"] is memoryQuery
+        generated = mockDispatch.await_args.args[0]
+        assert generated.memoryQuery is memoryQuery

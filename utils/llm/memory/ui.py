@@ -21,7 +21,8 @@ from utils.inputHelper import asyncInput
 
 from .database import (
     addMemory, getMemories, updateMemory, deleteMemory,
-    MEMORY_SCOPE_GLOBAL, VALID_SCOPE_TYPES,
+    MEMORY_MODE_CONTEXTUAL, MEMORY_SCOPE_GLOBAL, MEMORY_SCOPE_RANK,
+    VALID_MEMORY_MODES, VALID_SCOPE_TYPES,
 )
 
 
@@ -31,9 +32,6 @@ _LIST_PREVIEW_LEN = 40
 # 操作结果提示在屏幕上的停留时间（秒）
 _ACTION_NOTICE_DELAY = 0.5
 
-# scope 排序优先级表（global → chat → user → session）
-_SCOPE_ORDER = {"global": 0, "chat": 1, "user": 2, "session": 3}
-
 
 
 
@@ -41,6 +39,8 @@ async def editMemoryViaEditor(
     initialContent: str = "",
     initialTags: Optional[list] = None,
     initialPriority: int = 0,
+    initialMode: str = MEMORY_MODE_CONTEXTUAL,
+    initialRetrievalHint: Optional[str] = None,
 ) -> Optional[tuple]:
     """
     通过编辑器编辑 memory 内容和元数据。
@@ -48,17 +48,21 @@ async def editMemoryViaEditor(
     文件格式：
         # tags: tag1, tag2
         # priority: 5
+        # mode: contextual
+        # hint: related wording
         ---
         content here
 
     返回:
-        (content, tags, priority) 或 None（取消/内容为空）
+        (content, tags, priority, mode, retrievalHint) 或 None（取消/内容为空）
     """
     tagsStr = ", ".join(initialTags) if initialTags else ""
 
     template = (
         f"# tags: {tagsStr}\n"
         f"# priority: {initialPriority}\n"
+        f"# mode: {initialMode}\n"
+        f"# hint: {initialRetrievalHint or ''}\n"
         "---\n"
         f"{initialContent}"
     )
@@ -85,6 +89,8 @@ async def editMemoryViaEditor(
     # 解析头部
     tags = list(initialTags) if initialTags else []
     priority = initialPriority
+    mode = initialMode
+    retrievalHint = initialRetrievalHint
     separatorIdx = None
 
     for i, line in enumerate(lines):
@@ -105,6 +111,14 @@ async def editMemoryViaEditor(
             except ValueError:
                 pass
 
+        elif stripped.startswith("# mode:"):
+            raw = stripped[len("# mode:"):].strip().lower()
+            if raw in VALID_MEMORY_MODES:
+                mode = raw
+
+        elif stripped.startswith("# hint:"):
+            retrievalHint = stripped[len("# hint:"):].strip()
+
     # 分隔符之后为 content
     if separatorIdx is not None:
         contentLines = lines[separatorIdx + 1:]
@@ -115,7 +129,7 @@ async def editMemoryViaEditor(
     if not content:
         return None
 
-    return content, tags, priority
+    return content, tags, priority, mode, retrievalHint
 
 
 
@@ -134,6 +148,7 @@ class MemoryTUIController(ListMenuController):
     """
 
     def __init__(self, **kwargs):
+        """初始化管理列表，并为固定的“添加”行设置数字跳转偏移。"""
         super().__init__(**kwargs)
         # manage 模式下 index 0 固定为 (+) 添加行，数字跳转需偏移 1
         # （输入数字 1 → 跳到第一条真实 memory，即 entries[1]）
@@ -153,7 +168,7 @@ class MemoryTUIController(ListMenuController):
         rows = sorted(
             rows,
             key=lambda r: (
-                _SCOPE_ORDER.get(r["scope_type"], 99),
+                MEMORY_SCOPE_RANK.get(r["scope_type"], 99),
                 -r["priority"],
                 -r["id"],
             ),
@@ -177,6 +192,8 @@ class MemoryTUIController(ListMenuController):
                 "enabled": row["enabled"],
                 "priority": row["priority"],
                 "source": row["source"],
+                "mode": row.get("mode", MEMORY_MODE_CONTEXTUAL),
+                "retrievalHint": row.get("retrievalHint"),
                 "preview": preview,
             })
 
@@ -188,11 +205,14 @@ class MemoryTUIController(ListMenuController):
 
 
     def buildTable(self, visibleEntries, selectedIndex, windowStart):
+        """渲染包含 scope、priority、mode、hint 与启用状态的管理表格。"""
         table = Table(title="Memory 管理")
         table.add_column("No.", justify="right")
         table.add_column("ID", justify="right")
         table.add_column("Scope", justify="left")
         table.add_column("P", justify="right")
+        table.add_column("Mode", justify="left")
+        table.add_column("Hint", justify="left")
         table.add_column("Status", justify="center")
         table.add_column("Preview", justify="left")
 
@@ -204,9 +224,9 @@ class MemoryTUIController(ListMenuController):
 
             if isAddRow:
                 if isSelected:
-                    table.add_row("[bold yellow]>[/]", "", "[bold yellow](+) 添加[/]", "", "", "")
+                    table.add_row("[bold yellow]>[/]", "", "[bold yellow](+) 添加[/]", "", "", "", "", "")
                 else:
-                    table.add_row("", "", "[cyan](+) 添加[/]", "", "", "")
+                    table.add_row("", "", "[cyan](+) 添加[/]", "", "", "", "", "")
             else:
                 scopeType = e['scope_type']
                 scopeID = e['scope_id']
@@ -220,6 +240,8 @@ class MemoryTUIController(ListMenuController):
                         f"[bold yellow]{e['id']}[/]",
                         f"[bold yellow]{scopeStr}[/]",
                         f"[bold yellow]{e['priority']}[/]",
+                        f"[bold yellow]{e.get('mode', MEMORY_MODE_CONTEXTUAL)}[/]",
+                        f"[bold yellow]{e.get('retrievalHint') or '-'}[/]",
                         f"[bold yellow]{'ON' if e['enabled'] else 'OFF'}[/]",
                         f"[bold yellow]{preview}[/]",
                     )
@@ -229,6 +251,8 @@ class MemoryTUIController(ListMenuController):
                         f"[dim]{e['id']}[/]",
                         f"[dim]{scopeStr}[/]",
                         f"[dim]{e['priority']}[/]",
+                        f"[dim]{e.get('mode', MEMORY_MODE_CONTEXTUAL)}[/]",
+                        f"[dim]{e.get('retrievalHint') or '-'}[/]",
                         "[red]OFF[/red]",
                         f"[dim]{preview}[/]",
                     )
@@ -238,6 +262,8 @@ class MemoryTUIController(ListMenuController):
                         str(e['id']),
                         scopeStr,
                         str(e['priority']),
+                        e.get('mode', MEMORY_MODE_CONTEXTUAL),
+                        e.get('retrievalHint') or "-",
                         "[green]ON[/green]",
                         preview,
                     )
@@ -246,14 +272,17 @@ class MemoryTUIController(ListMenuController):
 
 
     def getHelpLine(self):
+        """返回管理模式底部快捷键提示。"""
         return "\n[dim]Enter 编辑 | Del 删除 | ←→ 启用/停用 | Esc 退出[/dim]"
 
 
     def getEmptyMessage(self):
+        """返回无 memory 条目时的占位文本。"""
         return "Memory 列表为空喵……\n"
 
 
     def getExitMessage(self):
+        """返回退出管理界面后的提示文本。"""
         return "退出 Memory 管理喵——\n"
 
 
@@ -292,6 +321,7 @@ class MemoryTUIController(ListMenuController):
 
 
     async def handlePendingAction(self):
+        """执行按键阶段登记的增删改或启停动作，并刷新列表快照。"""
         actionType = self.pendingAction[0]
 
         if actionType == "toggle":
@@ -337,8 +367,16 @@ class MemoryTUIController(ListMenuController):
             if result is None:
                 return True
 
-            content, tags, priority = result
-            memoryID = await addMemory(scopeType, scopeID, content, tags=tags, priority=priority)
+            content, tags, priority, mode, retrievalHint = result
+            memoryID = await addMemory(
+                scopeType,
+                scopeID,
+                content,
+                tags=tags,
+                priority=priority,
+                mode=mode,
+                retrievalHint=retrievalHint,
+            )
 
             print(f"memory #{memoryID} 成功添加\n" if memoryID else "❌ 添加失败\n")
             await asyncio.sleep(_ACTION_NOTICE_DELAY)
@@ -351,12 +389,15 @@ class MemoryTUIController(ListMenuController):
                 entry["content"],
                 entry["tags"],
                 entry["priority"],
+                entry.get("mode", MEMORY_MODE_CONTEXTUAL),
+                entry.get("retrievalHint"),
             ))
             if result is None:
                 return True
 
-            newContent, newTags, newPriority = result
+            newContent, newTags, newPriority, newMode, newRetrievalHint = result
 
+            # 只传递真实变化的字段：未传 hint 表示保留，空字符串才表示清空。
             updateKwargs = {}
             if newContent != entry["content"]:
                 updateKwargs["content"] = newContent
@@ -364,6 +405,10 @@ class MemoryTUIController(ListMenuController):
                 updateKwargs["tags"] = newTags
             if newPriority != entry["priority"]:
                 updateKwargs["priority"] = newPriority
+            if newMode != entry.get("mode", MEMORY_MODE_CONTEXTUAL):
+                updateKwargs["mode"] = newMode
+            if (newRetrievalHint or None) != entry.get("retrievalHint"):
+                updateKwargs["retrievalHint"] = newRetrievalHint
 
             if updateKwargs:
                 ok = await updateMemory(entry["id"], **updateKwargs)
@@ -378,5 +423,6 @@ class MemoryTUIController(ListMenuController):
 
 
 async def memoryMenuController(app=None):
+    """创建并运行 Structured Memory 的交互式管理会话。"""
     controller = MemoryTUIController(app=app, mode="manage")
     await controller.runSession()

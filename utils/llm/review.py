@@ -21,7 +21,7 @@ utils/llm/state.py（getReviewQueue）——状态容器留 state，领域契约
     - kind == "memory"：LLM 自主记忆操作审核
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -40,15 +40,16 @@ from utils.llm.memory.action import (
     executeAction,
     formatActionDetail,
     parseMemoryActions,
+    requiresHumanReview,
     validateAction,
 )
+from utils.llm.memory.types import MemoryQuery
 from utils.llm.state import getReviewQueue
 from utils.telegramHelpers import escapeHtml, sendLLMReply, truncateText
 
 
 _DISPLAY_LIMIT = 200  # 展示用文本截断长度（memory 内容 / reply / 编辑后预览）
 _LOG_FEEDBACK_LEN = 100  # 日志中反馈补充文本的预览长度
-_LOG_CONTENT_LEN = 80  # 日志中记忆操作 content 的预览长度
 _HINT_LEN = 16  # chatScreen 状态栏预览截断长度（随队列 item 契约从 state.py 迁入）
 
 _NO_OPS_HINT = "诶——等等……管理员配置貌似有缺位……💦\n得有人为锌酱说的话负责，锌酱才可以畅所欲言不逾矩的喵……"
@@ -106,7 +107,9 @@ def makeReplyReviewItem(
     includeContext: bool = False,
     urlContexts: list[dict] | None = None,
     displayBlocks: object | None = None,
+    memoryQuery: MemoryQuery | None = None,
 ) -> dict:
+    """构造回复审核快照，并保留 retry 时必须复用的原始 memory query。"""
     return {
         "kind": "reply",
         "chatID": chatID,
@@ -118,6 +121,7 @@ def makeReplyReviewItem(
         "includeContext": includeContext,
         "urlContexts": urlContexts or [],
         "displayBlocks": displayBlocks,
+        "memoryQuery": memoryQuery,
     }
 
 
@@ -131,6 +135,7 @@ def addReviewItem(
     includeContext: bool = False,
     urlContexts: list[dict] | None = None,
     displayBlocks: object | None = None,
+    memoryQuery: MemoryQuery | None = None,
 ):
     """
     将待审核消息加入队列
@@ -154,6 +159,7 @@ def addReviewItem(
         includeContext=includeContext,
         urlContexts=urlContexts,
         displayBlocks=displayBlocks,
+        memoryQuery=memoryQuery,
     ))
 
 
@@ -166,6 +172,7 @@ def makeMemoryReviewItem(
     userID: str | int | None = None,
     displayBlocks: object | None = None,
 ) -> dict:
+    """构造 memory 审核项；``action`` 可包含批准时使用的目标状态快照。"""
     return {
         "kind": "memory",
         "action": action,
@@ -222,9 +229,13 @@ def extractMemoryActionFields(action: dict) -> dict:
         "actionType": action.get("action", "?"),
         "scopeType": action.get("scopeType", "?"),
         "scopeID": action.get("scopeID", ""),
-        "content": action.get("content") or action.get("originalContent") or "",
+        "content": action.get("content"),
+        "originalContent": action.get("originalContent") or "",
         "tags": action.get("tags") or [],
-        "priority": action.get("priority", 0),
+        "priority": action.get("priority"),
+        "mode": action.get("mode"),
+        "originalMode": action.get("originalMode"),
+        "retrievalHint": action.get("retrievalHint"),
         "reason": action.get("reason", ""),
         "memoryID": action.get("memoryID"),
     }
@@ -271,13 +282,32 @@ def formatReviewItemText(item: dict) -> str:
         ]
         if f["memoryID"] is not None:
             lines.append(f"  目标 ID: #{f['memoryID']}")
+        if f["originalContent"]:
+            displayContent = (
+                f["originalContent"]
+                if len(f["originalContent"]) <= _DISPLAY_LIMIT
+                else f["originalContent"][:_DISPLAY_LIMIT] + "..."
+            )
+            lines.append(f"  当前内容: {displayContent}")
         if f["content"]:
-            displayContent = f["content"] if len(f["content"]) <= _DISPLAY_LIMIT else f["content"][:_DISPLAY_LIMIT] + "..."
-            lines.append(f"  内容: {displayContent}")
+            displayContent = (
+                f["content"]
+                if len(f["content"]) <= _DISPLAY_LIMIT
+                else f["content"][:_DISPLAY_LIMIT] + "..."
+            )
+            label = "新内容" if f["originalContent"] else "内容"
+            lines.append(f"  {label}: {displayContent}")
         if f["tags"]:
             lines.append(f"  标签: {', '.join(f['tags'])}")
-        if f["priority"]:
+        if f["priority"] is not None:
             lines.append(f"  优先级: {f['priority']}")
+        if f["originalMode"] is not None:
+            lines.append(f"  当前模式: {f['originalMode']}")
+        if f["mode"] is not None:
+            label = "新模式" if f["originalMode"] is not None else "模式"
+            lines.append(f"  {label}: {f['mode']}")
+        if f["retrievalHint"] is not None:
+            lines.append(f"  检索说明: {f['retrievalHint'] or '(清空)'}")
         if f["reason"]:
             lines.append(f"  理由: {f['reason']}")
         lines.append(f"  触发消息: {item.get('originalMsg', '?')}")
@@ -370,15 +400,21 @@ def queueMemoryActionsToConsole(actions: list, *, chatID, originalMsg, opsID, us
 
 async def dispatchMemoryActionsToConsole(actions, *, chatID, originalMsg, opsID, userID, logLabel):
     """
-    memoryDispatcher 默认实现：async 包装转发到 sync queueMemoryActionsToConsole。
+    memoryDispatcher 默认实现：构造审核快照后转发到 console 队列。
 
     契约：retry/feedback 路径有意不读 memoryAutoApprove（与首生成路径不同——首生成经
     dispatchMemoryActions 的 respectAutoApprove=True 读 memoryAutoApprove）——
     retry 产出的记忆操作本就要 ops 看过新回复才能定夺，故始终走审核。logLabel 仅用于汇总日志。
     """
-    queueMemoryActionsToConsole(
-        actions, chatID=chatID, originalMsg=originalMsg, opsID=opsID, userID=userID,
-    )
+    for act in actions:
+        actDict = await buildMemoryActionReviewPayload(act)
+        addMemoryReviewItem(
+            action=actDict,
+            chatID=chatID,
+            originalMsg=originalMsg,
+            opsID=opsID,
+            userID=userID,
+        )
     if actions:
         await logSystemEvent(
             f"LLM {logLabel} 生成记忆操作",
@@ -415,27 +451,39 @@ async def dispatchMemoryActions(
     if not actions:
         return
 
+    reviewActions = list(actions)
     if respectAutoApprove and getMemoryAutoApprove():
+        reviewActions = []
         for act in actions:
-            success = await executeAction(act)
+            if await requiresHumanReview(act):
+                reviewActions.append(act)
+                continue
+
+            success = await executeAction(act, humanApproved=False)
             status = "成功" if success else "失败"
             await logAction(
                 "System", f"LLM 记忆操作自动执行 ({status})",
                 formatActionDetail(act),
                 LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
             )
-        return
+            # executeAction 会在写入前重新读取目标；若目标在前一次检查后变为
+            # pinned，它会拒绝自动写入。这里再检查一次，把竞态转入人工审核。
+            if not success and await requiresHumanReview(act):
+                reviewActions.append(act)
+
+        if not reviewActions:
+            return
 
     if not opsList:
         await logSystemEvent(
             "LLM 记忆操作无审核人",
-            f"有 {len(actions)} 个操作被丢弃（无 LLM ops）",
+            f"有 {len(reviewActions)} 个操作被丢弃（无 LLM ops）",
             LogLevel.WARNING,
         )
         return
 
     opsID = opsList[0]
-    for act in actions:
+    for act in reviewActions:
         actDict = await buildMemoryActionReviewPayload(act)
         if autoMode == "console":
             addMemoryReviewItem(
@@ -505,6 +553,8 @@ class GeneratedOutput:
                             按引用标记切分）。降级边界：console/chatScreen 的记忆审核项
                             永远无 displayBlocks——这两端本就不渲染 blockquote，
                             属可接受降级
+        memoryQuery:        首生成使用的结构化 current/reply 轮次；进入审核项后供
+                            retry 复用，避免从 displayOriginalMsg 逆向恢复检索查询
     """
     reply: str
     memoryActions: list
@@ -512,6 +562,7 @@ class GeneratedOutput:
     includeContext: bool
     urlContexts: list[dict] | None = None
     displayBlocks: object | None = None
+    memoryQuery: MemoryQuery | None = None
 
 
 async def _safeReaction(sendReaction, emoji: str) -> None:
@@ -584,6 +635,7 @@ async def dispatchTextReply(
                 includeContext=generated.includeContext,
                 urlContexts=generated.urlContexts,
                 displayBlocks=generated.displayBlocks,
+                memoryQuery=generated.memoryQuery,
             )
             await _safeReaction(sendReaction, "👀")
             await logAction("System", f"LLM 生成内容等待控制台审核：@{target.username}（{target.chatID}）", f"原文：{generated.displayOriginalMsg}", LogLevel.INFO, LogChildType.WITH_CHILD)
@@ -768,12 +820,29 @@ def formatMemoryReviewText(action: dict, originalMsg: str, displayBlocks=None) -
     ]
     if f["memoryID"] is not None:
         lines.append(f"<b>目标 ID</b>：#{f['memoryID']}")
+    if f["originalContent"]:
+        lines.append(
+            f"<b>当前内容</b>："
+            f"{escapeHtml(truncateCardText(f['originalContent'], _CARD_CONTENT_LEN))}"
+        )
     if f["content"]:
-        lines.append(f"<b>内容</b>：{escapeHtml(truncateCardText(f['content'], _CARD_CONTENT_LEN))}")
+        label = "新内容" if f["originalContent"] else "内容"
+        lines.append(
+            f"<b>{label}</b>："
+            f"{escapeHtml(truncateCardText(f['content'], _CARD_CONTENT_LEN))}"
+        )
     if f["tags"]:
         lines.append(f"<b>标签</b>：{escapeHtml(', '.join(f['tags']))}")
-    if f["priority"]:
+    if f["priority"] is not None:
         lines.append(f"<b>优先级</b>：{f['priority']}")
+    if f["originalMode"] is not None:
+        lines.append(f"<b>当前模式</b>：{escapeHtml(f['originalMode'])}")
+    if f["mode"] is not None:
+        label = "新模式" if f["originalMode"] is not None else "模式"
+        lines.append(f"<b>{label}</b>：{escapeHtml(f['mode'])}")
+    if f["retrievalHint"] is not None:
+        hintText = f["retrievalHint"] or "(清空)"
+        lines.append(f"<b>检索说明</b>：{escapeHtml(hintText)}")
     if f["reason"]:
         lines.append(f"<b>理由</b>：{escapeHtml(truncateCardText(f['reason'], _CARD_CONTENT_LEN))}")
     lines.append("")
@@ -818,12 +887,14 @@ async def _retryReplyReview(
     memoryDispatcher=dispatchMemoryActionsToConsole,
     logLabel: str = "console retry",
 ) -> dict:
+    """重新生成回复，并复用审核项保存的原始 memory 查询轮次。"""
     newReply = await generateReply(
         item["originalMsg"],
         item["chatID"],
         includeContext=bool(item.get("includeContext")),
         userID=item.get("userID"),
         urlContexts=item.get("urlContexts"),
+        memoryQuery=item.get("memoryQuery"),
     )
 
     # 清理 <MEMORY_ACTION> 块、校验并按 memoryDispatcher 分发（默认入 console 队列）
@@ -861,7 +932,8 @@ async def reviewRetryWithFeedback(
     Ops 补充反馈后打回去重试生成。
 
     将 ops 的补充要求追加到 originalMsg 后，作为 [背景信息补充：...] 块。
-    LLM 会将其理解为可信的背景信息。
+    LLM 会将其理解为可信的背景信息；memory 检索则在保留原始 turns 的同时，
+    单独把 feedbackText 加入辅助语义查询，避免增强后的展示字符串污染结构边界。
 
     参数:
         item: 原始审核项
@@ -886,6 +958,9 @@ async def reviewRetryWithFeedback(
     # 在进 <CURRENT_USER_MESSAGE> 前被 neutralizePromptDelimiters 整体中和，
     # 故此处不再各自转义（见 utils/llm/promptSafety.py）。
     enhancedMsg = f"{item['originalMsg']}\n\n[背景信息补充：{trimmed}]"
+    memoryQuery = item.get("memoryQuery")
+    if memoryQuery is not None:
+        memoryQuery = replace(memoryQuery, feedbackText=trimmed)
 
     newReply = await generateReply(
         enhancedMsg,
@@ -893,6 +968,7 @@ async def reviewRetryWithFeedback(
         includeContext=bool(item.get("includeContext")),
         userID=item.get("userID"),
         urlContexts=item.get("urlContexts"),
+        memoryQuery=memoryQuery,
     )
 
     # 清理 <MEMORY_ACTION> 块、校验并按 memoryDispatcher 分发（默认入 console 队列）
@@ -919,19 +995,29 @@ async def reviewRetryWithFeedback(
         "System", "",
         f"生成的消息：{newReply}", LogLevel.INFO, LogChildType.LAST_CHILD,
     )
-    return {**item, "reply": newReply, "memoryFailedCount": failed}
+    return {
+        **item,
+        "reply": newReply,
+        "memoryQuery": memoryQuery,
+        "memoryFailedCount": failed,
+    }
 
 
 async def _approveMemoryReview(item: dict) -> bool:
+    """使用审核快照批准 memory 操作；冲突时刷新目标供再次确认。"""
     actionData = item["action"]
     action = MemoryAction.fromDict(actionData)
-    success = await executeAction(action)
+    success = await executeAction(
+        action,
+        humanApproved=True,
+        expectedState=actionData.get("targetState"),
+    )
+    if not success:
+        await refreshMemoryReviewItem(item)
     status = "成功" if success else "失败"
     detail = f"scope={action.scopeType}:{action.scopeID}"
     if action.memoryID is not None:
         detail += f", id=#{action.memoryID}"
-    if action.content:
-        detail += f", content={action.content[:_LOG_CONTENT_LEN]}"
     await logAction(
         "System", f"LLM 审核：记忆操作 {action.action} {status}",
         detail,
@@ -940,14 +1026,42 @@ async def _approveMemoryReview(item: dict) -> bool:
     return success
 
 
+async def refreshMemoryReviewItem(item: dict) -> bool:
+    """以当前数据库目标刷新 action 与 ``targetState``；不可用时返回 False。"""
+    actionData = item.get("action")
+    if not isinstance(actionData, dict):
+        return False
+
+    try:
+        action = MemoryAction.fromDict(actionData)
+    except (KeyError, TypeError, ValueError):
+        return False
+    if action.memoryID is None:
+        return False
+
+    refreshedAction = await buildMemoryActionReviewPayload(action)
+    if not refreshedAction.get("targetState"):
+        return False
+    item["action"] = refreshedAction
+    return True
+
+
 def _updateReviewItemText(item: dict, editedText: str) -> dict:
+    """返回编辑后的审核项；memory 正文变化时同步清空旧 hint。"""
     kind = item.get("kind", "reply")
     if kind == "memory":
-        return {**item, "action": {**item["action"], "content": editedText}}
+        return {
+            **item,
+            "action": {
+                **item["action"],
+                "content": editedText,
+                "retrievalHint": "",
+            },
+        }
     return {**item, "reply": editedText}
 
 
-async def reviewSend(bot, item: dict) -> None:
+async def reviewSend(bot, item: dict) -> bool:
     """
     发送审核项的 reply 至目标聊天，或执行记忆操作。
 
@@ -957,12 +1071,15 @@ async def reviewSend(bot, item: dict) -> None:
     参数:
         bot: Telegram Bot 实例
         item: 审核项
+
+    返回:
+        True 表示回复已发送或 memory 已执行；False 表示 memory 目标状态冲突，
+        item 已刷新并应重新入队等待人工确认
     """
     kind = item.get("kind", "reply")
 
     if kind == "memory":
-        await _approveMemoryReview(item)
-        return
+        return await _approveMemoryReview(item)
 
     # kind == "reply"
     await sendLLMReply(
@@ -975,6 +1092,7 @@ async def reviewSend(bot, item: dict) -> None:
         "System", "LLM 审核：发送",
         f"原文：{item['originalMsg']}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
     )
+    return True
 
 
 async def reviewRetry(
@@ -1044,10 +1162,19 @@ async def reviewEditSubmit(item: dict, editedText: str) -> dict:
     editedItem = _updateReviewItemText(item, editedText)
 
     if kind == "memory":
+        actionData = item.get("action", {})
+        actionType = actionData.get("action", "?")
+        scopeType = actionData.get("scopeType", "?")
+        scopeID = actionData.get("scopeID", "")
+        memoryID = actionData.get("memoryID")
+        detail = f"{actionType} | scope={scopeType}:{scopeID}"
+        if memoryID is not None:
+            detail += f" | id=#{memoryID}"
         await logAction(
             "System",
             "LLM 审核：记忆操作编辑完成",
-            f"编辑后：{editedText[:_DISPLAY_LIMIT]}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
+            detail,
+            LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
         )
         return editedItem
 

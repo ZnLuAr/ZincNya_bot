@@ -7,14 +7,17 @@ tests/utils/llm/client/test_generate.py
 OPS_FEEDBACK_INSTRUCTIONS（本批新增，为补充反馈功能提供指令）。
 """
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from utils.llm.client._generate import _buildSystemMessages
+import pytest
+
+from utils.llm.client._generate import _buildSystemMessages, generateReply
 from utils.llm.client._guardrails import (
     SYSTEM_GUARDRAILS,
     MEMORY_ACTION_INSTRUCTIONS,
     OPS_FEEDBACK_INSTRUCTIONS,
 )
+from utils.llm.memory.types import MemoryQuery, MemoryTurn
 
 
 _PROMPTS = {"system_prompt": "你是测试助手", "max_tokens": 1024, "temperature": 0.8}
@@ -71,3 +74,45 @@ class TestBuildSystemMessages:
         assert "第二段" in parts
         assert "  " not in parts
         assert "" not in parts
+
+
+@pytest.mark.asyncio
+async def test_generate_reply_passes_memory_query_without_extra_provider_call():
+    memoryQuery = MemoryQuery(
+        turns=(MemoryTurn(currentText="当前", replyText="引用"),),
+    )
+    provider = MagicMock()
+    with (
+        patch("utils.llm.client._generate.loadPrompts", return_value=_PROMPTS),
+        patch("utils.llm.client._generate._buildSystemMessages", return_value=["system"]),
+        patch(
+            "utils.llm.client._generate.loadLLMConfig",
+            return_value={"model": "main-model", "visionModel": "main-model"},
+        ),
+        patch(
+            "utils.llm.client._generate.buildConversationContext",
+            new_callable=AsyncMock,
+            return_value="context",
+        ) as mockContext,
+        patch("utils.llm.client._generate.getProvider", return_value=provider),
+        patch(
+            "utils.llm.client._generate.requestWithRetry",
+            new_callable=AsyncMock,
+            return_value="raw reply",
+        ) as mockRequest,
+        patch(
+            "utils.llm.afcApi.handleAFCInLLMResponse",
+            new_callable=AsyncMock,
+            return_value="final reply",
+        ),
+    ):
+        result = await generateReply(
+            "当前",
+            "chat",
+            includeContext=True,
+            memoryQuery=memoryQuery,
+        )
+
+    assert result == "final reply"
+    assert mockContext.await_args.kwargs["memoryQuery"] is memoryQuery
+    mockRequest.assert_awaited_once()

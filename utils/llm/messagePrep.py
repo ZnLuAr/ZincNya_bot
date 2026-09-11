@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from config import LLM_REPLY_CONTEXT_LIMIT
 
 from utils.llm.config import getMemoryEnabled
+from utils.llm.memory.types import MemoryTurn
 from utils.telegramHelpers import removeMention
 
 
@@ -31,7 +32,7 @@ class PromptPayload:
     LLM prompt 文本准备结果（纯数据载体，PTB-free）。
 
     单条消息经 preparePurePromptText 清洗后的全部产出——prompt 线与展示线
-    在此分岔，四类文本用途隔离（urlIntentText 是安全边界，见模块 docstring）。
+    在此分岔，多条文本用途支路隔离（urlIntentText 是安全边界，见模块 docstring）。
 
     字段（生产：preparePurePromptText；消费：_enqueueLLMDebounce 拆字段入防抖缓冲）:
         pureText:         prompt 主文本。去 @bot / #context 后的当前消息，
@@ -48,6 +49,7 @@ class PromptPayload:
         replyLine:        展示线。"<@发送者> 引用文本"，无引用/引用为空时 ""，
                           已含 LLM_REPLY_CONTEXT_LIMIT（300）截断
         currentText:      展示线。当前消息纯文本（含图片 notes 注入，不含 reply 注入）
+        memoryTurn:       检索线。当前原文与未截断引用的结构化配对；图片 notes 不进入
     """
     pureText: str
     includeContext: bool
@@ -55,6 +57,7 @@ class PromptPayload:
     urlCandidateText: str
     replyLine: str = ""
     currentText: str = ""
+    memoryTurn: MemoryTurn | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -67,7 +70,7 @@ class ReplyContext:
 
     TODO（Design A 预留）：prompt 组装未来改用它——injectReplyTextContext 的标记字符串
     届时改为结构化注入（引用可独立进上下文 tier / 针对性指令 / 多消息配对保真），
-    retry 契约同步改造。收益与改点见 docs/llm-handler.md「四个数据载体」。
+    retry 契约同步改造。收益与改点见 docs/llm-handler.md「数据载体与检索查询」。
 
     字段:
         replyLine:     "<@发送者> 引用文本"；无引用或引用文本为空时 ""；
@@ -75,6 +78,8 @@ class ReplyContext:
         currentText:   当前消息纯文本（原样，无 reply 注入）
         currentSender: "@username" 或 "@first_name"；匿名群/频道（from_user=None）
                        时兜底 "未知用户"
+        replyText:     未截断的引用原文；仅供 memory 检索
+        replySender:   引用消息发送者；与 replyText 独立保存
 
     规范（pin 死，防双处组装漂移）：
         replyLine 含尖括号（"<@someone> 文本"）；currentSender 为裸值（"@curuser"）。
@@ -82,6 +87,8 @@ class ReplyContext:
     replyLine: str = ""
     currentText: str = ""
     currentSender: str = ""
+    replyText: str = ""
+    replySender: str = ""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -145,6 +152,8 @@ def extractReplyTextContext(message, pureText: str) -> ReplyContext:
         replyLine:    "<@发送者> 引用文本"（无引用或引用文本为空时为 ""），已含 300 字截断
         currentText:  当前消息纯文本（原样）
         currentSender: 当前发送者（"@username" 或 "未知用户"；匿名群/频道 from_user=None 时兜底）
+        replyText:    未截断引用原文，仅供 memory 检索线使用
+        replySender:  引用消息发送者，与 replyText 配对
     """
     replyMsg = message.reply_to_message
     if not replyMsg:
@@ -154,19 +163,22 @@ def extractReplyTextContext(message, pureText: str) -> ReplyContext:
     if not replyText:
         return ReplyContext(currentText=pureText, currentSender=_currentSenderOf(message))
 
-    # 截断过长的 reply 文本
-    if len(replyText) > LLM_REPLY_CONTEXT_LIMIT:
-        replyText = replyText[:LLM_REPLY_CONTEXT_LIMIT] + "……"
-
     replyUser = ""
     if replyMsg.from_user:
         replyUser = replyMsg.from_user.username or replyMsg.from_user.first_name or ""
     replySender = f"@{replyUser}" if replyUser else "未知用户"
 
+    # 展示卡受长度预算约束；检索线仍保留完整引用，避免展示截断损失语义。
+    displayReplyText = replyText
+    if len(displayReplyText) > LLM_REPLY_CONTEXT_LIMIT:
+        displayReplyText = displayReplyText[:LLM_REPLY_CONTEXT_LIMIT] + "……"
+
     return ReplyContext(
-        replyLine=f"<{replySender}> {replyText}",
+        replyLine=f"<{replySender}> {displayReplyText}",
         currentText=pureText,
         currentSender=_currentSenderOf(message),
+        replyText=replyText,
+        replySender=replySender,
     )
 
 
@@ -247,6 +259,7 @@ def preparePurePromptText(message, rawText: str, botUsername: str) -> PromptPayl
             urlCandidateText:   当前用户消息文本 + 被回复消息文本，用于提取 URL
             replyLine:          引用行（"<@发送者> 文本"，无引用为空串）——审核卡结构化展示用
             currentText:        当前消息纯文本（含图片 notes，不含 reply 注入）——同上
+            memoryTurn:         当前消息与完整引用的结构化检索输入；图片 notes 不进入
 
     安全提醒：
         urlIntentText 必须在 injectReplyTextContext 调用之前取值，
@@ -272,6 +285,12 @@ def preparePurePromptText(message, rawText: str, botUsername: str) -> PromptPayl
         urlCandidateText=urlCandidateText,
         replyLine=ctx.replyLine,
         currentText=ctx.currentText,
+        memoryTurn=MemoryTurn(
+            currentText=ctx.currentText,
+            replyText=ctx.replyText,
+            currentSender=ctx.currentSender,
+            replySender=ctx.replySender,
+        ),
     )
 
 

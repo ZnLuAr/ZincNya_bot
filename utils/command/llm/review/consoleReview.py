@@ -63,7 +63,10 @@ async def handleConsoleReview(bot):
 
     if choice in ("a", ""):
         try:
-            await reviewSend(bot, item)
+            success = await reviewSend(bot, item)
+            if not success:
+                queue.put_nowait(item)
+                print("[审核] 记忆目标已刷新，请重新确认\n")
         except Exception as e:
             print(f"[审核] 操作失败：{e}\n")
             queue.put_nowait(item)
@@ -85,9 +88,12 @@ async def handleConsoleReview(bot):
             try:
                 editedItem = await reviewEditSubmit(item, newText.rstrip('\n'))
                 if kind == "memory":
-                    # console memory 编辑后立即批准
-                    await reviewSend(bot, editedItem)
-                    print("[审核] 记忆操作编辑后已执行\n")
+                    success = await reviewSend(bot, editedItem)
+                    if success:
+                        print("[审核] 记忆操作编辑后已执行\n")
+                    else:
+                        queue.put_nowait(editedItem)
+                        print("[审核] 记忆目标已刷新，请重新确认\n")
                 else:
                     await reviewSend(bot, editedItem)
                     print(f"[审核] 已发送编辑内容至 {item['chatID']}\n")
