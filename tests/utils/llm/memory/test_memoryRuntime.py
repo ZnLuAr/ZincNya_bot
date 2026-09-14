@@ -62,7 +62,7 @@ class _BlockingQueryEncoder(_FakeEncoder):
         return super().encodeQueries(queryTexts)
 
 
-def _memory(memoryID, *, content=None, enabled=True):
+def _memory(memoryID, *, content=None, enabled=True, mode="contextual"):
     return {
         "id": memoryID,
         "scope_type": "global",
@@ -73,7 +73,7 @@ def _memory(memoryID, *, content=None, enabled=True):
         "enabled": enabled,
         "priority": 0,
         "source": "inferred",
-        "mode": "contextual",
+        "mode": mode,
     }
 
 
@@ -180,6 +180,75 @@ async def test_query_queue_limit_rejects_without_unbounded_executor_submission(m
     assert await first == [{}]
 
 
+@pytest.mark.asyncio
+async def test_query_discovered_cache_miss_does_not_evict_hot_entry(monkeypatch):
+    monkeypatch.setattr(runtimeModule, "LLM_MEMORY_VECTOR_CACHE_BYTES", 4)
+    encoder = _FakeEncoder(matrixSize=4)
+    runtime = MemoryRuntime(encoderFactory=lambda: encoder)
+    runtime._encoder = encoder
+    cached = _memory(1)
+    missing = _memory(2)
+    runtime._publish(
+        1,
+        runtime._fingerprint(cached),
+        _FakeMatrix(4),
+        allowEviction=True,
+    )
+
+    with patch(
+        "utils.llm.memory.runtime.getMemoryByID",
+        new_callable=AsyncMock,
+        side_effect=[missing, missing],
+    ):
+        result = await runtime.scoreSemantic(
+            ["query"],
+            [missing],
+            deadline=time.monotonic() + 2,
+        )
+        assert result == [{}]
+        assert runtime._pendingIndex[2].allowEviction is False
+        await runtime._processIndex()
+
+    assert encoder.encodedMemoryIDs == [2]
+    assert list(runtime._cache) == [1]
+    assert runtime.getStatus()["reconcileCapacitySaturated"] is True
+
+    await runtime.scoreSemantic(
+        ["query"],
+        [missing],
+        deadline=time.monotonic() + 2,
+    )
+    assert runtime._pendingIndex == {}
+    await runtime.close()
+
+
+def test_semantic_cache_status_distinguishes_warm_stale_and_cold_candidates():
+    """检索诊断能解释缓存缺席，而不把冷缓存误报成质量命中。"""
+    runtime = MemoryRuntime(encoderFactory=_FakeEncoder)
+    try:
+        warm = _memory(1, content="原始事实")
+        stale = _memory(1, content="更新后的事实")
+        cold = _memory(2)
+        runtime._publish(
+            1,
+            runtime._fingerprint(warm),
+            _FakeMatrix(),
+            allowEviction=True,
+        )
+        runtime._enqueueIndex(2, allowEviction=False)
+
+        status = runtime.getSemanticCacheStatus([stale, cold])
+
+        assert status["status"] == "cold"
+        assert status["candidateCount"] == 2
+        assert status["readyCount"] == 0
+        assert status["missingCount"] == 1
+        assert status["staleCount"] == 1
+        assert status["pendingCount"] == 1
+    finally:
+        runtime._executor.shutdown(wait=True, cancel_futures=True)
+
+
 def test_lru_byte_limit_and_reconcile_publish_does_not_evict(monkeypatch):
     monkeypatch.setattr(runtimeModule, "LLM_MEMORY_VECTOR_CACHE_BYTES", 10)
     runtime = MemoryRuntime(encoderFactory=_FakeEncoder)
@@ -202,6 +271,23 @@ def test_lru_byte_limit_and_reconcile_publish_does_not_evict(monkeypatch):
         assert list(runtime._cache) == [3]
         assert runtime._cacheBytes == 5
         assert runtime.getStatus()["reconcileCapacitySaturated"] is False
+    finally:
+        runtime._executor.shutdown(wait=True, cancel_futures=True)
+
+
+def test_publish_rejects_matrix_larger_than_cache_budget(monkeypatch):
+    monkeypatch.setattr(runtimeModule, "LLM_MEMORY_VECTOR_CACHE_BYTES", 4)
+    runtime = MemoryRuntime(encoderFactory=_FakeEncoder)
+    try:
+        assert not runtime._publish(
+            1,
+            "too-large",
+            _FakeMatrix(5),
+            allowEviction=True,
+        )
+        assert runtime.getStatus()["cacheEntries"] == 0
+        assert runtime.getStatus()["blockedFingerprints"] == 1
+        assert runtime.getStatus()["lastReason"] == "matrixTooLarge"
     finally:
         runtime._executor.shutdown(wait=True, cancel_futures=True)
 
@@ -251,6 +337,33 @@ async def test_delete_or_disable_invalidates_cached_matrix():
 
 
 @pytest.mark.asyncio
+async def test_pinned_memory_is_evicted_without_encoding():
+    encoder = _FakeEncoder()
+    runtime = MemoryRuntime(encoderFactory=lambda: encoder)
+    runtime._encoder = encoder
+    contextual = _memory(1)
+    pinned = _memory(1, mode="pinned")
+    runtime._publish(
+        1,
+        runtime._fingerprint(contextual),
+        _FakeMatrix(),
+        allowEviction=True,
+    )
+    runtime.notifyMemoryChanged(1)
+
+    with patch(
+        "utils.llm.memory.runtime.getMemoryByID",
+        new_callable=AsyncMock,
+        return_value=pinned,
+    ):
+        await runtime._processIndex()
+
+    assert encoder.encodedMemoryIDs == []
+    assert runtime.getStatus()["cacheEntries"] == 0
+    await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_query_timeout_keeps_native_job_active_until_it_really_finishes():
     started = threading.Event()
     release = threading.Event()
@@ -292,7 +405,7 @@ async def test_reconcile_recovers_missed_notification():
     memory = _memory(5)
     with (
         patch(
-            "utils.llm.memory.runtime.getEnabledMemoryPage",
+            "utils.llm.memory.runtime.getEnabledContextualMemoryPage",
             new_callable=AsyncMock,
             side_effect=[[memory], []],
         ),
@@ -309,6 +422,33 @@ async def test_reconcile_recovers_missed_notification():
 
     assert list(runtime._cache) == [5]
     assert encoder.encodedMemoryIDs == [5]
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_read_error_preserves_partial_scan_and_cache():
+    runtime = MemoryRuntime(encoderFactory=_FakeEncoder)
+    memory = _memory(5)
+    runtime._publish(
+        5,
+        runtime._fingerprint(memory),
+        _FakeMatrix(),
+        allowEviction=True,
+    )
+    runtime._reconcileAfterID = 17
+    runtime._reconcileSeen = {3, 5}
+
+    with patch(
+        "utils.llm.memory.runtime.getEnabledContextualMemoryPage",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        await runtime._reconcileStep()
+
+    assert list(runtime._cache) == [5]
+    assert runtime._reconcileAfterID == 17
+    assert runtime._reconcileSeen == {3, 5}
+    assert runtime._nextReconcile > time.monotonic()
     await runtime.close()
 
 
@@ -334,7 +474,7 @@ async def test_reconcile_capacity_saturation_stops_churn_until_online_eviction(m
 
     with (
         patch(
-            "utils.llm.memory.runtime.getEnabledMemoryPage",
+            "utils.llm.memory.runtime.getEnabledContextualMemoryPage",
             new_callable=AsyncMock,
             return_value=[cached, second, third],
         ),
@@ -438,3 +578,37 @@ async def test_encoder_factory_is_initialized_once_and_close_is_idempotent():
 
     factory.assert_called_once_with()
     assert encoder.closed is True
+
+
+@pytest.mark.asyncio
+async def test_worker_recovers_after_unexpected_iteration_error(monkeypatch):
+    monkeypatch.setattr(runtimeModule, "LLM_MEMORY_WORKER_ERROR_BACKOFF_SECONDS", 0)
+    runtime = MemoryRuntime(encoderFactory=_FakeEncoder)
+    runtime._pendingIndex[1] = runtimeModule._IndexJob(
+        queuedAt=time.monotonic(),
+        allowEviction=False,
+    )
+    calls = 0
+
+    async def _processIndex():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("transient failure")
+        runtime._running = False
+
+    with (
+        patch("utils.llm.memory.runtime.getMemoryRetrievalMode", return_value="hybrid"),
+        patch.object(runtime, "_ensureEncoder", new_callable=AsyncMock, return_value=True),
+        patch.object(runtime, "_processIndex", side_effect=_processIndex),
+        patch(
+            "utils.llm.memory.runtime.logSystemEvent",
+            new_callable=AsyncMock,
+        ) as logEvent,
+    ):
+        await runtime.run()
+
+    assert calls == 2
+    logEvent.assert_awaited_once()
+    assert runtime.getStatus()["workerStarted"] is False
+    await runtime.close()

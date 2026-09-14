@@ -636,7 +636,7 @@ LLM 输出习惯用 Markdown 排版，但 Telegram 原生只支持一小部分�
 
 memory 与知识库的职责不同：知识库可以接受“先召回、再作为备选参考”的语义断层；memory 会直接影响当前对话，因此不能用一次额外的生成调用让模型替检索器补救，也不能把低置信候选全部塞进 prompt。当前正式入口是 `retrieveMemoryContext()`，流程如下：
 
-1. 按当前 `chatID`、`userID`、`sessionID` 读取 global/chat/user/session scope 的全部 `enabled` 记录。这里不按 `priority` 或旧的数量上限截断，先解决候选池过早被挤满的问题。
+1. 按当前 `chatID`、`userID`、`sessionID` 读取 global/chat/user/session scope 的全部 `enabled` 记录。这里不按 `priority` 或旧的数量上限截断，先解决候选池过早被挤满的问题；代价是宽候选的 SQLite、解密和 BM25 成本随规模增长，必须用真实全链路 benchmark 设定运维边界。
 2. `mode=pinned` 的记录进入常驻分支，按 `priority`、scope 专属度和更新时间排序；`priority` 只参与准入后的排序，不是相关性门槛。`mode=contextual` 的记录进入情境分支。
 3. 情境分支独立计算三个通道：当前消息语义、当前消息加明确引用和短历史的辅助语义、当前消息加引用/反馈的 memory 专用词面分数。词面使用独立的 BM25 实现，`tags` 参与加权，`retrieval_hint` 只进入语义索引，不进入词面评分。
 4. 每个通道只接受自己的绝对校准阈值；未过阈值的记录没有该通道贡献，不用“本轮最高分比例”或 `priority` 放宽准入。通过通道的 rank 用 RRF 融合，同一事实在同一 scope 内去重。
@@ -657,7 +657,7 @@ memory 与知识库的职责不同：知识库可以接受“先召回、再作�
 
 `addMemory()`、`updateMemory()`、`deleteMemory()` 统一通过 database CRUD 提交成功后通知当前 `MemoryRuntime`。运行时按 ID 合并待办，异步重读最新记录并增量编码；正文、tags 或 hint 变化会使旧指纹失效，priority/mode-only 更新不重复编码，删除/禁用不会被迟到矩阵复活。运行时不存在时，CRUD 仍正常完成，下一次对账或查询可恢复索引，不需要离线扩展脚本。
 
-管理入口包括 `/llm memory add|edit|list|del|ui`、`/llm memory retrieval legacy|hybrid` 和 `/llm memory status`。`status` 只读取模式、校准原因、条目计数、向量覆盖率、队列和最近降级原因，不创建 encoder；`-hint` 是可选的短检索说明，清空必须显式使用 `-clearhint`。说明不进入最终 memory prompt、日志或普通明文导出。
+管理入口包括 `/llm memory add|edit|list|del|ui`、`/llm memory retrieval legacy|hybrid` 和 `/llm memory status`。`status` 只读取模式、校准原因、条目计数、向量覆盖率、队列、容量饱和标记和最近降级原因，不创建 encoder；请求 diagnostics 另含 `degradedReasons`、`channelDiagnostics` 与 `semanticCache`，均不含正文。`-hint` 是可选的短检索说明，清空必须显式使用 `-clearhint`。说明不进入最终 memory prompt、日志或普通明文导出。
 
 ---
 
@@ -669,8 +669,8 @@ LLM 在回复里夹带 `<MEMORY_ACTION>` 标签、想要新增 / 修改 / 删除
 
 | 条件 | 行为 |
 |------|------|
-| `memoryAutoApprove == True` 且操作不涉及 pinned | `executeAction(...)` 立即执行，无需管理员插手 |
-| `memoryAutoApprove == True` 但操作涉及 pinned | 不自动执行，仍进入下方 console 或 Telegram 人工审核分支 |
+| `memoryAutoApprove == True` 且操作是普通 `global + contextual` | `executeAction(...)` 立即执行，无需管理员插手 |
+| `memoryAutoApprove == True` 且操作是 `chat/user`、涉及 pinned 或目标状态不明确 | 不自动执行，仍进入下方 console 或 Telegram 人工审核分支 |
 | `memoryAutoApprove == False` 且 `autoMode == "console"` | 推入控制台审核队列，等管理员手动确认 |
 | `memoryAutoApprove == False` 且非 console | 给管理员推送 Telegram 记忆审核卡片 |
 | 无 ops 且非 auto-approve | 静默丢弃本次记忆操作，仅打印 `Warning` 日志 |
@@ -767,7 +767,7 @@ def register():
 这里记录当前版本管线没法完美解决、或是设计上遗留的小短板，后续迭代可以对照着优化：
 
 - **历史写入机制**（原「memoryEnabled 对 Telegram 无效」已修复）：`handleLLMMessage` 门禁通过后写 incoming（`interactiveChatID` 守卫——`/send -c` receiver 活跃于该聊天时让位，防双写）；outgoing 挂在 `sendLLMReply` 咽喉（`recordBotMessage`），四条发送路径（on 直发 / off 审核通过 / console·chatScreen / NetworkError 重试）统一覆盖，`:edit` 定稿在审核通过发送时落库、取消与中间重试不落库。
-- **hybrid 尚未校准**：当前 `retrievalCalibration.json` 的数据集散列与三个通道阈值为空，显式切换 hybrid 时可能只有 pinned 或严格已启用通道结果；这不是 legacy 的隐式回退，也不是语义质量通过的证明。需完成脱敏 holdout、目标机资源和受控人工回复验收后再启用。
+- **hybrid 尚未校准**：正式 fixture 扩充后，旧 threshold/holdout 报告已失效；当前 `retrievalCalibration.json` 的数据集散列与三个通道阈值为空，显式切换 hybrid 时可能只有 pinned 或严格已启用通道结果。这不是 legacy 的隐式回退，也不是语义质量通过的证明。需重新完成脱敏 holdout、目标机资源和受控人工回复验收后再启用。
 - **语义索引是进程内缓存**：重启后需要后台重新对账/增量建立，未覆盖的记录仍可参加词面通道；超过缓存容量时不会把缓存覆盖率伪装成全量语义库。
 - `handleTelegramErrors` 不保护 `_runLLMPipeline`。里面任何未 catch 的异常都会触发 asyncio 的 "Task exception was never retrieved" warning，需要依赖自身的 try/except。
 - URL reader 的意图判断是基于关键词的保守策略：不加意图词的"再试一次"类追问不会触发 URL 读取。必要时需要用户显式说"再读一次"或加 `#url` 标记。

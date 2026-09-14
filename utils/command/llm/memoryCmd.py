@@ -34,7 +34,7 @@ from .._helpRender import renderSubcommands
 # 子命令速查表（case _ 提示的数据源；新增子命令时同步此处与 match 分支）
 _MEMORY_SUBCOMMANDS = {
     "-on | -off | -once": "开启 / 关闭记忆模式，或仅下一次带入历史",
-    "-autoapprove": "切换记忆自动批准（跳过审核）",
+    "-autoapprove": "切换普通 global contextual 自动批准（其他 action 仍审核）",
     "list": "列出记忆条目及 mode/hint",
     "add": "新增记忆条目（支持 -mode / -hint）",
     "edit": "编辑记忆条目（支持 -mode / -hint / -clearhint）",
@@ -295,9 +295,13 @@ async def _printMemoryStatus():
     runtimeStatus = runtime.getStatus() if runtime is not None else None
 
     enabledCount = counts.get("enabled", 0)
+    contextualEnabledCount = counts.get("contextualEnabled", enabledCount)
     totalCount = counts.get("total", 0)
     cacheEntries = runtimeStatus.get("cacheEntries", 0) if runtimeStatus else 0
-    coverage = (cacheEntries / enabledCount * 100) if enabledCount else 100.0
+    coverage = (
+        cacheEntries / contextualEnabledCount * 100
+        if contextualEnabledCount else 100.0
+    )
 
     print("[memory] 检索状态：")
     print(f"  配置模式：{mode}")
@@ -313,6 +317,7 @@ async def _printMemoryStatus():
     if runtimeStatus is None:
         print("  Runtime：未注册")
         print("  向量缓存：0 条（未启动编码器）")
+        print("  对账容量：不可用（Runtime 未注册）")
     else:
         runtimeState = "运行中" if runtimeStatus.get("running") else "已停止"
         if runtimeStatus.get("closing"):
@@ -322,7 +327,7 @@ async def _printMemoryStatus():
             f"{'已就绪' if runtimeStatus.get('encoderReady') else '未就绪'}"
         )
         print(
-            f"  向量缓存：{cacheEntries}/{enabledCount} "
+            f"  向量缓存：{cacheEntries}/{contextualEnabledCount} contextual "
             f"({coverage:.1f}%)，{runtimeStatus.get('cacheBytes', 0)} bytes"
         )
         print(
@@ -330,6 +335,34 @@ async def _printMemoryStatus():
             f"index={runtimeStatus.get('indexPending', 0)}，"
             f"oldest={runtimeStatus.get('oldestIndexAgeMs', 0.0):.1f} ms"
         )
+        print(
+            "  累计："
+            + "，".join(
+                f"{name}={runtimeStatus.get(name, 0)}"
+                for name in (
+                    "queryRejected",
+                    "queryTimedOut",
+                    "indexDropped",
+                    "staleResults",
+                    "encodeFailures",
+                    "workerFailures",
+                )
+            )
+        )
+        print(
+            f"  Native：active={runtimeStatus.get('activeNativeJobs', 0)}，"
+            f"blocked={runtimeStatus.get('blockedFingerprints', 0)}"
+        )
+        # 容量饱和不是普通 native 运行指标：它意味着对账会有意跳过冷条目，
+        # 直到在线驱逐、删除或重启释放空间，因此单独成行让 operator 不会漏看。
+        capacitySaturated = bool(runtimeStatus.get("reconcileCapacitySaturated", False))
+        if capacitySaturated:
+            print(
+                "  对账容量：已饱和（reconcileCapacitySaturated=true；"
+                "冷条目暂不补齐，等待容量释放）"
+            )
+        else:
+            print("  对账容量：正常（reconcileCapacitySaturated=false）")
         print(f"  最近运行时降级：{runtimeStatus.get('lastReason') or '-'}")
 
     if mode == "hybrid" and calibrationReason:

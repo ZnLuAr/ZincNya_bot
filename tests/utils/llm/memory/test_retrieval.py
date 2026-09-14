@@ -1,15 +1,13 @@
 """
 tests/utils/llm/memory/test_retrieval.py
 
-测试 utils/llm/memory/database.py 的检索与呈现逻辑。
+测试 utils/llm/memory/retrieval.py 与 database.py 的 legacy/hybrid 检索和呈现逻辑。
 
 验证：
-    ① buildMemoryContextBlock 输出含 w=（不含 p=）
-    ② 输出仍含 id= / src=（inferred 可操作性不破坏）
-    ③ 块头含相关性门控措辞
-    ④ retrieveMemories 同 scope 溢出（放宽后低优先级入池）
-    ⑤ retrieveMemories scope 专属度兜底（priority 打平时 session>global）
-    ⑥ 异常路径降级（mock 抛异常返 []，脏数据不拖垮 sort）
+    ① legacy 的 scope/priority 兼容排序与完整候选读取
+    ② hybrid 的 lexical/semantic/RRF 准入、pinned 独立预算与 fail-closed
+    ③ buildMemoryContextBlock 的低信任边界、ID/source 与字符预算
+    ④ 数据库快照复核、去重、超时和异常降级
 """
 
 import asyncio
@@ -24,6 +22,7 @@ from unittest.mock import patch, AsyncMock
 from utils.llm.memory.database import (
     buildMemoryContextBlock,
     retrieveMemories,
+    selectLegacyMemoryCandidates,
 )
 from utils.llm.memory.retrieval import (
     buildQueryTexts,
@@ -162,6 +161,48 @@ async def test_retrieve_memories_dirty_data_does_not_crash_sort():
         assert len(result) == 2
 
 
+def test_select_legacy_candidates_reproduces_per_scope_limit():
+    """逐 scope 截断由纯函数复现，供完整候选读取路径复用。"""
+    memories = [
+        {
+            "id": 1,
+            "scope_type": "global",
+            "scope_id": "global",
+            "priority": 3,
+            "updated_at": datetime(2026, 1, 1),
+        },
+        {
+            "id": 2,
+            "scope_type": "global",
+            "scope_id": "global",
+            "priority": 1,
+            "updated_at": datetime(2026, 1, 2),
+        },
+        {
+            "id": 3,
+            "scope_type": "chat",
+            "scope_id": "123",
+            "priority": 2,
+            "updated_at": datetime(2026, 1, 1),
+        },
+        {
+            "id": 4,
+            "scope_type": "chat",
+            "scope_id": "123",
+            "priority": 0,
+            "updated_at": datetime(2026, 1, 2),
+        },
+    ]
+
+    selected = selectLegacyMemoryCandidates(
+        memories,
+        perScopeLimit=1,
+        totalLimit=10,
+    )
+
+    assert [memory["id"] for memory in selected] == [1, 3]
+
+
 # ============================================================================
 # Hybrid 检索纯函数与统一入口
 # ============================================================================
@@ -186,6 +227,7 @@ def _candidate(memoryID, *, content=None, mode="contextual", priority=0):
 def _writeCalibration(tmpPath, *, datasetHash="a" * 64, lexicalThreshold=1.0):
     calibration = {
         "schemaVersion": 1,
+        "status": "approved",
         "modelRevision": "revision",
         "encodingVersion": "encoding",
         "lexicalVersion": "memory-bm25-v1",
@@ -219,6 +261,32 @@ def test_loadCalibratedThresholdsAcceptsBoundFiniteValues(tmp_path):
         "semanticAssisted": None,
         "lexical": 1.0,
     }
+
+
+def test_loadCalibratedThresholdsRejectsMissingApprovalStatus(tmp_path):
+    path = _writeCalibration(tmp_path)
+    calibration = json.loads(path.read_text(encoding="utf-8"))
+    calibration.pop("status")
+    path.write_text(json.dumps(calibration), encoding="utf-8")
+
+    with patch(
+        "utils.llm.memory.retrieval.loadModelManifest",
+        return_value={"revision": "revision", "encodingVersion": "encoding"},
+    ):
+        thresholds, reason = loadCalibratedThresholds(path)
+
+    assert reason == "calibrationStatusInvalid"
+    assert all(value is None for value in thresholds.values())
+
+
+def test_loadCalibratedThresholdsUsesStableReasonForMalformedJson(tmp_path):
+    path = tmp_path / "calibration.json"
+    path.write_text("{", encoding="utf-8")
+
+    thresholds, reason = loadCalibratedThresholds(path)
+
+    assert reason == "JSONDecodeError"
+    assert all(value is None for value in thresholds.values())
 
 
 @pytest.mark.parametrize("datasetHash", ["A" * 64, "abc", 123])
@@ -399,6 +467,40 @@ async def test_hybridUsesCandidateBeyondLegacyPool():
 
 
 @pytest.mark.asyncio
+async def test_legacy_reuses_full_candidate_read_for_pinned_and_contextual():
+    """legacy 读取一次完整候选，且 pinned 不占 contextual 的旧配额。"""
+    candidates = [
+        _candidate(1, priority=3),
+        _candidate(2, priority=1),
+        # 故意让 pinned priority 更高：它不能因此挤掉 contextual 的
+        # perScopeLimit 名额，否则线上 legacy 与离线评测会产生不同语义。
+        _candidate(3, mode="pinned", priority=99),
+    ]
+    getCandidates = AsyncMock(return_value=candidates)
+    with (
+        patch(
+            "utils.llm.memory.retrieval.getMemoryCandidates",
+            getCandidates,
+        ),
+        patch(
+            "utils.llm.memory.retrieval.getMemorySnapshots",
+            new_callable=AsyncMock,
+            return_value=candidates,
+        ),
+    ):
+        result = await retrieveMemoryContext(
+            chatID="1",
+            query=MemoryQuery(),
+            llmConfig={"memoryRetrievalMode": "legacy"},
+            legacyLimits=(1, 10),
+        )
+
+    assert getCandidates.await_count == 1
+    assert [item["id"] for item in result.items] == [3, 1]
+    assert result.diagnostics["contextualCandidateCount"] == 2
+
+
+@pytest.mark.asyncio
 async def test_lexicalFailureKeepsPinnedMemory():
     pinned = _candidate(1, mode="pinned")
     contextual = _candidate(2)
@@ -433,6 +535,111 @@ async def test_lexicalFailureKeepsPinnedMemory():
 
     assert [item["id"] for item in result.items] == [1]
     assert result.diagnostics["degradedReason"] == "lexical:RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_degradedReasonsKeepIndependentLexicalAndSemanticFailures():
+    """多个通道同时失败时保留完整原因，而不是只留下最后一次赋值。"""
+    candidate = _candidate(1)
+    runtime = SimpleNamespace(
+        scoreSemantic=AsyncMock(side_effect=RuntimeError("semantic unavailable")),
+        getSemanticCacheStatus=lambda candidates: {
+            "status": "cold",
+            "candidateCount": len(candidates),
+            "readyCount": 0,
+            "missingCount": len(candidates),
+            "staleCount": 0,
+            "pendingCount": 0,
+            "cacheEntries": 0,
+            "cacheBytes": 0,
+            "reconcileCapacitySaturated": False,
+        },
+    )
+    state = SimpleNamespace(getMemoryRuntime=lambda: runtime)
+    with (
+        patch(
+            "utils.llm.memory.retrieval.getMemoryCandidates",
+            new_callable=AsyncMock,
+            return_value=[candidate],
+        ),
+        patch(
+            "utils.llm.memory.retrieval.scoreLexicalCandidates",
+            side_effect=RuntimeError("lexical unavailable"),
+        ),
+        patch(
+            "utils.llm.memory.retrieval.loadCalibratedThresholds",
+            return_value=(
+                {"semanticCurrent": 0.8, "semanticAssisted": None, "lexical": 1.0},
+                None,
+            ),
+        ),
+        patch("utils.llm.memory.retrieval.getStateManager", return_value=state),
+    ):
+        result = await retrieveMemoryContext(
+            chatID="1",
+            query=MemoryQuery(turns=(MemoryTurn(currentText="目标"),)),
+            llmConfig={"memoryRetrievalMode": "hybrid"},
+        )
+
+    assert result.diagnostics["degradedReason"] == "lexical:RuntimeError"
+    assert result.diagnostics["degradedReasons"] == [
+        "lexical:RuntimeError",
+        "semantic:RuntimeError",
+    ]
+    assert result.diagnostics["channelDiagnostics"]["lexical"]["status"] == "error"
+    assert result.diagnostics["channelDiagnostics"]["semanticCurrent"]["status"] == "error"
+    assert result.diagnostics["semanticCache"]["status"] == "cold"
+
+
+@pytest.mark.asyncio
+async def test_lexicalTimeoutKeepsFinalizeBudgetForPinned(monkeypatch):
+    monkeypatch.setattr(retrievalModule, "LLM_MEMORY_RETRIEVAL_TIMEOUT_SECONDS", 0.08)
+    monkeypatch.setattr(retrievalModule, "LLM_MEMORY_FINALIZE_RESERVE_SECONDS", 0.04)
+    pinned = _candidate(1, mode="pinned")
+    contextual = _candidate(2)
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blockedLexical(*args):
+        started.set()
+        release.wait(timeout=1)
+        return {2: 2.0}
+
+    with (
+        patch(
+            "utils.llm.memory.retrieval.getMemoryCandidates",
+            new_callable=AsyncMock,
+            return_value=[pinned, contextual],
+        ),
+        patch(
+            "utils.llm.memory.retrieval.getMemorySnapshots",
+            new_callable=AsyncMock,
+            return_value=[pinned],
+        ),
+        patch(
+            "utils.llm.memory.retrieval.loadCalibratedThresholds",
+            return_value=(
+                {"semanticCurrent": None, "semanticAssisted": None, "lexical": 1.0},
+                None,
+            ),
+        ),
+        patch(
+            "utils.llm.memory.retrieval.scoreLexicalCandidates",
+            side_effect=_blockedLexical,
+        ),
+    ):
+        retrievalTask = asyncio.create_task(retrieveMemoryContext(
+            chatID="1",
+            query=MemoryQuery(turns=(MemoryTurn(currentText="目标"),)),
+            llmConfig={"memoryRetrievalMode": "hybrid"},
+        ))
+        assert await asyncio.to_thread(started.wait, 1)
+        result = await retrievalTask
+        release.set()
+        await asyncio.sleep(0)
+
+    assert [item["id"] for item in result.items] == [1]
+    assert result.diagnostics["degradedReason"] == "lexicalTimeout"
 
 
 @pytest.mark.asyncio

@@ -8,14 +8,16 @@ scripts/evaluateMemory.py
 「这些记忆里哪些必须召回 / 哪些无所谓 / 哪些禁止召回」），全程
 不碰生产数据库、不调用生成模型。四个子命令分工：
 
-- calibrate：拿标注数据里的一半（calibration split）试出各通道阈值，
+- calibrate：只拿标成 calibration split 的场景试出各通道阈值，
   产出「候选」文件——必须有人审查批准后才能换成正式的；
-- evaluate：拿另一半从没参与调阈值的数据（holdout split）验收，
+- evaluate：拿未参与调阈值的 holdout split 验收，
   只认已批准的正式阈值文件；
+- validate：只校验 fixture 契约并输出数据集散列，不加载模型；
 - encoder / benchmark：测模型加载耗时、内存占用、查询延迟。
 
 评测直接 import 线上检索用的那几个函数来打分，不在脚本里另写一套
-评分逻辑——测出来的数字就是将来线上跑出来的行为。
+评分逻辑。它覆盖查询构造、通道打分、融合与预算结果，但不等同于完整
+线上链路：数据库 IO、runtime 队列、deadline 与事件循环仍需另做冒烟测试。
 """
 
 import argparse
@@ -58,6 +60,7 @@ from utils.llm.memory.lexical import scoreLexicalCandidates
 from utils.llm.memory.retrieval import (
     LEXICAL_VERSION,
     buildQueryTexts,
+    buildSemanticQueryPlan,
     renderMemoryContext,
     selectContextualCandidates,
     sortPinnedMemories,
@@ -71,7 +74,7 @@ CHANNEL_NAMES = (
     "semanticAssisted",
     "lexical",
 )
-# legacy = 线上旧行为基线；lexical = 仅词面通道；
+# legacy = 旧选择规则基线；lexical = 仅词面通道；
 # hybrid / hybrid+hint = 语义通道不带 / 带 retrievalHint 编码（对照实验）
 EVALUATION_MODES = ("legacy", "lexical", "hybrid", "hybrid+hint")
 # fixture 按 groupID 固定划入两 split：calibration 调阈值，holdout 验收；
@@ -275,6 +278,18 @@ def _normalizeScope(rawScope, caseID: str) -> dict:
     }
 
 
+def _normalizeQueryNow(value, caseID: str) -> datetime | None:
+    """解析可选的评测时钟，使近期历史窗口不依赖执行当天。"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except (TypeError, ValueError) as exc:
+        raise EvaluationError(f"{caseID}.queryNow 必须是 ISO datetime") from exc
+
+
 def _normalizeQuery(rawQuery, caseID: str) -> MemoryQuery:
     """将 fixture 查询转换为线上检索使用的不可变 ``MemoryQuery``。"""
     if isinstance(rawQuery, MemoryQuery):
@@ -332,12 +347,18 @@ def validateEvaluationCases(rawData) -> list[dict]:
     同时进入校准集和保留集。这里不强制 50/30 数量，以便先用小型 CI
     fixture 验证评测逻辑；正式验收由报告中的数量门槛决定。
     """
+    declaredCounts = {}
     if isinstance(rawData, list):
         rawCases = rawData
     elif isinstance(rawData, dict):
         if rawData.get("schemaVersion", 1) != 1:
             raise EvaluationError("fixture schemaVersion 不受支持")
         rawCases = rawData.get("cases")
+        declaredCounts = {
+            split: rawData.get(f"{split}CaseCount")
+            for split in (CALIBRATION_SPLIT, HOLDOUT_SPLIT)
+            if f"{split}CaseCount" in rawData
+        }
     else:
         rawCases = None
     if not isinstance(rawCases, list):
@@ -387,11 +408,29 @@ def validateEvaluationCases(rawData) -> list[dict]:
             "forbiddenIDs",
             caseID,
         )
+        requiredPinnedIDs = _normalizeIDSet(
+            rawCase.get("requiredPinnedIDs", []),
+            "requiredPinnedIDs",
+            caseID,
+        )
+        allowedPinnedIDs = _normalizeIDSet(
+            rawCase.get("allowedPinnedIDs", []),
+            "allowedPinnedIDs",
+            caseID,
+        )
+        forbiddenPinnedIDs = _normalizeIDSet(
+            rawCase.get("forbiddenPinnedIDs", []),
+            "forbiddenPinnedIDs",
+            caseID,
+        )
         knownIDs = set(memoryIDs)
         for fieldName, ids in (
             ("requiredIDs", requiredIDs),
             ("allowedIDs", allowedIDs),
             ("forbiddenIDs", forbiddenIDs),
+            ("requiredPinnedIDs", requiredPinnedIDs),
+            ("allowedPinnedIDs", allowedPinnedIDs),
+            ("forbiddenPinnedIDs", forbiddenPinnedIDs),
         ):
             unknownIDs = ids.difference(knownIDs)
             if unknownIDs:
@@ -403,6 +442,38 @@ def validateEvaluationCases(rawData) -> list[dict]:
             raise EvaluationError(f"{caseID} requiredIDs 与 forbiddenIDs 冲突")
         if allowedIDs.intersection(forbiddenIDs):
             raise EvaluationError(f"{caseID} allowedIDs 与 forbiddenIDs 冲突")
+        if requiredPinnedIDs.intersection(forbiddenPinnedIDs):
+            raise EvaluationError(
+                f"{caseID} requiredPinnedIDs 与 forbiddenPinnedIDs 冲突"
+            )
+        if allowedPinnedIDs.intersection(forbiddenPinnedIDs):
+            raise EvaluationError(
+                f"{caseID} allowedPinnedIDs 与 forbiddenPinnedIDs 冲突"
+            )
+
+        pinnedIDs = {
+            memory["id"] for memory in memories
+            if memory.get("mode") == MEMORY_MODE_PINNED
+        }
+        for fieldName, ids in (
+            ("requiredPinnedIDs", requiredPinnedIDs),
+            ("allowedPinnedIDs", allowedPinnedIDs),
+            ("forbiddenPinnedIDs", forbiddenPinnedIDs),
+        ):
+            nonPinnedIDs = ids.difference(pinnedIDs)
+            if nonPinnedIDs:
+                raise EvaluationError(
+                    f"{caseID}.{fieldName} 必须只引用 pinned memory: "
+                    f"{sorted(nonPinnedIDs)}"
+                )
+        contextualLabelsOnPinned = (
+            requiredIDs | allowedIDs | forbiddenIDs
+        ).intersection(pinnedIDs)
+        if contextualLabelsOnPinned:
+            raise EvaluationError(
+                f"{caseID} contextual 标注引用了 pinned memory: "
+                f"{sorted(contextualLabelsOnPinned)}；请使用 *PinnedIDs"
+            )
 
         rawSubsets = rawCase.get("subsets", [])
         if rawSubsets is None:
@@ -424,21 +495,49 @@ def validateEvaluationCases(rawData) -> list[dict]:
         if not isinstance(allowAbstain, bool):
             raise EvaluationError(f"{caseID}.allowAbstain 必须是布尔值")
 
+        normalizedQuery = _normalizeQuery(rawCase["query"], caseID)
+        normalizedQueryNow = _normalizeQueryNow(
+            rawCase.get("queryNow"),
+            caseID,
+        )
+        if normalizedQuery.history and normalizedQueryNow is None:
+            raise EvaluationError(
+                f"{caseID}.queryNow 在包含 history 时不能为空"
+            )
+
         cases.append({
             "caseID": caseID,
             "groupID": groupID,
             "split": split,
             "scope": _normalizeScope(rawCase.get("scope"), caseID),
             "memories": memories,
-            "query": _normalizeQuery(rawCase["query"], caseID),
+            "query": normalizedQuery,
+            "queryNow": normalizedQueryNow,
             "requiredIDs": requiredIDs,
             "allowedIDs": allowedIDs,
             "forbiddenIDs": forbiddenIDs,
+            "requiredPinnedIDs": requiredPinnedIDs,
+            "allowedPinnedIDs": allowedPinnedIDs,
+            "forbiddenPinnedIDs": forbiddenPinnedIDs,
             "allowAbstain": allowAbstain,
             "subsets": subsets,
             "metadata": dict(rawCase.get("metadata", {}))
             if isinstance(rawCase.get("metadata", {}), dict) else {},
         })
+
+    actualCounts = {
+        split: sum(1 for case in cases if case["split"] == split)
+        for split in (CALIBRATION_SPLIT, HOLDOUT_SPLIT)
+    }
+    for split, declaredCount in declaredCounts.items():
+        if (
+            isinstance(declaredCount, bool)
+            or not isinstance(declaredCount, int)
+            or declaredCount != actualCounts[split]
+        ):
+            raise EvaluationError(
+                f"{split}CaseCount 与实际场景数不一致"
+            )
     return cases
 
 
@@ -579,30 +678,39 @@ def scoreCaseChannels(
     *,
     semanticScorer=None,
     includeHint: bool = True,
+    thresholds: dict[str, float | None] | None = None,
 ) -> dict[str, dict[int, float]]:
-    """调用线上使用的 query、BM25 和候选评分原语，返回三通道分数。"""
+    """调用线上使用的 query、BM25 和候选评分原语，返回三通道分数。
+
+    ``thresholds`` 决定语义查询计划，必须与线上准入使用的阈值相同：
+    当 current 与 assisted 文本相同时，只会给 canonical 通道评分；
+    current 关闭时才允许 assisted 接管。省略该参数时按两个语义通道
+    都启用处理，适合直接查看一轮的线上等价分数。
+    """
     candidates = _scopeCandidates(case)
     contextual = _contextualCandidates(candidates)
-    currentText, assistedText, lexicalText = buildQueryTexts(case["query"])
+    currentText, assistedText, lexicalText = buildQueryTexts(
+        case["query"],
+        now=case.get("queryNow"),
+    )
     scores = {name: {} for name in CHANNEL_NAMES}
 
     if lexicalText:
         scores["lexical"] = scoreLexicalCandidates(lexicalText, contextual)
 
-    semanticTexts = []
-    semanticNames = []
-    duplicateNames = {}
-    for name, textValue in (
-        ("semanticCurrent", currentText),
-        ("semanticAssisted", assistedText),
-    ):
-        if not textValue:
-            continue
-        if textValue in semanticTexts:
-            duplicateNames[name] = semanticNames[semanticTexts.index(textValue)]
-            continue
-        semanticTexts.append(textValue)
-        semanticNames.append(name)
+    activeSemanticThresholds = thresholds
+    if activeSemanticThresholds is None:
+        activeSemanticThresholds = {
+            "semanticCurrent": 0.0,
+            "semanticAssisted": 0.0,
+        }
+    semanticPlan = buildSemanticQueryPlan(
+        currentText,
+        assistedText,
+        activeSemanticThresholds,
+    )
+    semanticNames = [name for name, _ in semanticPlan]
+    semanticTexts = [textValue for _, textValue in semanticPlan]
 
     if semanticTexts and semanticScorer is not None:
         semanticCandidates = (
@@ -619,8 +727,6 @@ def scoreCaseChannels(
         )
         for name, result in zip(semanticNames, semanticResults):
             scores[name] = result
-        for name, sourceName in duplicateNames.items():
-            scores[name] = dict(scores[sourceName])
     return scores
 
 
@@ -678,8 +784,10 @@ def _legacyPool(
     perScopeLimit: int,
     totalLimit: int,
 ) -> list[dict]:
-    """复现 legacy 的逐 scope 截断和汇池后总量截断。"""
+    """复现 contextual 的 legacy 截断；pinned 由调用方走独立预算。"""
     byScope = defaultdict(list)
+    # legacy 的 20/10 是 contextual 配额，不能让常驻 pinned 干扰离线
+    # 基线；这与线上 retrieveMemoryContext 的分流保持一致。
     for memory in _contextualCandidates(candidates):
         byScope[(memory.get("scope_type"), memory.get("scope_id"))].append(memory)
     pool = []
@@ -726,6 +834,7 @@ def _evaluateSingleCase(
                 case,
                 semanticScorer=semanticScorer,
                 includeHint=mode == "hybrid+hint",
+                thresholds=thresholds,
             )
         activeThresholds = {
             name: thresholds.get(name)
@@ -773,7 +882,8 @@ def _scoreCaseResult(case: dict, result: dict) -> dict:
     """将 contextual 预测与 required/allowed/forbidden 标注逐项比较。
 
     三档标注语义：required = 必须召回；allowed = 召回不算错，但不能
-    顶替 required 计入召回完成；forbidden = 召回即失败。
+    顶替 required 计入召回完成；forbidden = 召回即失败。Pinned 使用
+    独立的可选标注字段，避免把常驻预算条目混入 contextual 指标。
     """
     predictedIDs = set(result["contextualIDs"])
     requiredIDs = set(case["requiredIDs"])
@@ -784,6 +894,22 @@ def _scoreCaseResult(case: dict, result: dict) -> dict:
     acceptedIDs = predictedIDs.intersection(acceptableIDs)
     falsePositiveIDs = predictedIDs.difference(acceptableIDs)
     forbiddenHitIDs = predictedIDs.intersection(forbiddenIDs)
+    predictedPinnedIDs = set(result.get("pinnedIDs", []))
+    requiredPinnedIDs = set(case.get("requiredPinnedIDs", set()))
+    allowedPinnedIDs = set(case.get("allowedPinnedIDs", set()))
+    forbiddenPinnedIDs = set(case.get("forbiddenPinnedIDs", set()))
+    acceptablePinnedIDs = requiredPinnedIDs.union(allowedPinnedIDs)
+    pinnedHitIDs = predictedPinnedIDs.intersection(requiredPinnedIDs)
+    pinnedFalsePositiveIDs = (
+        predictedPinnedIDs.difference(acceptablePinnedIDs)
+        if requiredPinnedIDs or allowedPinnedIDs or forbiddenPinnedIDs
+        else set()
+    )
+    pinnedForbiddenHitIDs = predictedPinnedIDs.intersection(forbiddenPinnedIDs)
+    pinnedRecall = (
+        len(pinnedHitIDs) / len(requiredPinnedIDs)
+        if requiredPinnedIDs else None
+    )
     precision = (
         len(acceptedIDs) / len(predictedIDs)
         if predictedIDs else None
@@ -801,6 +927,16 @@ def _scoreCaseResult(case: dict, result: dict) -> dict:
         "missedRequiredIDs": sorted(requiredIDs.difference(predictedIDs)),
         "falsePositiveIDs": sorted(falsePositiveIDs),
         "forbiddenHitIDs": sorted(forbiddenHitIDs),
+        "requiredPinnedIDs": sorted(requiredPinnedIDs),
+        "allowedPinnedIDs": sorted(allowedPinnedIDs),
+        "forbiddenPinnedIDs": sorted(forbiddenPinnedIDs),
+        "hitRequiredPinnedIDs": sorted(pinnedHitIDs),
+        "missedRequiredPinnedIDs": sorted(
+            requiredPinnedIDs.difference(predictedPinnedIDs)
+        ),
+        "pinnedFalsePositiveIDs": sorted(pinnedFalsePositiveIDs),
+        "pinnedForbiddenHitIDs": sorted(pinnedForbiddenHitIDs),
+        "pinnedRecall": pinnedRecall,
         "precision": precision,
         "recall": recall,
         "abstained": not predictedIDs,
@@ -813,11 +949,12 @@ def _aggregateMetrics(caseResults: list[dict]) -> dict:
     """把逐场景结果汇总成总体指标，并给出「能不能上线」的判定。
 
     统计口径：precision = 全部场景选中的记忆里标注认可的比例（只统计
-    contextual，pinned 不参与）；recall = 必须召回的命中比例。某场景
-    一条未选计为「弃权」——全部弃权时 precision 记 None 而非 100%
-    （零预测不能计为精确）。qualityGate 是启用 hybrid 的硬条件：
-    至少 30 个场景、精确率 ≥95%、召回率 ≥80%、禁入条目零命中，
-    四项全部满足才通过。
+    contextual，pinned 另行统计）；recall = contextual 必须召回的命中
+    比例。某场景一条未选计为「弃权」——全部弃权时 precision 记 None 而非
+    100%（零预测不能计为精确）。qualityGate 是启用 hybrid 的硬条件：
+    contextual 至少 30 个场景、精确率 ≥95%、召回率 ≥80%、禁入条目零命中，
+    并且在存在 pinned 标注时满足 pinned recall ≥80%、pinned 禁入零命中，
+    全部条件满足才通过。
     """
     predictedCount = sum(len(result["contextualIDs"]) for result in caseResults)
     acceptedCount = sum(
@@ -829,6 +966,24 @@ def _aggregateMetrics(caseResults: list[dict]) -> dict:
     requiredCount = sum(len(result["requiredIDs"]) for result in caseResults)
     hitCount = sum(len(result["hitRequiredIDs"]) for result in caseResults)
     forbiddenHitCount = sum(len(result["forbiddenHitIDs"]) for result in caseResults)
+    pinnedRequiredCount = sum(
+        len(result.get("requiredPinnedIDs", [])) for result in caseResults
+    )
+    pinnedHitCount = sum(
+        len(result.get("hitRequiredPinnedIDs", [])) for result in caseResults
+    )
+    pinnedForbiddenHitCount = sum(
+        len(result.get("pinnedForbiddenHitIDs", [])) for result in caseResults
+    )
+    pinnedCaseCount = sum(
+        1
+        for result in caseResults
+        if (
+            result.get("requiredPinnedIDs")
+            or result.get("allowedPinnedIDs")
+            or result.get("forbiddenPinnedIDs")
+        )
+    )
     abstainedCount = sum(1 for result in caseResults if result["abstained"])
     unexpectedAbstentionCount = sum(
         1 for result in caseResults
@@ -836,6 +991,17 @@ def _aggregateMetrics(caseResults: list[dict]) -> dict:
     )
     precision = acceptedCount / predictedCount if predictedCount else None
     recall = hitCount / requiredCount if requiredCount else None
+    pinnedRecall = (
+        pinnedHitCount / pinnedRequiredCount
+        if pinnedRequiredCount else None
+    )
+    pinnedGatePassed = (
+        pinnedForbiddenHitCount == 0
+        and (
+            pinnedRecall is None
+            or pinnedRecall >= 0.80
+        )
+    )
 
     return {
         "caseCount": len(caseResults),
@@ -844,6 +1010,11 @@ def _aggregateMetrics(caseResults: list[dict]) -> dict:
         "requiredCount": requiredCount,
         "requiredHitCount": hitCount,
         "forbiddenHitCount": forbiddenHitCount,
+        "pinnedCaseCount": pinnedCaseCount,
+        "pinnedRequiredCount": pinnedRequiredCount,
+        "pinnedRequiredHitCount": pinnedHitCount,
+        "pinnedForbiddenHitCount": pinnedForbiddenHitCount,
+        "pinnedRecall": pinnedRecall,
         "precision": precision,
         "recall": recall,
         "coverage": (
@@ -864,6 +1035,10 @@ def _aggregateMetrics(caseResults: list[dict]) -> dict:
             "precisionPassed": precision is not None and precision >= 0.95,
             "recallPassed": recall is not None and recall >= 0.80,
             "forbiddenPassed": forbiddenHitCount == 0,
+            "pinnedRecallTarget": 0.80,
+            "pinnedRecallPassed": pinnedGatePassed,
+            "pinnedForbiddenPassed": pinnedForbiddenHitCount == 0,
+            "pinnedPassed": pinnedGatePassed,
             "passed": (
                 len(caseResults) >= 30
                 and
@@ -872,6 +1047,7 @@ def _aggregateMetrics(caseResults: list[dict]) -> dict:
                 and recall is not None
                 and recall >= 0.80
                 and forbiddenHitCount == 0
+                and pinnedGatePassed
             ),
         },
     }
@@ -927,6 +1103,7 @@ def evaluateRetrievalCases(
                         case,
                         semanticScorer=semanticScorer,
                         includeHint=includeHint,
+                        thresholds=thresholds,
                     )
                 channelScores = channelCache[cacheKey]
             caseResults.append(_scoreCaseResult(
@@ -971,14 +1148,40 @@ def _calibrationObservations(
     semanticScorer=None,
     includeHint: bool = True,
 ) -> dict[str, list[dict]]:
-    """把 calibration 场景展开为各通道的候选分数与标注观察值。"""
+    """把 calibration 场景展开为各通道的候选分数与标注观察值。
+
+    校准时阈值尚未产生，因而分别运行一次 current-only 和
+    assisted-only 查询计划，收集两个通道各自的原始分布。对于相同的
+    query 文本，这两次观察用于校准“current 关闭时 assisted 接管”的
+    备用路径，但在实际评估/线上融合时仍只会启用一个 canonical 通道。
+    """
     observations = {name: [] for name in CHANNEL_NAMES}
     for case in cases:
-        scores = scoreCaseChannels(
+        currentScores = scoreCaseChannels(
             case,
             semanticScorer=semanticScorer,
             includeHint=includeHint,
+            thresholds={
+                "semanticCurrent": 0.0,
+                "semanticAssisted": None,
+            },
         )
+        assistedScores = scoreCaseChannels(
+            case,
+            semanticScorer=semanticScorer,
+            includeHint=includeHint,
+            thresholds={
+                "semanticCurrent": None,
+                "semanticAssisted": 0.0,
+            },
+        )
+        scores = {
+            "semanticCurrent": currentScores["semanticCurrent"],
+            "semanticAssisted": assistedScores["semanticAssisted"],
+            # 词面结果与语义 hint 无关；只取一份，避免重复观察污染
+            # channel report 的样本数。
+            "lexical": currentScores["lexical"],
+        }
         positiveIDs = set(case["requiredIDs"]).union(case["allowedIDs"])
         forbiddenIDs = set(case["forbiddenIDs"])
         for channelName in CHANNEL_NAMES:
@@ -1418,9 +1621,16 @@ def runEncoderBenchmark(
 
 
 def _buildParser() -> argparse.ArgumentParser:
-    """构造 encoder/calibrate/evaluate/benchmark 四个离线子命令。"""
+    """构造 fixture 校验、校准、评估和资源基准子命令。"""
     parser = argparse.ArgumentParser(description="LLM memory 离线评测")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    validateParser = subparsers.add_parser(
+        "validate",
+        help="只校验 fixture，不加载模型",
+    )
+    validateParser.add_argument("--cases", required=True)
+    validateParser.add_argument("--output")
 
     encoderParser = subparsers.add_parser("encoder", help="运行编码器资源基准")
     encoderParser.add_argument("--memories", type=int, default=1000)
@@ -1485,6 +1695,24 @@ def main() -> int:
     args = _buildParser().parse_args()
     encoder = None
     try:
+        if args.command == "validate":
+            cases, datasetSha256 = loadEvaluationCases(args.cases)
+            report = {
+                "schemaVersion": 1,
+                "caseCount": len(cases),
+                "calibrationCaseCount": len(splitEvaluationCases(
+                    cases,
+                    CALIBRATION_SPLIT,
+                )),
+                "holdoutCaseCount": len(splitEvaluationCases(
+                    cases,
+                    HOLDOUT_SPLIT,
+                )),
+                "datasetSha256": datasetSha256,
+            }
+            _writeReport(report, args.output)
+            return 0
+
         if args.command == "encoder":
             report = runEncoderBenchmark(
                 memoryCount=args.memories,

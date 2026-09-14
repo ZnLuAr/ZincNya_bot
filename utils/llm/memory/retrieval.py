@@ -27,6 +27,7 @@ from pathlib import Path
 from config import (
     LLM_MEMORY_CALIBRATION_PATH,
     LLM_MEMORY_CONTEXT_MAX_CHARS,
+    LLM_MEMORY_FINALIZE_RESERVE_SECONDS,
     LLM_MEMORY_MAX_ACTIVE_RETRIEVALS,
     LLM_MEMORY_PINNED_MAX_CHARS,
     LLM_MEMORY_QUERY_HISTORY_LIMIT,
@@ -48,7 +49,7 @@ from .database import (
     MEMORY_SCOPE_RANK,
     getMemoryCandidates,
     getMemorySnapshots,
-    retrieveMemories,
+    selectLegacyMemoryCandidates,
 )
 from .encoder import loadModelManifest
 from .lexical import scoreLexicalCandidates
@@ -59,9 +60,53 @@ from .types import (
 )
 
 
+# calibration 不只绑定 BM25 的数值实现，也绑定词面分数的准入语义；修改
+# tokenizer、权重、归一化或从绝对 threshold 改为 top-margin 时必须 bump。
+# 仅调整脱敏 fixture 时保留版本，改由 calibration 的 dataset hash 失效旧结果。
 LEXICAL_VERSION = "memory-bm25-v1"
 # 当前占用检索容量的请求数（与 _RetrievalLease 配合的全局记账）
 _activeRetrievals = 0
+_CHANNEL_NAMES = ("semanticCurrent", "semanticAssisted", "lexical")
+
+
+
+
+def _recordDegradedReason(diagnostics: dict, reason: str | None) -> None:
+    """记录检索降级原因且不让后续通道覆盖先前原因。
+
+    ``degradedReason`` 保留首个原因，兼容原有 status/日志消费者；
+    ``degradedReasons`` 收集同一次请求的全部原因，避免 lexical、semantic
+    和 calibration 同时异常时只剩最后一次赋值，导致排障方向错误。
+    原因码不包含查询正文、memory 正文或 hint。
+    """
+    if not reason:
+        return
+    reasons = diagnostics.setdefault("degradedReasons", [])
+    if reason not in reasons:
+        reasons.append(reason)
+    if diagnostics.get("degradedReason") is None:
+        diagnostics["degradedReason"] = reason
+
+
+def _setChannelDiagnostic(
+    diagnostics: dict,
+    channelName: str,
+    *,
+    status: str | None = None,
+    scoreCount: int | None = None,
+    reason: str | None = None,
+) -> None:
+    """更新单个通道的结构化状态，不记录任何用户内容。"""
+    channel = diagnostics.setdefault("channelDiagnostics", {}).setdefault(
+        channelName,
+        {"status": "notStarted", "scoreCount": 0},
+    )
+    if status is not None:
+        channel["status"] = status
+    if scoreCount is not None:
+        channel["scoreCount"] = int(scoreCount)
+    if reason is not None:
+        channel["reason"] = reason
 
 
 
@@ -70,7 +115,7 @@ class _RetrievalLease:
     """
     一次检索的并发名额记账：检索开始时占用名额，结束时归还。
 
-    同时最多 2 个检索在执行（LLM_MEMORY_MAX_ACTIVE_RETRIEVALS），超出的
+    同时最多 4 个检索在执行（LLM_MEMORY_MAX_ACTIVE_RETRIEVALS），超出的
     请求直接返回空结果。超时场景需要特殊处理：调用方等待超时返回后，
     已提交到线程池的评分任务仍在执行——名额必须等该任务真正结束才能
     归还（deferUntil），否则连续超时会绕过并发上限，实际同时执行的
@@ -236,6 +281,38 @@ def buildQueryTexts(
     return currentText, assistedText, lexicalText
 
 
+def buildSemanticQueryPlan(
+    currentText: str,
+    assistedText: str,
+    thresholds: dict[str, float | None],
+) -> list[tuple[str, str]]:
+    """根据已启用的阈值决定本轮实际使用哪些语义通道。
+
+    ``assistedText`` 在没有引用或近期历史时会与 ``currentText`` 完全
+    相同。此时若当前通道已启用，只保留 current 这一份 canonical 证据；
+    只有 current 被关闭时，才允许 assisted 接管同一文本。这样同一条
+    证据不会因为挂上两个通道名称而获得两次 RRF 贡献。查询文本不同
+    时，两个启用的通道都可以参加评分。
+    """
+    plan = []
+    seenTexts = set()
+    for channelName, textValue in (
+        ("semanticCurrent", currentText),
+        ("semanticAssisted", assistedText),
+    ):
+        if not textValue or thresholds.get(channelName) is None:
+            continue
+        if (
+            channelName == "semanticAssisted"
+            and textValue == currentText
+            and thresholds.get("semanticCurrent") is not None
+        ):
+            continue
+        if textValue in seenTexts:
+            continue
+        seenTexts.add(textValue)
+        plan.append((channelName, textValue))
+    return plan
 
 
 def loadCalibratedThresholds(
@@ -261,10 +338,10 @@ def loadCalibratedThresholds(
         manifest = loadModelManifest(manifestPath) if manifestPath else loadModelManifest()
         if calibration.get("schemaVersion") != 1:
             raise ValueError("calibrationSchemaMismatch")
-        # candidate 是离线评测产物，必须经过人工/部署流程批准后才能影响线上准入。
+        # 只有显式 approved 才能影响线上准入；缺字段与未知状态都 fail closed。
         if calibration.get("status") == "candidate":
             raise ValueError("calibrationCandidate")
-        if calibration.get("status") not in (None, "approved"):
+        if calibration.get("status") != "approved":
             raise ValueError("calibrationStatusInvalid")
         if calibration.get("modelRevision") != manifest["revision"]:
             raise ValueError("calibrationModelMismatch")
@@ -310,7 +387,12 @@ def loadCalibratedThresholds(
         # （calibrationXxx），直接采用以保留细粒度；外部异常（OSError/
         # JSONDecodeError/encoder 抛出的中文错误）消息语种与格式不稳定，
         # 退用异常类名，保证原因码始终是可断言的英文标识。
-        reasonCode = str(e) if isinstance(e, ValueError) else type(e).__name__
+        reasonCode = (
+            type(e).__name__
+            if isinstance(e, json.JSONDecodeError)
+            else str(e) if isinstance(e, ValueError)
+            else type(e).__name__
+        )
         return {
             "semanticCurrent": None,
             "semanticAssisted": None,
@@ -614,7 +696,7 @@ async def retrieveMemoryContext(
 
     按配置走两条路径：legacy（重构前的原行为——每 scope 限量取池、
     按 priority 排序截前 10 条）或 hybrid（全量候选过三通道打分）。
-    整个流程限时 2 秒：超时、并发已满（同时最多 2 个检索）、任一
+    整个流程限时 2 秒：超时、并发已满（同时最多 4 个检索）、任一
     环节出错，均返回空结果并在 diagnostics 记录原因——记忆缺席只
     降低质量，抛异常打断回复生成才是事故。
 
@@ -632,21 +714,44 @@ async def retrieveMemoryContext(
         "contextualCandidateCount": 0,
         "pinnedCandidateCount": 0,
         "degradedReason": None,
+        "degradedReasons": [],
+        "channelDiagnostics": {
+            channelName: {"status": "notStarted", "scoreCount": 0}
+            for channelName in _CHANNEL_NAMES
+        },
+        "semanticCache": None,
     }
+    # 并发闸门：全局同时最多 LLM_MEMORY_MAX_ACTIVE_RETRIEVALS 个检索，
+    # 超出的直接空手返回——检索是回复生成的旁路，排队等待不如缺席。
     if _activeRetrievals >= LLM_MEMORY_MAX_ACTIVE_RETRIEVALS:
-        diagnostics["degradedReason"] = "retrievalCapacity"
+        _recordDegradedReason(diagnostics, "retrievalCapacity")
         return MemoryRetrievalResult(diagnostics=diagnostics)
 
     _activeRetrievals += 1
     lease = _RetrievalLease()
     deadline = started + LLM_MEMORY_RETRIEVAL_TIMEOUT_SECONDS
+    # 此处把 deadline 分为两层：
+    # 一层用来给 selectionDeadline 管候选读取与三通道打分，它们占了预算的大头，
+    # 再挤出 LLM_MEMORY_FINALIZE_RESERVE_SECONDS 秒（默认 0.1）给另一层，
+    # 完整 deadline 留给末尾的数据库复核与重渲染——通道评分把时间耗尽时
+    # 用来复核和重渲染，而不因第一层占用全部预算时间导致整体超时
+
+    # 此处的 min() 防止保留量被配置得比总预算一半还大，挤占打分阶段。
+    finalizeReserve = min(
+        LLM_MEMORY_FINALIZE_RESERVE_SECONDS,
+        LLM_MEMORY_RETRIEVAL_TIMEOUT_SECONDS / 2,
+    )
+    selectionDeadline = deadline - finalizeReserve
     try:
+        # 模式判定用请求开始时的快照（llmConfig 由调用方传入或此处现读），
+        # 一次检索中途切模式不会导致半程混用两套逻辑。
         configSnapshot = llmConfig if llmConfig is not None else loadLLMConfig()
         mode = configSnapshot.get("memoryRetrievalMode", "legacy")
         if mode not in {"legacy", "hybrid"}:
             mode = "legacy"
         diagnostics["mode"] = mode
 
+        # ===== 分支一：legacy（生产默认）=====
         if mode == "legacy":
             perScopeLimit, totalLimit = legacyLimits or (
                 LLM_MEMORY_RETRIEVE_PER_SCOPE,
@@ -658,35 +763,38 @@ async def retrieveMemoryContext(
                 getMemoryCandidates(
                     chatID=chatID, userID=userID, sessionID=sessionID,
                 ),
-                deadline,
+                selectionDeadline,
                 lease=lease,
             )
-            legacyItems = await _withDeadline(
-                retrieveMemories(
-                    chatID=chatID,
-                    userID=userID,
-                    sessionID=sessionID,
-                    perScopeLimit=perScopeLimit,
-                    totalLimit=totalLimit,
-                ),
-                deadline,
-                lease=lease,
+            # 同一份完整读取同时提供 pinned 和 legacy 的 contextual 池。
+            # 过去这里再调用 retrieveMemories()，会为同一请求重复读取、解密
+            # 数据库；纯函数 selector 复现旧的逐 scope/总量截断而不增加 IO。
+            # legacy 的 20/10 配额只约束 contextual：pinned 已经是独立的
+            # 常驻预算，不能因为 priority 更高而挤掉情境记忆的候选名额。
+            contextualCandidates = [
+                memory for memory in allCandidates
+                if memory.get("mode", MEMORY_MODE_CONTEXTUAL) == MEMORY_MODE_CONTEXTUAL
+            ]
+            legacyItems = selectLegacyMemoryCandidates(
+                contextualCandidates,
+                perScopeLimit=perScopeLimit,
+                totalLimit=totalLimit,
             )
+            # pinned 从完整候选中单独分拣，和 contextual 的 legacy 配额完全
+            # 解耦；这也与离线 evaluate 的 legacyPool 保持同一行为。
             pinned = sortPinnedMemories([
                 memory for memory in allCandidates
                 if memory.get("mode") == MEMORY_MODE_PINNED
             ])
-            contextual = [
-                memory for memory in legacyItems
-                if memory.get("mode", MEMORY_MODE_CONTEXTUAL) == MEMORY_MODE_CONTEXTUAL
-            ]
+            contextual = legacyItems
             diagnostics["candidateCount"] = len(allCandidates)
+            diagnostics["contextualCandidateCount"] = len(contextualCandidates)
         else:
             allCandidates = await _withDeadline(
                 getMemoryCandidates(
                     chatID=chatID, userID=userID, sessionID=sessionID,
                 ),
-                deadline,
+                selectionDeadline,
                 lease=lease,
             )
             pinned = sortPinnedMemories([
@@ -700,16 +808,39 @@ async def retrieveMemoryContext(
             diagnostics["candidateCount"] = len(allCandidates)
             diagnostics["contextualCandidateCount"] = len(contextualCandidates)
 
+            # ===== 分支二：hybrid =====
+            # 查询文本与阈值先行；阈值无效（calibrationReason 非空）时
+            # 三通道全部拿不到分数，本分支自然退化为「只剩 pinned」，
+            # 无需在每处单独判空。
             currentText, assistedText, lexicalText = buildQueryTexts(query)
             thresholds, calibrationReason = loadCalibratedThresholds()
+            for channelName in _CHANNEL_NAMES:
+                _setChannelDiagnostic(
+                    diagnostics,
+                    channelName,
+                    status=(
+                        "disabled"
+                        if thresholds.get(channelName) is None
+                        else "enabled"
+                    ),
+                )
             if calibrationReason:
-                diagnostics["degradedReason"] = calibrationReason
+                _recordDegradedReason(diagnostics, calibrationReason)
+                for channelName in _CHANNEL_NAMES:
+                    _setChannelDiagnostic(
+                        diagnostics,
+                        channelName,
+                        status="calibrationUnavailable",
+                        reason=calibrationReason,
+                    )
 
             channelScores = {
                 "semanticCurrent": {},
                 "semanticAssisted": {},
                 "lexical": {},
             }
+            # 词面通道：BM25 在线程池跑（纯 CPU，不能占事件循环）；
+            # 该通道独立降级——超时/异常只记原因，语义通道照常。
             if lexicalText and thresholds["lexical"] is not None:
                 try:
                     channelScores["lexical"] = await _withDeadline(
@@ -718,53 +849,137 @@ async def retrieveMemoryContext(
                             lexicalText,
                             contextualCandidates,
                         ),
-                        deadline,
+                        selectionDeadline,
                         lease=lease,
                     )
+                    _setChannelDiagnostic(
+                        diagnostics,
+                        "lexical",
+                        status=(
+                            "ready" if channelScores["lexical"] else "empty"
+                        ),
+                        scoreCount=len(channelScores["lexical"]),
+                    )
                 except asyncio.TimeoutError:
-                    diagnostics["degradedReason"] = "lexicalTimeout"
+                    _recordDegradedReason(diagnostics, "lexicalTimeout")
+                    _setChannelDiagnostic(
+                        diagnostics,
+                        "lexical",
+                        status="timeout",
+                        reason="lexicalTimeout",
+                    )
                 except Exception as exc:
-                    diagnostics["degradedReason"] = (
-                        f"lexical:{type(exc).__name__}"
+                    reason = f"lexical:{type(exc).__name__}"
+                    _recordDegradedReason(diagnostics, reason)
+                    _setChannelDiagnostic(
+                        diagnostics,
+                        "lexical",
+                        status="error",
+                        reason=reason,
+                    )
+            elif not lexicalText:
+                _setChannelDiagnostic(diagnostics, "lexical", status="noQuery")
+
+            # 语义通道的查询文本选择由纯函数统一决定：相同文本只保留
+            # canonical 通道，current 关闭时才让 assisted 接管。
+            semanticPlan = buildSemanticQueryPlan(
+                currentText,
+                assistedText,
+                thresholds,
+            )
+            semanticNames = [name for name, _ in semanticPlan]
+            semanticQueries = [textValue for _, textValue in semanticPlan]
+            for channelName in _CHANNEL_NAMES[:2]:
+                if thresholds.get(channelName) is None:
+                    continue
+                if not semanticQueries:
+                    _setChannelDiagnostic(
+                        diagnostics,
+                        channelName,
+                        status="noQuery",
+                    )
+                elif channelName not in semanticNames:
+                    _setChannelDiagnostic(
+                        diagnostics,
+                        channelName,
+                        status="deduplicated",
                     )
 
-            semanticQueries = []
-            semanticNames = []
-            semanticCandidates = (
-                ("semanticCurrent", currentText),
-                ("semanticAssisted", assistedText),
-            )
-            for name, textValue in semanticCandidates:
-                if not textValue or thresholds[name] is None:
-                    continue
-                # 当前消息是同一文本的 canonical 语义证据。若当前通道未启用，
-                # 才允许辅助通道接管；相同文本不能因两个标签获得两份 RRF 贡献。
-                if textValue == currentText and name == "semanticAssisted":
-                    if currentText and thresholds["semanticCurrent"] is not None:
-                        continue
-                if textValue in semanticQueries:
-                    continue
-                semanticQueries.append(textValue)
-                semanticNames.append(name)
-
-            runtime = getStateManager().getMemoryRuntime()
+            # 语义通道：只有本次确实有已校准的 semantic query 时才触碰
+            # stateManager/runtime。calibration 无效、空查询或 semantic 通道
+            # 全部关闭时，读取缓存诊断不会改变结果，反而增加旁路开销。
+            runtime = None
+            if semanticQueries:
+                runtime = getStateManager().getMemoryRuntime()
+                if runtime is not None:
+                    inspectCache = getattr(runtime, "getSemanticCacheStatus", None)
+                    if callable(inspectCache):
+                        try:
+                            # 这是进入评分前的只读快照：它解释本次语义缺席
+                            # 是冷缓存、过期还是容量饱和，不暴露任何正文。
+                            diagnostics["semanticCache"] = inspectCache(
+                                contextualCandidates
+                            )
+                        except Exception as exc:
+                            diagnostics["semanticCache"] = {
+                                "status": "unavailable",
+                                "candidateCount": len(contextualCandidates),
+                                "reason": type(exc).__name__,
+                            }
+                    else:
+                        diagnostics["semanticCache"] = {
+                            "status": "unreported",
+                            "candidateCount": len(contextualCandidates),
+                        }
+                else:
+                    diagnostics["semanticCache"] = {
+                        "status": "runtimeUnavailable",
+                        "candidateCount": len(contextualCandidates),
+                    }
             if semanticQueries and runtime is not None:
                 try:
                     semanticResults = await runtime.scoreSemantic(
                         semanticQueries,
                         contextualCandidates,
-                        deadline=deadline,
+                        deadline=selectionDeadline,
                     )
                     for name, scores in zip(semanticNames, semanticResults):
                         channelScores[name] = scores
+                        _setChannelDiagnostic(
+                            diagnostics,
+                            name,
+                            status="ready" if scores else "empty",
+                            scoreCount=len(scores),
+                        )
                 except asyncio.TimeoutError:
-                    diagnostics["degradedReason"] = "semanticTimeout"
+                    _recordDegradedReason(diagnostics, "semanticTimeout")
+                    for name in semanticNames:
+                        _setChannelDiagnostic(
+                            diagnostics,
+                            name,
+                            status="timeout",
+                            reason="semanticTimeout",
+                        )
                 except Exception as exc:
-                    diagnostics["degradedReason"] = (
-                        f"semantic:{type(exc).__name__}"
-                    )
+                    reason = f"semantic:{type(exc).__name__}"
+                    _recordDegradedReason(diagnostics, reason)
+                    for name in semanticNames:
+                        _setChannelDiagnostic(
+                            diagnostics,
+                            name,
+                            status="error",
+                            reason=reason,
+                        )
             elif semanticQueries:
                 diagnostics["semanticReason"] = "runtimeUnavailable"
+                _recordDegradedReason(diagnostics, "semanticRuntimeUnavailable")
+                for name in semanticNames:
+                    _setChannelDiagnostic(
+                        diagnostics,
+                        name,
+                        status="runtimeUnavailable",
+                        reason="semanticRuntimeUnavailable",
+                    )
 
             # 只让 contextual memory 进入三通道筛选；pinned 不参与相关性竞争，
             # 但仍由后面的独立预算和快照复核保护。
@@ -775,6 +990,9 @@ async def retrieveMemoryContext(
             )
             diagnostics.update(selectionDiagnostics)
 
+        # ===== 收尾（两分支共用）：去重 → 初装 → 复核 → 重渲染 =====
+        # 去重放在两模式汇合点：同一正文可能同时存在于 pinned 与 contextual
+        # 池（如升级/降级中途），按 scope+正文去重、保留排序靠前的一条。
         combined = _deduplicateCandidates([*pinned, *contextual])
         pinned = [memory for memory in combined if memory.get("mode") == MEMORY_MODE_PINNED]
         contextual = [
@@ -785,8 +1003,11 @@ async def retrieveMemoryContext(
         if diagnostics["contextualCandidateCount"] == 0:
             diagnostics["contextualCandidateCount"] = len(contextual)
 
-        # 先按候选快照计算一次预算，再做数据库复核，最后重新渲染，避免复核
-        # 删除条目后留下错误的预算判断或旧的 contextBlock。
+        # 渲染两遍：第一遍按候选快照确定入选集合与预算，复核剔除窗口期
+        # 变更的条目后，第二遍用幸存集合重渲染——保证 contextBlock 的每一行
+        # 与 items 一致，预算判断也基于同一集合（这里的 _ 是第一遍的块文本，
+        # 复核后必然作废，故不使用）。注意复核用的是完整 deadline，对应
+        # 开头的 finalizeReserve 保留量。
         selected, _, budgetDiagnostics = renderMemoryContext(pinned, contextual)
         diagnostics.update(budgetDiagnostics)
         validIDs = await _validateSelected(
@@ -808,10 +1029,12 @@ async def retrieveMemoryContext(
             contextBlock=contextBlock,
             diagnostics=diagnostics,
         )
+    # 任何异常（含超时）都不外抛：转成带原因码的空结果，记忆缺席降质量，
+    # 打断回复生成才是事故。lease 在 finally 归还，挂了回调的延期归还。
     except asyncio.TimeoutError:
-        diagnostics["degradedReason"] = "retrievalTimeout"
+        _recordDegradedReason(diagnostics, "retrievalTimeout")
     except Exception as exc:
-        diagnostics["degradedReason"] = type(exc).__name__
+        _recordDegradedReason(diagnostics, type(exc).__name__)
     finally:
         lease.release()
 

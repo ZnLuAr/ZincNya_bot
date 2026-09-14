@@ -19,6 +19,7 @@ import utils.core.crypto as crypto
 from utils.core.crypto import decryptText
 from utils.llm.memory.database import (
     addMemory,
+    getEnabledContextualMemoryPage,
     getMemoryByID,
     getMemoryCounts,
     getMemories,
@@ -93,13 +94,25 @@ async def test_get_memory_decrypts(tmpKey, patchRun):
 @pytest.mark.asyncio
 async def test_memory_counts_do_not_decrypt_rows(tmpKey, patchRun):
     await addMemory("global", None, "启用")
+    await addMemory("global", None, "常驻", mode="pinned")
     await addMemory("global", None, "停用", enabled=False)
 
     with patch("utils.llm.memory.database._rowToMemoryDict") as mockDecode:
         counts = await getMemoryCounts()
 
-    assert counts == {"total": 2, "enabled": 1}
+    assert counts == {"total": 3, "enabled": 2, "contextualEnabled": 1}
     mockDecode.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_contextual_index_page_excludes_pinned_and_disabled(tmpKey, patchRun):
+    contextualID = await addMemory("global", None, "情境记忆")
+    await addMemory("global", None, "常驻记忆", mode="pinned")
+    await addMemory("global", None, "停用记忆", enabled=False)
+
+    page = await getEnabledContextualMemoryPage()
+
+    assert [memory["id"] for memory in page] == [contextualID]
 
 
 @pytest.mark.asyncio

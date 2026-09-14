@@ -60,6 +60,8 @@ def loadModelManifest(manifestPath: str | Path = LLM_MEMORY_MODEL_MANIFEST_PATH)
         "queryPrefix",
         "maxTokens",
         "embeddingDimension",
+        "pooling",
+        "normalization",
         "specialTokens",
         "artifacts",
     }
@@ -79,6 +81,11 @@ def loadModelManifest(manifestPath: str | Path = LLM_MEMORY_MODEL_MANIFEST_PATH)
         value = manifest[key]
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise MemoryEncoderError(f"模型清单字段无效: {key}")
+
+    if manifest["pooling"] != "cls":
+        raise MemoryEncoderError("当前编码器只支持 pooling=cls")
+    if manifest["normalization"] != "l2":
+        raise MemoryEncoderError("当前编码器只支持 normalization=l2")
 
     specialTokens = manifest["specialTokens"]
     if not isinstance(specialTokens, dict):

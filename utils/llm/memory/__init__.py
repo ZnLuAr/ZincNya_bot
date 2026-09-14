@@ -6,7 +6,7 @@ from .database import (
     getMemoryCounts,
     getMemoryCandidates,
     getMemorySnapshots,
-    getEnabledMemoryPage,
+    getEnabledContextualMemoryPage,
     updateMemory,
     deleteMemory,
     retrieveMemories,
@@ -23,6 +23,7 @@ from .database import (
 )
 from .action import (
     MemoryAction,
+    MemoryActionContext,
     parseMemoryActions,
     validateAction,
     executeAction,
@@ -40,6 +41,7 @@ from .types import (
 )
 from .retrieval import (
     buildQueryTexts,
+    buildSemanticQueryPlan,
     loadCalibratedThresholds,
     renderMemoryContext,
     retrieveMemoryContext,

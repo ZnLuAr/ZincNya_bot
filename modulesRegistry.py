@@ -119,6 +119,8 @@ MODULES = {
             "tests/utils/llm/memory/test_memoryRuntime.py",
             "tests/scripts/test_memoryModel.py",
             "tests/scripts/test_evaluateMemory.py",
+            "tests/utils/llm/memory/fixtures/retrievalCases.json",
+            "tests/utils/llm/memory/fixtures/retrievalSmokeCases.json",
             "tests/scripts/test_mergeMemory.py",
             "tests/scripts/test_migrateMemoryEncryption.py",
             "tests/utils/command/llm/test_smoke.py",

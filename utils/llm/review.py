@@ -36,6 +36,7 @@ from utils.llm.client import generateReply
 from utils.llm.config import getMemoryAutoApprove
 from utils.llm.memory.action import (
     MemoryAction,
+    MemoryActionContext,
     buildMemoryActionReviewPayload,
     executeAction,
     formatActionDetail,
@@ -343,7 +344,13 @@ def getReviewItemActions(item: dict) -> str:
 # 记忆操作解析 / 校验 / 分发（审核层共享）
 # ---------------------------------------------------------------------------
 
-async def extractValidatedMemoryActions(reply: str, *, logLabel: str) -> tuple[str, list, int]:
+async def extractValidatedMemoryActions(
+    reply: str,
+    *,
+    logLabel: str,
+    chatID=None,
+    userID=None,
+) -> tuple[str, list, int]:
     """
     清理 reply 中的 <MEMORY_ACTION> 块、截断超限操作、逐个校验。
 
@@ -353,11 +360,14 @@ async def extractValidatedMemoryActions(reply: str, *, logLabel: str) -> tuple[s
     参数:
         reply: LLM 原始回复（可能含 <MEMORY_ACTION> 块）
         logLabel: 日志来源标签，如 'retry' / 'feedback retry' / 'console retry'
+        chatID/userID: 当前请求的可信身份；只用于约束 chat/user scope，不能
+            从 action 内容推导。global scope 没有归属身份，按策略允许通过。
 
     返回:
         清理后的 reply, 校验通过的 action 列表, 校验失败数
     """
     cleanedReply, actions = parseMemoryActions(reply)
+    actionContext = MemoryActionContext(chatID=chatID, userID=userID)
 
     # 截断超限操作
     if len(actions) > LLM_MEMORY_MAX_ACTIONS:
@@ -372,7 +382,7 @@ async def extractValidatedMemoryActions(reply: str, *, logLabel: str) -> tuple[s
     validated = []
     failed = 0
     for act in actions:
-        err = await validateAction(act)
+        err = await validateAction(act, actionContext=actionContext)
         if err:
             failed += 1
             await logSystemEvent(
@@ -442,7 +452,8 @@ async def dispatchMemoryActions(
     （review.py 不依赖 handlers/PTB，TG 的 int() 类型转换在回调内完成）。
 
     respectAutoApprove：
-        - True（首生成）：读 memoryAutoApprove，开启时直接 executeAction 自动执行
+        - True（首生成）：读 memoryAutoApprove；开启时仅直接执行普通 global
+          contextual action，其余 action 进入审核
         - False（retry/feedback）：有意不读——产出的操作需 ops 看过新回复才能定夺
 
     opsList：审核人列表；首生成传完整列表（空则丢弃），retry/feedback 传 [opsID]。
@@ -452,23 +463,33 @@ async def dispatchMemoryActions(
         return
 
     reviewActions = list(actions)
+    actionContext = MemoryActionContext(chatID=chatID, userID=userID)
     if respectAutoApprove and getMemoryAutoApprove():
+        # 自动批准是有意收窄的生产策略：模型目前几乎总把记忆写入 global，
+        # 因而普通 global contextual 可以减少审核延迟；chat/user 与 pinned
+        # 仍必须让 operator 看见并确认。executeAction 内还有同一策略的末端门禁。
         reviewActions = []
         for act in actions:
             if await requiresHumanReview(act):
                 reviewActions.append(act)
                 continue
 
-            success = await executeAction(act, humanApproved=False)
+            success = await executeAction(
+                act,
+                humanApproved=False,
+                actionContext=actionContext,
+            )
             status = "成功" if success else "失败"
             await logAction(
                 "System", f"LLM 记忆操作自动执行 ({status})",
                 formatActionDetail(act),
                 LogLevel.INFO, LogChildType.WITH_ONE_CHILD,
             )
-            # executeAction 会在写入前重新读取目标；若目标在前一次检查后变为
-            # pinned，它会拒绝自动写入。这里再检查一次，把竞态转入人工审核。
-            if not success and await requiresHumanReview(act):
+            # 自动批准失败也不能让 action 静默消失：失败可能来自暂时的
+            # 数据库/并发状态，也可能来自目标在检查后变成受保护状态。
+            # 保留到人工队列既不放宽 Global 自动批准策略，又给 operator
+            # 一次重试或取消的机会。
+            if not success:
                 reviewActions.append(act)
 
         if not reviewActions:
@@ -900,7 +921,12 @@ async def _retryReplyReview(
     # 清理 <MEMORY_ACTION> 块、校验并按 memoryDispatcher 分发（默认入 console 队列）
     failed = 0
     if item.get("includeContext"):
-        newReply, validated, failed = await extractValidatedMemoryActions(newReply, logLabel=logLabel)
+        newReply, validated, failed = await extractValidatedMemoryActions(
+            newReply,
+            logLabel=logLabel,
+            chatID=item.get("chatID"),
+            userID=item.get("userID"),
+        )
         await memoryDispatcher(
             validated,
             chatID=item["chatID"],
@@ -933,7 +959,9 @@ async def reviewRetryWithFeedback(
 
     将 ops 的补充要求追加到 originalMsg 后，作为 [背景信息补充：...] 块。
     LLM 会将其理解为可信的背景信息；memory 检索则在保留原始 turns 的同时，
-    单独把 feedbackText 加入辅助语义查询，避免增强后的展示字符串污染结构边界。
+    把 feedbackText 作为本次当前语义、辅助语义和词面查询的补充，但不把
+    增强后的展示字符串反解析为检索输入。生成结束后立即清掉 feedbackText，
+    后续普通 retry 不会继承本次反馈。
 
     参数:
         item: 原始审核项
@@ -958,9 +986,10 @@ async def reviewRetryWithFeedback(
     # 在进 <CURRENT_USER_MESSAGE> 前被 neutralizePromptDelimiters 整体中和，
     # 故此处不再各自转义（见 utils/llm/promptSafety.py）。
     enhancedMsg = f"{item['originalMsg']}\n\n[背景信息补充：{trimmed}]"
-    memoryQuery = item.get("memoryQuery")
-    if memoryQuery is not None:
-        memoryQuery = replace(memoryQuery, feedbackText=trimmed)
+    storedMemoryQuery = item.get("memoryQuery")
+    retryMemoryQuery = storedMemoryQuery
+    if storedMemoryQuery is not None:
+        retryMemoryQuery = replace(storedMemoryQuery, feedbackText=trimmed)
 
     newReply = await generateReply(
         enhancedMsg,
@@ -968,7 +997,7 @@ async def reviewRetryWithFeedback(
         includeContext=bool(item.get("includeContext")),
         userID=item.get("userID"),
         urlContexts=item.get("urlContexts"),
-        memoryQuery=memoryQuery,
+        memoryQuery=retryMemoryQuery,
     )
 
     # 清理 <MEMORY_ACTION> 块、校验并按 memoryDispatcher 分发（默认入 console 队列）
@@ -976,6 +1005,8 @@ async def reviewRetryWithFeedback(
     if item.get("includeContext"):
         newReply, validated, failed = await extractValidatedMemoryActions(
             newReply, logLabel=logLabel,
+            chatID=item.get("chatID"),
+            userID=item.get("userID"),
         )
         await memoryDispatcher(
             validated,
@@ -998,7 +1029,10 @@ async def reviewRetryWithFeedback(
     return {
         **item,
         "reply": newReply,
-        "memoryQuery": memoryQuery,
+        "memoryQuery": (
+            replace(storedMemoryQuery, feedbackText="")
+            if storedMemoryQuery is not None else None
+        ),
         "memoryFailedCount": failed,
     }
 
@@ -1007,10 +1041,17 @@ async def _approveMemoryReview(item: dict) -> bool:
     """使用审核快照批准 memory 操作；冲突时刷新目标供再次确认。"""
     actionData = item["action"]
     action = MemoryAction.fromDict(actionData)
+    # 审核卡保存的 chat/user 来自生成请求，是批准时仍可信的授权上下文；
+    # 不能改用 actionData 中由模型生成、或卡片展示层重新拼出的 scope ID。
+    actionContext = MemoryActionContext(
+        chatID=item.get("chatID"),
+        userID=item.get("userID"),
+    )
     success = await executeAction(
         action,
         humanApproved=True,
         expectedState=actionData.get("targetState"),
+        actionContext=actionContext,
     )
     if not success:
         await refreshMemoryReviewItem(item)

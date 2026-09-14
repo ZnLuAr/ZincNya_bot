@@ -71,6 +71,27 @@ MEMORY_ACTION_PATTERN = re.compile(
 
 
 
+@dataclass(frozen=True, kw_only=True)
+class MemoryActionContext:
+    """
+    当前生成请求的可信身份，用于约束模型提交的 scope。
+
+    `MemoryAction.scopeID` 来自模型输出，不能被当作授权凭据；这里的
+    chat/user ID 则由 Telegram 入口在白名单校验后沿调用链传入。
+
+    但 global 没有会话归属，模型将能在任意已授权的 LLM 请求中写入普通
+    global memory，因此不要求对应的 chat/user ID。这是一个值得注意的
+    注入攻击面。
+
+    首次生成的自动批准策略比身份校验更窄：只有普通 global
+    contextual action 可以绕过人工审核。chat/user 即使是 contextual
+    也必须进入人工审核；pinned 则无论 scope 都必须人工批准。
+    """
+
+    chatID: str | int | None = None
+    userID: str | int | None = None
+
+
 @dataclass
 class MemoryAction:
     """LLM 请求的单个 memory 操作的内部表示。
@@ -78,6 +99,11 @@ class MemoryAction:
     模型输出使用 snake_case JSON，审核队列和数据库调用使用驼峰法；
     `_parseActionDict` 与 `toDict`/`fromDict` 是这两个边界之间的转换层。
     类保持可变，是因为校验阶段会把 mode 和 retrievalHint 规范化到最终值。
+
+    `mode=None` 表示 add 使用默认 `contextual`、update 保留原值；
+    `contextual` 需要通过相关性检索，`pinned` 使用常驻预算且任何模型自主
+    写入都必须人工批准。`retrievalHint=None` 表示未提供，空字符串表示
+    update 时显式清除，二者不能合并处理。
     """
 
     action: str
@@ -87,7 +113,7 @@ class MemoryAction:
     tags: Optional[list[str]] = None
     priority: Optional[int] = None
     memoryID: Optional[int] = None
-    mode: Optional[str] = None              # mode 可能的值为：
+    mode: Optional[str] = None
     retrievalHint: Optional[str] = None
     reason: str = ""
 
@@ -333,8 +359,56 @@ def _normalizeScopeID(scopeType: str, scopeID: str) -> str:
 
 
 
-async def validateAction(action: MemoryAction) -> str | None:
-    """校验记忆操作是否合法返回 None 表示通过"""
+def _validateActionScopeAuthorization(
+    action: MemoryAction,
+    normalizedScopeID: str,
+    actionContext: MemoryActionContext | None,
+) -> str | None:
+    """
+    校验模型声明的 scope 是否落在当前请求的可信身份内。
+
+    global 是有意保留的策略例外：它本来就不属于某个 chat/user，且
+    生产中的模型记忆主要落在该层。相反，chat/user scope 没有可信身份时
+    必须拒绝，不能让模型通过伪造 `scope_id` 跨会话或跨用户写入。
+
+    这里的 global 例外是有意接受的产品取舍，而不是把 global 当成
+    “安全可信”的输入：开启自动批准时，模型仍可能把不理想的内容写入
+    共享记忆。因此自动批准开关本身代表 operator 对共享记忆风险的授权；
+    ``requiresHumanReview`` 还会把 chat/user action 保留在人工审核路径；
+    下面的身份绑定则负责阻断跨会话、跨用户写入。两者是不同门禁，不能
+    用“身份匹配”替代人工批准。
+    """
+    if action.scopeType == MEMORY_SCOPE_GLOBAL:
+        return None
+
+    if actionContext is None:
+        return "非 global memory 缺少当前请求身份，拒绝执行"
+
+    expectedID = (
+        actionContext.chatID
+        if action.scopeType == MEMORY_SCOPE_CHAT
+        else actionContext.userID
+    )
+    if expectedID is None or not str(expectedID).strip():
+        return f"{action.scopeType} memory 缺少当前请求身份，拒绝执行"
+
+    if normalizedScopeID != str(expectedID).strip():
+        return f"{action.scopeType} memory scope 不属于当前请求"
+    return None
+
+
+async def validateAction(
+    action: MemoryAction,
+    *,
+    actionContext: MemoryActionContext | None = None,
+) -> str | None:
+    """
+    校验记忆操作是否合法，返回 None 表示通过。
+
+    `actionContext` 是调用链提供的可信授权边界，不是模型输出的一部分。
+    global action 可以不依赖身份；chat/user action 若没有匹配身份则 fail
+    closed，即使其字段格式和目标 memory 本身都合法也不能进入审核或执行。
+    """
     if action.action not in _VALID_ACTIONS:
         return f"不支持的 action：{action.action or '?'}"
 
@@ -344,6 +418,14 @@ async def validateAction(action: MemoryAction) -> str | None:
     normalizedScopeID = _normalizeScopeID(action.scopeType, action.scopeID)
     if action.scopeType != MEMORY_SCOPE_GLOBAL and not normalizedScopeID:
         return "非 global scope 必须提供 scope_id"
+
+    scopeAuthorizationError = _validateActionScopeAuthorization(
+        action,
+        normalizedScopeID,
+        actionContext,
+    )
+    if scopeAuthorizationError:
+        return scopeAuthorizationError
 
     if action.priority is not None:
         if action.priority < 0:
@@ -396,6 +478,13 @@ async def validateAction(action: MemoryAction) -> str | None:
     if target.get("source") != "inferred":
         return f"memory #{action.memoryID} 不是 inferred，禁止修改"
 
+    # mode 是审核策略的关键输入；数据库 schema 虽然声明了默认值，历史迁移或
+    # 人工改库仍可能留下 NULL/未知值。无法判断它是否属于 pinned 时，直接拒绝
+    # 模型操作，而不是把坏状态当 contextual 放行。
+    targetMode = target.get("mode", MEMORY_MODE_CONTEXTUAL)
+    if targetMode not in (MEMORY_MODE_CONTEXTUAL, MEMORY_MODE_PINNED):
+        return f"memory #{action.memoryID} 的 mode 无效，拒绝模型操作"
+
     targetScopeType = str(target.get("scope_type", "")).strip().lower()
     targetScopeID = _normalizeScopeID(targetScopeType, str(target.get("scope_id", "")))
     if action.scopeType != targetScopeType or normalizedScopeID != targetScopeID:
@@ -420,15 +509,49 @@ async def requiresHumanReview(
     action: MemoryAction,
     target: Optional[dict] = None,
 ) -> bool:
-    """判断操作是否越过 contextual memory 的自动写入边界。"""
+    """判断首次生成的 action 是否必须进入人工审核。
+
+    自动批准是一个有意收窄的产品例外：只允许普通 global contextual
+    action（add，或指向 contextual 目标的 update/delete）直接写入。chat
+    和 user scope 即使内容是 contextual，也必须由 operator 确认；pinned
+    新增、升级、修改和删除同样必须人工批准。此函数只判断审核策略，
+    scope 是否属于当前请求仍由 ``MemoryActionContext`` 校验。
+
+    retry/feedback 不依赖本函数决定最终路径，调用方会显式关闭自动批准。
+    """
+    # 私有 scope 不是生产中观察到的主要写入形态，且自动放行会扩大模型
+    # 对具体聊天/用户数据的修改面；即使是 contextual，也保留人工复核。
+    if action.scopeType != MEMORY_SCOPE_GLOBAL:
+        return True
+
     if action.action == "add":
-        return action.mode == MEMORY_MODE_PINNED
+        # mode=None 在 add 时由执行层解释为 contextual；未知 mode 也不
+        # 走自动路径，避免策略函数把未规范化输入误当成安全默认值。
+        return action.mode not in (None, MEMORY_MODE_CONTEXTUAL)
 
     if target is None and action.memoryID is not None:
         target = await getMemoryByID(action.memoryID)
-    if target and target.get("mode") == MEMORY_MODE_PINNED:
+
+    # 目标读不到时采取保守策略：正常审核编排会在此前的 validateAction
+    # 阶段丢弃它，但直接调用 executeAction 也不能因缺少快照而自动写入。
+    if target is None:
         return True
-    return action.action == "update" and action.mode == MEMORY_MODE_PINNED
+    targetMode = target.get("mode", MEMORY_MODE_CONTEXTUAL)
+    # 未知 mode 无法证明是普通 contextual；自动路径必须停下，交给人工或
+    # 管理员先修复数据。正常 executeAction 还会在 validateAction 再次拒绝它。
+    if targetMode not in (MEMORY_MODE_CONTEXTUAL, MEMORY_MODE_PINNED):
+        return True
+    if targetMode == MEMORY_MODE_PINNED:
+        return True
+
+    # update 未提供 mode 表示保留目标原值；只有显式升级为 pinned 时需要
+    # 额外审核。delete 不会改变 mode，因此 contextual global delete 可自动执行。
+    return action.action == "update" and action.mode not in (
+        None,
+        MEMORY_MODE_CONTEXTUAL,
+    )
+
+
 
 
 async def executeAction(
@@ -436,14 +559,20 @@ async def executeAction(
     *,
     humanApproved: bool = False,
     expectedState: Optional[str] = None,
+    actionContext: MemoryActionContext | None = None,
 ) -> bool:
     """校验并执行模型申请的 memory 操作。
 
-    涉及 pinned 的操作只接受 `humanApproved=True`；update/delete 总是通过
-    `MemoryWriteGuard` 绑定执行前状态，人工批准还必须带审核卡保存的
-    `expectedState`，防止旧审核覆盖新数据。
+    非 global contextual 或涉及 pinned 的操作只接受 `humanApproved=True`；
+    update/delete 总是通过 `MemoryWriteGuard` 绑定执行前状态，人工批准还
+    必须带审核卡保存的 `expectedState`，防止旧审核覆盖新数据。scope 授权
+    在这里再次校验，因为审核队列和自动执行之间可能经过较长时间，不能只
+    相信入队时的结果。
     """
-    validationError = await validateAction(action)
+    validationError = await validateAction(
+        action,
+        actionContext=actionContext,
+    )
     if validationError:
         await logSystemEvent(
             "LLM memory 执行前校验失败",
@@ -453,9 +582,13 @@ async def executeAction(
         return False
 
     if action.action == "add":
+        # validateAction 已检查过 scope；在真正写入前保留同一授权上下文，
+        # 让所有执行入口（自动执行、console、Telegram 审核）共享一套边界。
+        # 这是最后一道写入门禁：即使调用方绕过 review 编排直接调用本函数，
+        # chat/user 或 pinned action 也不能凭模型输出自动落库。
         if await requiresHumanReview(action) and not humanApproved:
             await logSystemEvent(
-                "LLM memory pinned 操作被拒绝",
+                "LLM memory 需要人工审核的操作被拒绝",
                 "action=add, reason=humanApprovalRequired",
                 LogLevel.WARNING,
             )
@@ -479,7 +612,7 @@ async def executeAction(
     protected = await requiresHumanReview(action, target)
     if protected and not humanApproved:
         await logSystemEvent(
-            "LLM memory pinned 操作被拒绝",
+            "LLM memory 需要人工审核的操作被拒绝",
             f"action={action.action}, id={action.memoryID}, reason=humanApprovalRequired",
             LogLevel.WARNING,
         )
@@ -492,8 +625,9 @@ async def executeAction(
         )
         return False
 
-    # 非 pinned 的 inferred memory 可以自动更新，但所有已有记录仍使用同一
-    # 状态快照，防止模型生成到审核批准之间发生静默覆盖。
+    # 允许执行的 global contextual inferred memory 仍使用同一状态快照，
+    # 防止模型生成到自动执行/人工批准之间发生静默覆盖；chat/user 和
+    # pinned 会先在上面的 policy gate 被拦截或转入审核。
     guard = MemoryWriteGuard(
         expectedState=expectedState or buildMemoryStateFingerprint(target),
         scopeType=action.scopeType,
@@ -522,8 +656,12 @@ async def executeAction(
 
 async def buildMemoryActionReviewPayload(act: MemoryAction) -> dict:
     """
-    构造记忆操作的审核展示 payload：toDict 后，对带 memoryID 且无 content 的操作（典型为
-    update/delete）补 originalContent（查库取原内容），供审核卡片显示「改前内容」。
+    构造可跨审核入口往返的 memory action payload。
+
+    基础字段来自 `MemoryAction.toDict()`；若操作指向已有记录，再附加审核
+    展示使用的 `originalContent` / `originalMode`，以及批准时用于数据库
+    条件写入的 `targetState`。后者绑定审核时的完整记录状态，避免旧卡片
+    覆盖审核期间发生的更新。
     """
     actDict = act.toDict()
     if act.memoryID is not None:

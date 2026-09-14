@@ -222,6 +222,7 @@ class TestRetrievalManagement:
             "indexPending": 1,
             "oldestIndexAgeMs": 12.5,
             "lastReason": "queryTimeout",
+            "reconcileCapacitySaturated": True,
         }
         mockState.return_value.getMemoryRuntime.return_value = runtime
 
@@ -229,7 +230,11 @@ class TestRetrievalManagement:
 
         out = capsys.readouterr().out
         assert "启用 4 / 总计 8" in out
-        assert "2/4 (50.0%)" in out
+        assert "2/4 contextual (50.0%)" in out
         assert "calibrationDatasetMissing" in out
+        assert "queryRejected=0" in out
+        assert "workerFailures=0" in out
         assert "queryTimeout" in out
+        assert "对账容量：已饱和" in out
+        assert "reconcileCapacitySaturated=true" in out
         runtime.getStatus.assert_called_once_with()

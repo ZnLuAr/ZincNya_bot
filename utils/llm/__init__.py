@@ -86,7 +86,7 @@ from .memory import (
     getMemoryCounts,
     getMemoryCandidates,
     getMemorySnapshots,
-    getEnabledMemoryPage,
+    getEnabledContextualMemoryPage,
     updateMemory,
     deleteMemory,
     retrieveMemories,
@@ -103,6 +103,7 @@ from .memory import (
     MemoryRetrievalResult,
     MemoryWriteGuard,
     loadCalibratedThresholds,
+    buildSemanticQueryPlan,
     retrieveMemoryContext,
 )
 from .contextBuilder import (

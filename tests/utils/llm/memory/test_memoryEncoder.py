@@ -124,6 +124,25 @@ def test_loadModelManifestRejectsMalformedArtifactMetadata(tmp_path):
         loadModelManifest(manifestPath)
 
 
+@pytest.mark.parametrize(
+    ("fieldName", "value", "message"),
+    [
+        ("pooling", "mean", "pooling=cls"),
+        ("normalization", "none", "normalization=l2"),
+    ],
+)
+def test_loadModelManifestRejectsUnsupportedEncodingContract(
+    tmp_path, fieldName, value, message,
+):
+    _, manifestPath = _writeManifest(tmp_path)
+    manifest = json.loads(manifestPath.read_text(encoding="utf-8"))
+    manifest[fieldName] = value
+    manifestPath.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(MemoryEncoderError, match=message):
+        loadModelManifest(manifestPath)
+
+
 def test_encoderUsesHeadTailQueryBudgetAndNormalizes(tmp_path):
     numpy = pytest.importorskip("numpy")
     modelDir, manifestPath = _writeManifest(tmp_path)

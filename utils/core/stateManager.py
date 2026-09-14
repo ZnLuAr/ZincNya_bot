@@ -7,6 +7,7 @@ utils/core/stateManager.py
 - interactiveMode: 是否处于交互模式（CLI 界面接管输入）
 - interactiveChatID: chatScreen receiver 当前停留的聊天 ID
 - messageQueue: 全局消息队列
+- memoryRuntime: 可选的 LLM memory 在线索引运行时引用
 - shutdownEvent / restartRequested: 远程关机/重启信号
 """
 
@@ -202,6 +203,11 @@ class StateManager:
         with self._stateLock:
             return self._messageQueue
 
+
+
+
+    # LLM memory runtime 管理
+    # ========================================================================
 
     def setMemoryRuntime(self, runtime):
         """设置 LLM memory 运行时引用；None 表示清除"""

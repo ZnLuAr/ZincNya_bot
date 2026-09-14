@@ -3,7 +3,9 @@
 import io
 import json
 import hashlib
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -48,6 +50,8 @@ def _writeManifest(tmpPath: Path, files: dict[str, bytes]):
         "queryPrefix": "query",
         "maxTokens": 8,
         "embeddingDimension": 4,
+        "pooling": "cls",
+        "normalization": "l2",
         "specialTokens": {"cls": "[CLS]", "sep": "[SEP]", "pad": "[PAD]"},
         "artifacts": artifacts,
     }
@@ -80,6 +84,37 @@ def test_buildArtifactURLPinsFullRevision(tmp_path):
     assert "/resolve/main/" not in url
 
 
+def test_buildArtifactURLAllowsExplicitHttpsMirror(tmp_path):
+    _, manifest = _writeManifest(tmp_path, {"model.bin": b"expected"})
+
+    url = buildArtifactURL(
+        manifest,
+        "model.bin",
+        endpoint="https://hf-mirror.com/",
+    )
+
+    assert url.startswith("https://hf-mirror.com/")
+    assert manifest["revision"] in url
+
+
+def test_buildArtifactURLRejectsInsecureEndpoint(tmp_path):
+    _, manifest = _writeManifest(tmp_path, {"model.bin": b"expected"})
+
+    with pytest.raises(MemoryEncoderError, match="HTTPS URL"):
+        buildArtifactURL(
+            manifest,
+            "model.bin",
+            endpoint="http://example.com",
+        )
+
+
+def test_buildArtifactURLRejectsArtifactPathTraversal(tmp_path):
+    _, manifest = _writeManifest(tmp_path, {"model.bin": b"expected"})
+
+    with pytest.raises(MemoryEncoderError, match="路径不安全"):
+        buildArtifactURL(manifest, "../outside.bin")
+
+
 def test_installModelVerifiesAllFilesBeforePublishing(tmp_path):
     expectedFiles = {"model.bin": b"model", "tokenizer.json": b"tokenizer"}
     manifestPath, _ = _writeManifest(tmp_path, expectedFiles)
@@ -104,6 +139,8 @@ def test_installModelPublishesVerifiedArtifacts(tmp_path):
     expectedFiles = {"model.bin": b"model", "tokenizer.json": b"tokenizer"}
     manifestPath, _ = _writeManifest(tmp_path, expectedFiles)
     modelDir = tmp_path / "model"
+    modelDir.mkdir()
+    (modelDir / "stale.bin").write_bytes(b"stale")
 
     def _opener(request, timeout):
         fileName = request.full_url.rsplit("/", 1)[-1]
@@ -114,6 +151,105 @@ def test_installModelPublishesVerifiedArtifacts(tmp_path):
     assert all(status["valid"] for status in statuses)
     assert (modelDir / "model.bin").read_bytes() == b"model"
     assert (modelDir / "tokenizer.json").read_bytes() == b"tokenizer"
+    assert not (modelDir / "stale.bin").exists()
+
+
+def test_installModelRollsBackWholeDirectoryWhenPublishFails(tmp_path):
+    expectedFiles = {"model.bin": b"model", "tokenizer.json": b"tokenizer"}
+    manifestPath, _ = _writeManifest(tmp_path, expectedFiles)
+    modelDir = tmp_path / "model"
+    modelDir.mkdir()
+    (modelDir / "model.bin").write_bytes(b"old-model")
+    (modelDir / "old-only.bin").write_bytes(b"old-only")
+
+    def _opener(request, timeout):
+        fileName = request.full_url.rsplit("/", 1)[-1]
+        return _FakeResponse(expectedFiles[fileName])
+
+    realReplace = os.replace
+    replaceCalls = 0
+
+    def _failStagingPublish(source, destination):
+        nonlocal replaceCalls
+        replaceCalls += 1
+        if replaceCalls == 2:
+            raise OSError("publish interrupted")
+        return realReplace(source, destination)
+
+    with (
+        patch("scripts.memoryModel.os.replace", side_effect=_failStagingPublish),
+        pytest.raises(OSError, match="publish interrupted"),
+    ):
+        installModel(modelDir, manifestPath, opener=_opener)
+
+    assert (modelDir / "model.bin").read_bytes() == b"old-model"
+    assert (modelDir / "old-only.bin").read_bytes() == b"old-only"
+    assert not (modelDir / "tokenizer.json").exists()
+
+
+def test_installModelKeepsOldDirectoryWhenBackupMoveFails(tmp_path):
+    """备份 rename 未成功时，回滚不能误删仍在原位的旧安装。"""
+    expectedFiles = {"model.bin": b"model", "tokenizer.json": b"tokenizer"}
+    manifestPath, _ = _writeManifest(tmp_path, expectedFiles)
+    modelDir = tmp_path / "model"
+    modelDir.mkdir()
+    (modelDir / "model.bin").write_bytes(b"old-model")
+    (modelDir / "old-only.bin").write_bytes(b"old-only")
+
+    def _opener(request, timeout):
+        fileName = request.full_url.rsplit("/", 1)[-1]
+        return _FakeResponse(expectedFiles[fileName])
+
+    realReplace = os.replace
+
+    def _failBackupMove(source, destination):
+        if source == modelDir:
+            raise OSError("backup interrupted")
+        return realReplace(source, destination)
+
+    with (
+        patch("scripts.memoryModel.os.replace", side_effect=_failBackupMove),
+        pytest.raises(OSError, match="backup interrupted"),
+    ):
+        installModel(modelDir, manifestPath, opener=_opener)
+
+    assert (modelDir / "model.bin").read_bytes() == b"old-model"
+    assert (modelDir / "old-only.bin").read_bytes() == b"old-only"
+    assert not (modelDir / "tokenizer.json").exists()
+
+
+def test_installModelPreservesBackupWhenRollbackFails(tmp_path):
+    expectedFiles = {"model.bin": b"model", "tokenizer.json": b"tokenizer"}
+    manifestPath, _ = _writeManifest(tmp_path, expectedFiles)
+    modelDir = tmp_path / "model"
+    modelDir.mkdir()
+    (modelDir / "model.bin").write_bytes(b"old-model")
+    (modelDir / "old-only.bin").write_bytes(b"old-only")
+
+    def _opener(request, timeout):
+        fileName = request.full_url.rsplit("/", 1)[-1]
+        return _FakeResponse(expectedFiles[fileName])
+
+    realReplace = os.replace
+    replaceCalls = 0
+
+    def _failPublishAndRollback(source, destination):
+        nonlocal replaceCalls
+        replaceCalls += 1
+        if replaceCalls in (2, 3):
+            raise OSError("replace interrupted")
+        return realReplace(source, destination)
+
+    with (
+        patch("scripts.memoryModel.os.replace", side_effect=_failPublishAndRollback),
+        pytest.raises(MemoryEncoderError, match="旧安装保留于"),
+    ):
+        installModel(modelDir, manifestPath, opener=_opener)
+
+    backupPaths = list(tmp_path.glob(".model-backup-*"))
+    assert len(backupPaths) == 1
+    assert (backupPaths[0] / "model.bin").read_bytes() == b"old-model"
+    assert (backupPaths[0] / "old-only.bin").read_bytes() == b"old-only"
 
 
 def test_installModelRejectsBadDigest(tmp_path):

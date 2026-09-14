@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 from utils.llm.memory.action import (
     MemoryAction,
+    MemoryActionContext,
     executeAction,
     parseMemoryActions,
     validateAction,
@@ -206,6 +207,171 @@ async def test_invalidHintDoesNotDiscardOtherwiseValidAdd():
     assert len(actions) == 1
     assert actions[0].retrievalHint is None
     assert await validateAction(actions[0]) is None
+
+
+@pytest.mark.asyncio
+async def test_scopeAuthorizationUsesTrustedRequestIdentity():
+    """chat/user scope 只能匹配调用链传入的身份，不能相信模型自报 ID。"""
+    chatAction = MemoryAction(
+        action="add",
+        scopeType="chat",
+        scopeID="other-chat",
+        content="跨聊天事实",
+    )
+    userAction = MemoryAction(
+        action="add",
+        scopeType="user",
+        scopeID="other-user",
+        content="跨用户事实",
+    )
+    context = MemoryActionContext(chatID="current-chat", userID="current-user")
+
+    assert "不属于当前请求" in await validateAction(
+        chatAction,
+        actionContext=context,
+    )
+    assert "不属于当前请求" in await validateAction(
+        userAction,
+        actionContext=context,
+    )
+    assert await validateAction(
+        MemoryAction(
+            action="add",
+            scopeType="chat",
+            scopeID="current-chat",
+            content="当前聊天事实",
+        ),
+        actionContext=context,
+    ) is None
+    assert await validateAction(
+        MemoryAction(
+            action="add",
+            scopeType="user",
+            scopeID="current-user",
+            content="当前用户事实",
+        ),
+        actionContext=context,
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_nonGlobalScopeWithoutIdentityFailsClosed():
+    """没有请求身份时，非 global action 不得退回模型自报的 scope。"""
+    action = MemoryAction(
+        action="add",
+        scopeType="user",
+        scopeID="123",
+        content="无身份事实",
+    )
+
+    error = await validateAction(action)
+
+    assert error is not None
+    assert "缺少当前请求身份" in error
+
+
+@pytest.mark.asyncio
+@patch("utils.llm.memory.action.addMemory", new_callable=AsyncMock)
+async def test_globalContextualAddKeepsProductAutoWritePolicy(mockAdd):
+    """普通 global contextual 是明确的共享记忆自动写入例外。"""
+    mockAdd.return_value = 123
+    action = MemoryAction(
+        action="add",
+        scopeType="global",
+        scopeID="任意模型值",
+        content="共享事实",
+        mode="contextual",
+    )
+
+    assert await executeAction(action) is True
+
+    mockAdd.assert_awaited_once()
+    assert mockAdd.await_args.args[:2] == ("global", "global")
+
+
+@pytest.mark.asyncio
+@patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
+@patch("utils.llm.memory.action.addMemory", new_callable=AsyncMock)
+async def test_privateContextualAddStillRequiresHumanApproval(mockAdd, mockLog):
+    """匹配身份不等于自动授权：chat scope 仍必须经过人工审核。"""
+    action = MemoryAction(
+        action="add",
+        scopeType="chat",
+        scopeID="current-chat",
+        content="私有事实",
+        mode="contextual",
+    )
+
+    assert await executeAction(
+        action,
+        actionContext=MemoryActionContext(chatID="current-chat"),
+    ) is False
+
+    mockAdd.assert_not_awaited()
+    assert any(
+        "需要人工审核" in str(call.args[0])
+        for call in mockLog.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+@patch("utils.llm.memory.action.addMemory", new_callable=AsyncMock)
+async def test_crossScopeExecuteIsRejectedBeforeWrite(mockAdd):
+    """执行层再次校验 scope，避免绕过解析层直接调用时跨 chat 写入。"""
+    action = MemoryAction(
+        action="add",
+        scopeType="chat",
+        scopeID="other-chat",
+        content="不应写入",
+    )
+
+    assert await executeAction(
+        action,
+        actionContext=MemoryActionContext(chatID="current-chat"),
+    ) is False
+
+    mockAdd.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("targetMode", [None, "future-mode"])
+async def test_invalidTargetModeFailsClosed(targetMode):
+    """目标 mode 无法分类时，连人工批准入口也不能按 contextual 执行。"""
+    action = MemoryAction(
+        action="delete",
+        scopeType="global",
+        scopeID="global",
+        memoryID=7,
+    )
+    target = {
+        "id": 7,
+        "scope_type": "global",
+        "scope_id": "global",
+        "source": "inferred",
+        "mode": targetMode,
+    }
+
+    with (
+        patch(
+            "utils.llm.memory.action.getMemoryByID",
+            new_callable=AsyncMock,
+            return_value=target,
+        ),
+        patch(
+            "utils.llm.memory.action.deleteMemory",
+            new_callable=AsyncMock,
+        ) as mockDelete,
+    ):
+        error = await validateAction(action)
+        assert error is not None
+        assert "mode 无效" in error
+        assert await executeAction(
+            action,
+            humanApproved=True,
+            expectedState="ignored",
+        ) is False
+
+    mockDelete.assert_not_awaited()
 
 
 @pytest.mark.asyncio
