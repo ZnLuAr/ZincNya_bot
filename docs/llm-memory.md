@@ -1,6 +1,6 @@
 # LLM Structured Memory 设计与运维文档
 
-> 最后更新：2026-09-12
+> 最后更新：2026-09-25
 >
 > Written by ZincNya~ ❤
 
@@ -26,10 +26,11 @@ Structured Memory 是 LLM 模块在运行过程中形成的长期的、可变信
 
 ### 当前状态
 
-- 宽候选、`contextual（情境记忆）/pinned（常驻记忆）`、本地 ONNX 语义通道、BM25、在线增量索引和离线评测器已经落地。
+- 宽候选、`contextual（情境记忆）/pinned（常驻记忆）`、本地 ONNX 语义通道、BM25、在线增量索引和离线评测器已经落地；语义记忆已拆成 base 准入表示与 enhanced 排序表示，hint 不能单独放行记忆。
 - 生产默认仍是 `memoryRetrievalMode = "legacy"`；这里的 legacy 只指**检索选择器**，不等于旧数据库字段、历史明文兼容读取或 schema 迁移。
-- `utils/llm/memory/retrievalCalibration.json` 当前为 `status: "unconfigured"`，三个通道阈值均为 `null`；因此显式切到 `hybrid` 也不能得到未经批准的 contextual 语义召回。
-- 当前实现和自动化回归已经具备，但正式人工 calibration、目标机资源/生命周期验收和人工回复质量验收仍是独立的上线条件；不要把“代码存在”写成“质量已通过”。
+- `utils/llm/memory/retrievalCalibration.json` 当前为 `status: "unconfigured"`，三个通道阈值均为 `null`；默认 `memoryHybridSelector="local"` 继续遵守该门控。另有已获实现批准、默认关闭的 [LLM 选择后端](#llm-选择后端默认关闭)，它独立收集候选并远程选择 ID，不加载本地准入阈值。
+- 当前 Messages 路线已有 32 题检索实测、Linux/Python 3.11 离线工程验证及[三例冲突的六次主回答裁决](archive/llm-memory-hybrid-research-2026-09.md#2026-09-25三例冲突的六次主回答裁决)：检索达到 P0.85/R0.65，六次主回答核心结论均正确。接下来核对目标机实际配置，并完成 Telegram、记忆操作与 Bot 停止/启动的应用验收；生产尚未启用。
+- **local 阈值路线**仍未完成校准与标注批准：旧 66 题独立重跑召回 31/62；扩充至 138 题后，基线分组验证 precision=0.9286、recall=0.0675、forbidden=1，不能冻结为上线候选。这些是 local 路线的历史研究结论，不能据此要求独立的 LLM 选择后端批准本地阈值；见 [Calibration 扩充与检索研究](llm-memory-calibration-expansion.md)。
 
 ---
 
@@ -49,6 +50,7 @@ Structured Memory 是 LLM 模块在运行过程中形成的长期的、可变信
   - [作用域与记忆模式](#作用域与记忆模式)
   - [常量速查](#常量速查)
 - [记忆检索](#记忆检索)
+  - [LLM 选择后端（默认关闭）](#llm-选择后端默认关闭)
   - [检索入口](#检索入口)
   - [检索原理](#检索原理)
   - [检索实现](#检索实现)
@@ -81,10 +83,8 @@ Structured Memory 是 LLM 模块在运行过程中形成的长期的、可变信
 
 Memory 因而独立存储，仅在当前[请求启用携带上下文](#何时检索 "章节 · 何时检索")时按需检索，并受固定字符预算限制。即便被检索，也应该把它们放进低信任块，而非常驻的规则。
 
-以下就是记忆注入 prompt 后的格式示例了——
-
 <details>
-<summary>展开查看记忆注入 prompt 后的实际格式</summary>
+<summary>以下就是记忆注入 prompt 后的格式示例了——</summary>
 
 Memory 作为 `ContextTier.LOW_TRUST` 块进入 `<RETRIEVED_CONTEXT>`。当前渲染示例：
 
@@ -244,118 +244,18 @@ flowchart TB
 
 ### 分层速查
 
-上图适合建立方向感，下面这几块则适合在开发时定位入口。每一块都形如 “主要函数 → 输入/输出 → 不该越过的边界” ；不过，实现细节仍应以代码为准，**函数签名改变时要同步更新这里**。
+| 层 | 主要模块 | 关键入口函数 | 核心边界 |
+|---|---|---|---|
+| **① 接入层** | `handlers/llm.py`<br/>`messagePrep.py`<br/>`state.py` | `preparePurePromptText()`<br/>`appendPendingMessage()`<br/>`MemoryQuery` | 构造不可变的检索输入快照；不读数据库、不实现检索策略、不能从展示文本反向解析 |
+| **② 编排层** | `contextBuilder.py`<br/>`review.py`<br/>`handlers/llmReview.py` | `buildConversationContext()`<br/>`buildStructuredMemoryContext()`<br/>`dispatchMemoryActions()` | 只组装上下文，不复制检索策略；通过解析不等于获得写入权限；`includeContext=False` 时不读 memory/history |
+| **③ 策略层** | `memory/retrieval.py` | `retrieveMemoryContext()`<br/>`buildQueryTexts()`<br/>`selectContextualCandidates()` | 唯一拥有”选哪些记忆”的决策；priority 不能在 hybrid 相关性判断前截断候选；调用方不得在别处复制 threshold/排序/预算逻辑 |
+| **④ 能力层** | `memory/lexical.py`<br/>`memory/encoder.py`<br/>`memory/runtime.py` | `scoreLexicalCandidates()`<br/>`MemoryEncoder.*`<br/>`runtime.scoreSemantic()` | 只返回分数，不持有业务规则；`runtime` 是进程内单例；模型/向量/队列都是派生状态，不能决定 memory 是否存在 |
+| **⑤ 数据层** | `memory/database.py`<br/>`memory/action.py`<br/>`schema/llmMemory.sql` | `addMemory()` / `updateMemory()` / `deleteMemory()`<br/>`getMemoryCandidates()`<br/>`validateAction()` / `executeAction()` | SQLite 是唯一正本；runtime 通知失败不回滚数据库；模型只能改 `source=inferred`；`chat/user` scope 必须匹配可信身份；普通 global contextual 是有意保留的自动写入例外 |
+| **旁路** | `memoryCmd.py`<br/>`memory/ui.py`<br/>`scripts/memoryModel.py`<br/>`scripts/evaluateMemory.py` | `/llm memory` 命令<br/>`registerMemoryRuntime()`<br/>`runMemoryIndexWorker()` | 不参与线上请求的相关性决策；离线评测复用正式查询路径，但不读生产数据库 |
 
-<details>
-<summary>① 接入层：从 Telegram 消息得到 MemoryQuery</summary>
-
-**主要模块**：`handlers/llm.py`、`utils/llm/messagePrep.py`、`utils/llm/state.py`、`utils/llm/memory/types.py`
-
-| 主要函数/结构 | 做什么 | 产物 |
-|---|---|---|
-| `preparePurePromptText()` | 清理 mention、解析 `#context`、拆分当前消息与 reply；展示文本和检索原文分开保存 | `PromptPayload`，其中含 `MemoryTurn` |
-| `appendPendingMessage()` / `collectDebouncedBatch()` | 将防抖窗口内的多条消息按原顺序聚合；`includeContext` 取任一消息和 one-shot 标记的逻辑或 | `DebouncedBatch.memoryQuery` |
-| `MemoryTurn` | 保存一条当前消息及其未截断的 reply 配对 | 当前轮检索证据 |
-| `MemoryQuery` | 保存 turns、共享 history 快照和一次性 `feedbackText`；构造后不可变 | 传入 `contextBuilder` / retry |
-| `handleLLMMessage()` / `_runLLMPipeline()` | 连接权限、消息防抖、生成和输出分发 | 一次主模型请求，不负责选择 memory |
-
-**流程**：原始消息 → `PromptPayload` → 防抖聚合 → `MemoryQuery(turns=...)` → 交给编排层；history 在 `contextBuilder` 中只加载一次后补入 query。
-
-**边界**：这一层不读取 memory 数据库，不实现 priority、threshold、RRF 或字符预算，也不能从最终展示文本反向解析 query。
-</details>
-
-<details>
-<summary>② 编排层：决定是否读取以及把结果交给谁</summary>
-
-**主要模块**：`utils/llm/contextBuilder.py`、`utils/llm/review.py`、`handlers/llmReview.py`
-
-| 主要函数 | 做什么 | 关键边界 |
-|---|---|---|
-| `buildConversationContext()` | 在 `includeContext=True` 时读取一次 history，调用 memory 检索，并统一排列 memory、knowledge、history、URL 和扩展块 | 只组装，不复制检索策略 |
-| `buildStructuredMemoryContext()` | 调用 `retrieveMemoryContext()`，只返回已经预算裁剪和快照复核过的 `contextBlock` | 不自行拼接 `items` |
-| `buildHistoryContext()` | 将共享 history 快照渲染为 `<UNTRUSTED_HISTORY>` | history 与 memory 语义不同 |
-| `extractValidatedMemoryActions()` | 清理 action 块、限制单轮数量、按可信 `chatID/userID` 逐条校验 | 通过解析不等于获得写入权限 |
-| `dispatchMemoryActions()` | 按 `memoryAutoApprove`、`autoMode`、global contextual 自动批准例外、pinned/私有 scope 保护和 ops 列表分流 | 最终写入仍回到 `action.py` / `database.py` |
-| `reviewRetryWithFeedback()` | 在保留原始 turns 的前提下只向本次 query 加 `feedbackText` | 不把反馈永久混入下一次普通 retry |
-
-**流程**：配置门禁 → 共享 history 快照 → memory/knowledge/history 等上下文块 → 主模型生成；生成后的 `<MEMORY_ACTION>` 再走解析、审核、执行链。
-
-**边界**：`includeContext=False` 时不读 history、不检索 memory、不解析 memory action；Knowledge Base 不受这个 memory/history 门禁控制。
-</details>
-
-<details>
-<summary>③ 策略层：唯一拥有“选哪些记忆”决策的地方</summary>
-
-**模块**：`utils/llm/memory/retrieval.py`
-
-| 主要函数 | 做什么 |
-|---|---|
-| `buildQueryTexts()` | 从 `MemoryQuery` 生成 current、assisted、lexical 三种查询视图 |
-| `buildSemanticQueryPlan()` | 在 current/assisted 文本相同或阈值关闭时去除重复语义证据 |
-| `loadCalibratedThresholds()` | 校验 calibration 与 manifest、编码版本、词面版本和数据集 hash 的绑定 |
-| `selectContextualCandidates()` | 各通道独立过阈值、按名次执行 RRF、返回 contextual（情境记忆） 排序结果 |
-| `sortPinnedMemories()` | 为独立 pinned 预算提供稳定顺序 |
-| `renderMemoryContext()` | 按完整行和 Unicode 字符预算渲染低信任 memory block |
-| `retrieveMemoryContext()` | 统一处理 scope 候选、legacy/hybrid 分流、降级、最终快照复核 |
-
-**流程**：候选读取 → pinned/contextual 分流 → 通道评分 → 准入与融合 → 字符预算 → 数据库快照复核 → `MemoryRetrievalResult`。
-
-**边界**：priority 不能在 hybrid 的相关性判断前截断候选；能力层只返回分数，调用方不得在别处复制 threshold、排序或预算逻辑。
-</details>
-
-<details>
-<summary>④ 能力层：BM25、ONNX 编码和在线向量缓存</summary>
-
-**主要模块**：`utils/llm/memory/lexical.py`、`utils/llm/memory/encoder.py`、`utils/llm/memory/runtime.py`
-
-| 主要函数 | 做什么 | 状态性质 |
-|---|---|---|
-| `tokenizeMemoryText()` | NFKC 归一化后生成中文相邻 2-gram 和完整 ASCII 英数词 | 纯函数 |
-| `scoreLexicalCandidates()` | 对 content 与加权 tags 现算 BM25 | 不缓存、不落盘 |
-| `MemoryEncoder.encodeQueries()` | 加 query prefix，在 256-token 窗口内编码查询 | 阻塞调用，不能直接跑在事件循环 |
-| `MemoryEncoder.encodeMemory()` | 将长 memory 按窗口和 overlap 分块，输出 chunk 向量矩阵 | 阻塞调用，供 runtime 缓存 |
-| `runtime.scoreSemantic()` | 只用已就绪且指纹匹配的缓存矩阵进行查询评分；缺失条目排入后台 | 在线有界队列 |
-| `runtime.notifyMemoryChanged()` / `notifyModeChanged()` | 接收数据库变更和模式切换通知 | 不改变 SQLite 正本 |
-
-**边界**：`runtime` 是进程内单例；encoder 只由 runtime 的单线程 native worker（即本地执行线程，下同）使用。模型、向量缓存和队列都是派生状态，不能决定 memory 是否存在。
-</details>
-
-<details>
-<summary>⑤ 数据与写入层：SQLite 正本、审核动作和条件写入</summary>
-
-**主要模块**：`utils/llm/memory/database.py`、`utils/llm/memory/action.py`、`utils/core/schema/llmMemory.sql`
-
-| 主要函数 | 做什么 |
-|---|---|
-| `initDatabase()` / `_initSchema()` | 创建 `memory_entries`，为旧表幂等补齐 `mode` 与 `retrieval_hint` |
-| `addMemory()` / `updateMemory()` / `deleteMemory()` | 在数据库层规范化、加密并提交 CRUD；成功后通知 runtime |
-| `getMemoryCandidates()` | 按 scope 和 `enabled=1` 返回 hybrid 的完整宽候选 |
-| `getMemorySnapshots()` | 注入前按 ID 重读，用于状态指纹复核 |
-| `getEnabledContextualMemoryPage()` | 供 runtime 对账分页读取 enabled contextual（可用的情境记忆）记录；失败与 EOF 分开表示 |
-| `parseMemoryActions()` / `validateAction()` / `executeAction()` | 解析不可信模型输出、校验字段和目标、带审核凭据执行写入 |
-| `MemoryWriteGuard` / `buildMemoryStateFingerprint()` | 阻止过期审核或并发动作覆盖更新后的目标 |
-
-**边界**：所有业务写入以 SQLite transaction 为准；runtime 通知失败不回滚数据库。模型自主 update/delete 只能操作 `source=inferred`，`chat/user` scope 必须匹配当前请求的可信身份且仍需人工审核；普通 global contextual 是有意保留的自动写入例外，pinned 相关写入仍必须人工批准。
-</details>
-
-<details>
-<summary>旁路：管理、模型准备和离线评测</summary>
-
-| 入口 | 作用 |
-|---|---|
-| `utils/command/llm/memoryCmd.py` | `/llm memory` 的开关、CRUD、检索模式、状态和 TUI 路由 |
-| `utils/llm/memory/ui.py` | 管理员交互式编辑 memory |
-| `scripts/memoryModel.py` | 按 `modelManifest.json` 安装或校验固定模型产物 |
-| `scripts/evaluateMemory.py` | 校验 fixture、生成候选 calibration、评估 holdout、运行 encoder/benchmark |
-| `registerMemoryRuntime()` / `runMemoryIndexWorker()` | 通过模块注册表创建 runtime 并启动后台循环 |
-
-这些入口不参与普通请求的相关性决策；离线评测复用正式查询和渲染原语，但不读取生产数据库。
-</details>
-
-依赖方向的两处刻意设计：
-
-- `database.py` 不 import `runtime.py`，而是经 `stateManager` 拿已注册实例发可失败通知。这是因为持久化不应依赖检索加速层，没有 runtime 时写入仍应照常完成；
-- `messagePrep.py` / `state.py` 只从 `memory/types.py` 拿数据结构，不触碰策略与数据模块—— ① 对 ③④⑤ 的依赖应仅限于纯数据契约；
+**依赖方向的两处刻意设计**：
+- `database.py` 不 import `runtime.py`，而是经 `stateManager` 拿已注册实例发可失败通知——持久化不应依赖检索加速层，没有 runtime 时写入仍应照常完成。
+- `messagePrep.py` / `state.py` 只从 `memory/types.py` 拿数据结构，不触碰策略与数据模块—— ① 对 ③④⑤ 的依赖应仅限于纯数据契约。
 
 ### 读取链路
 
@@ -547,7 +447,7 @@ Schema 位于 `utils/core/schema/llmMemory.sql`：
 
 - 它必须是单行文本，最长 80 字；
 - 它不能加入 `content` 没有支持的新事实；
-- 它进入语义编码，不进入 BM25，也不进入最终 prompt；
+- 它只进入 enhanced 语义表示，不进入负责准入的 base 表示、BM25 或最终 prompt；
 - `content` 或 `tags` 改变而没有同时提供新 hint 时，旧 hint 会自动失效；
 - 显式清空使用空字符串，CLI 对应 `-clearhint`。
 
@@ -651,7 +551,11 @@ LLM 自主 `<MEMORY_ACTION>` 当前只允许 `global / chat / user`。`session` 
 | `LLM_MEMORY_CHUNK_OVERLAP` | 32 | encoder：长 memory 分片的 token 重叠 |
 | `LLM_MEMORY_RRF_K` | 60 | retrieval：通道名次融合的平滑常量 |
 | `LLM_MEMORY_BM25_K1` / `LLM_MEMORY_BM25_B` | 1.2 / 0.75 | lexical：BM25 词频饱和与长度归一化 |
-| `LLM_MEMORY_RETRIEVAL_TIMEOUT_SECONDS` | 2.0 s | retrieval：单次检索总墙钟上限 |
+| `LLM_MEMORY_RETRIEVAL_TIMEOUT_SECONDS` | 2.0 s | legacy/local 总预算；llm 本地候选阶段预算 |
+| `LLM_MEMORY_SELECTOR_MAX_SECONDS` | 30.0 s | llm 远程选择阶段最大配置值 |
+| `LLM_MEMORY_SELECTOR_CLOSE_RESERVE_SECONDS` | 0.1 s | 选择预算内的清理预留，实际取该值与选择预算的 1/5 中较小者 |
+| `LLM_MEMORY_SELECTOR_SHUTDOWN_SECONDS` | 5.0 s | selector 停接后的固定清理宽限，不代表进程关闭硬上限 |
+| `LLM_MEMORY_SELECTOR_TOP_K` | 32 | 当前语义、辅助语义、正 BM25 各路候选上限 |
 | `LLM_MEMORY_FINALIZE_RESERVE_SECONDS` | 0.1 s | retrieval：为最终复核和重渲染预留的时间 |
 | `LLM_MEMORY_MAX_ACTIVE_RETRIEVALS` | 4 | retrieval：同时占用的检索容量 |
 | `LLM_MEMORY_QUERY_QUEUE_LIMIT` | 4 | runtime：等待并发的本地执行线程的查询上限 |
@@ -673,6 +577,52 @@ LLM 自主 `<MEMORY_ACTION>` 当前只允许 `global / chat / user`。`session` 
 ## 记忆检索
 
 从消息进入检索到记忆注入 prompt，整条链路集中在本章：先看入口如何决定「这次请求检索不检索」并构造稳定输入，再看原理层的取舍，然后按需展开 legacy/hybrid 两种实现；本章末尾的在线语义运行时是语义通道背后的常驻基础设施。
+
+### LLM 选择后端（默认关闭）
+
+咱已经把研究中的“本地召回候选，LLM 只选 ID”接到 `retrieveMemoryContext()`。2026-09-20 获准实现最初后端，2026-09-22 又获准接入 Messages 协议和请求清理生命周期；两次批准均不包含生产启用。当前已接入且默认关闭，固定32题验收、三例错误的主回答诊断及 Linux 离线工程验证均已完成，实际 Bot 的应用验收仍待完成。默认 `memoryRetrievalMode="legacy"`、`memoryHybridSelector="local"`、`memorySelectorProtocol="responses"`，未配置远程服务时不会发送选择请求。
+
+| `llmConfig.json` 配置 | 默认 | 行为 |
+|---|---|---|
+| `memoryHybridSelector` | `local` | 仅 `memoryRetrievalMode="hybrid"` 时使用；`llm` 显式选择远程后端 |
+| `memorySelectorProtocol` | `responses` | 仅接受 `responses` 或 `messages`；后者使用 Messages 适配 |
+| `memorySelectorModel` | `gpt-5.6-terra` | 响应模型名必须精确一致；使用 Messages 时须显式配置服务支持的 Claude 模型 |
+| `memorySelectorEffort` | `high` | 原样发送给 Responses；Messages 不发送此项，也不承诺等价推理投入 |
+| `memorySelectorTimeoutSeconds` | `30.0` | 必须有限且 `0 < value ≤ 30`，非法值拒绝本次检索 |
+
+配置由请求开始时的副本固定。专用环境项见根目录 `.env.example`：`LLM_MEMORY_SELECTOR_BASE_URL` 必须为不含用户信息、查询参数和 fragment 的 HTTPS 基础地址，程序按协议追加 `/responses` 或 `/messages`；`LLM_MEMORY_SELECTOR_API_KEY` 为独立凭据，`LLM_MEMORY_SELECTOR_PROXY` 可选。不继承主生成配置、系统代理、研究密钥或 Codex auth。当前控制台/Telegram 没有新增这些选项的编辑入口。协议切换不会自动改模型；配置合并后也无法判断模型名是否由操作者显式填写，须将 Messages 协议与兼容模型一起配置。
+
+候选仍由数据库按可见 scope 读取，pinned 单独分流。contextual 取当前语义 base top32、有效历史辅助语义 base top32、正 BM25 top32 的并集，最多 96 条；同分按数据库 ID 排序，重复查询只算一次。增强表示不参与这一步，也不借 null 阈值冒充“已校准”。冷缓存或故障可能使语义通道缺席，候选外的有用记忆仍会漏召回。
+
+`memory/selector.py` 只发送规范化当前消息、引用、反馈、有效历史、查询时间，以及匿名句柄/完整正文/tags。结构化 scope、数据库 ID、hint、分数和标签不出现在请求里；正文内原有身份信息不会被这一步自动匿名化。历史继续使用 20 条、30 分钟、600 字符边界。语义提示及 marker 协议沿用研究版；生产没有 caseID，候选匿名排序改用查询与数据库 ID 的确定性散列，因此旧研究结果不能直接冒充接入后全链路质量。
+
+`client/memorySelection.py` 使用请求级异步客户端：只发一次生成请求，无远程计数、重试、重定向或自动换模。校验完成状态、单条助手文本、模型名、marker、usage、唯一合法且互斥的 ID；工具调用、拒答、截断均拒收。协议仍校验 optional，首版只消费 primary，按 ID 恢复原正文。请求最多 65,536 个 UTF-8 字节、解压后的响应最多 256 KiB；返回 usage 另验输入 ≤16,384、输出 ≤8,192 token，字节上限不等于发送前 token 计数。
+
+Messages 复用相同语义提示及匿名候选，但没有 Responses 的原生 JSON schema 约束。仅接受裸 JSON，或包住全部正文的一个无语言标记 / `json` 代码块；包裹外解释、多个代码块、重复键、多对象仍拒收。拆除这一个包裹后继续执行原严格字段、marker 和 ID 校验。Messages 的普通输入、缓存写入和缓存读取 token 按服务实际报告值加总；缓存分量缺失时保留原 usage 并标为 `reported_components_lower_bound`，不将缺失量视为已知零，也不能据此证明实际总输入未超预算或费用已核实。
+
+llm 的工程预算为本地候选最多 2 秒、选择最多 30 秒、收尾复核预留 0.1 秒，名义合计约 32.1 秒，主回答生成另计。候选请求组装耗时先从选择预算扣除；传输在剩余预算内部再预留 `min(0.1, 剩余预算 / 5)` 秒给清理，所以配置 30 秒时请求截止为约 29.9 秒，清理预留不额外延长选择期限。调用方按该期限决定成功或失败；同步代码与事件循环调度使它不能被称为严格实时 SLA。
+
+请求和清理分别由同次检索 lease 与 `MemoryRuntime` 持有。外部取消向上传播，只取消请求，独立清理继续；清理失败或未按时完成时不接受情境选择，慢清理继续占用四个共享检索名额之一，直至请求与清理任务实际终止。请求错误与关闭错误分别记录，库自身超时也不冒充控制器期限超时；逾期成功不重新注入。超时后远端是否继续执行和计费未知。只有已读取且通过最终指纹复核的 pinned 可以保留；读取/复核失败、整体取消或四并发容量已满时可能全部为空。不会暗中回退到 legacy 情境选择。最终仍去重、完整行预算、状态复核和重渲染，保证 `items` 与块内条目一致。
+
+应用开始停止时先设全局 shutdown 状态，新检索立即拒收；选择返回前和最终复核后也检查停机状态。`ResourceManager` 先关闭 selector（priority 40），再关闭 memory runtime（30）和数据库（20）。`closeSelectors()` 对在途请求发出取消，在首次调用起固定 5 秒内等待 lease；重复调用不重新计时，也不取消独立清理。宽限后仍在途或清理失败会如实记入状态与日志。后续 native runtime 关闭仍可能等待已有工作，不能将这 5 秒称为整个进程的关闭上限。
+
+mock 验证、研究结果及待验事项见[接入归档](archive/llm-memory-hybrid-research-2026-09.md#默认关闭的选择后端接入)。2026-09-20 的[当前实现真实验收](archive/llm-memory-hybrid-research-2026-09.md#当前接入的固定批次实测)中，十六题只有五题在30秒选择期限内成功，十一题超时，最终required为6/21；后续[新32题正式入口验证](archive/llm-memory-hybrid-research-2026-09.md#新主题正式入口验证)为23有效、9超时，P43/44、R24/32。两批保留各自来源和时段，不直接解释为模型提升，仍未批准生产启用。
+
+用户最新接受precision 0.85至0.90，required recall底线0.65；同时报告P90/P85，普通背景仍计precision分母，竞争事实按内容和频率逐条审查。来源和小cohort分列用于诊断，不另设用户未批准的分项硬门槛。仅超时后本地回退仍是tmp研究原型：[预算回放](archive/llm-memory-hybrid-research-2026-09.md#2026-09-21固定本地阈值与超时回退的预算复核)达到P51/54、R31/32，但新增冲突的[主回答诊断](archive/llm-memory-hybrid-research-2026-09.md#2026-09-21回退竞争事实的主回答诊断)出现一次错误填出生地及删除正确记忆的申请文本，实验未执行操作。回退没有降低远程超时率，也未接入正式失败路径。
+
+下文阈值、RRF、2秒总预算和 `evaluateMemory.py` 的上线流程描述的是 **local后端**；该评测器不调用远程选择器。旧评测器的P≥0.95/R≥0.80/F=0 gate保留其代码语义，不能代替新路线验收，也不覆盖用户最新研究目标。
+
+2026-09-22的[请求与清理所有权原型](archive/llm-memory-hybrid-research-2026-09.md#2026-09-22请求与清理所有权原型)最初只在tmp验证，26项离线测试通过。本节描述的是后来获准接入的实现；预留清理时间改变了请求截止，原实验分数仍属于旧代码和旧时段，不能直接引用为当前实现成绩。
+
+随后的[Messages选择对照](archive/llm-memory-hybrid-research-2026-09.md#2026-09-22messages选择对照停批与交付收敛)在第2次请求遇到Markdown代码块包裹JSON，按规则停批，14次未发；不能据此宣称换模改善服务。研究已停止追加小批，交付范围收敛为固定单次选择方案、工程收尾和一次完整验收；最新P85至P90/R65口径保持。
+
+上述格式故障的[离线适配与接入范围](archive/llm-memory-hybrid-research-2026-09.md#2026-09-22messages交付候选的离线适配与批准范围)最初通过6项测试，真实旧原包恢复两个required，旧失败成绩保持。随后用户批准默认关闭工程接入，Messages协议选项、独立清理及ResourceManager关停现已进入本节后端。[正式接入归档](archive/llm-memory-hybrid-research-2026-09.md#2026-09-22messages协议与生命周期正式接入)记录335项回归通过及87.5MiB峰值；工程阶段没有新增在线请求。
+
+最新[固定最终验收](archive/llm-memory-hybrid-research-2026-09.md#2026-09-22messages固定最终验收)使用 `claude-opus-4-8` / Messages，经真实合成加密SQLite、BGE/runtime及正式入口完成32个新主题：32/32有效、零超时，P34/39=0.8718、required R32/32、多R完整8/8；中位5.90秒、最大9.25秒、峰值221.20MiB。达到P0.85/R0.65，未达P0.90。8次有效竞争机会中误选3次，均与正确事实同返；4道纯无答案有2道返回其他对象背景，背景仍计P分母。32份原响应及渲染独立复核通过。
+
+2026-09-25 的[六次主回答裁决](archive/llm-memory-hybrid-research-2026-09.md#2026-09-25三例冲突的六次主回答裁决)补齐这三例的下游检查：每题双事实与仅正确事实各一次，两组均 3/3 正确。编号题双事实组申请删除错误记忆，仅正确组申请保留原事实并追加“已向用户说明”；后者属于不必要的写入，均未执行。三条 `forbidden` 标注保留，原 P/R 不变。用户委托的助手审阅已完成，未冒充人类批准整份 draft 素材；一次对照也不能证明长期无误导。
+
+用户带回的 [Linux/Python 3.11 报告](../tmp/linux311-final-validation.md)记录 335 项回归、真实 BGE/SQLite、CRUD 通知及同进程重建通过，峰值 344.76 MiB。现在应完成[应用部署验收](llm-memory-smoke-test.md#审阅结果和启用顺序)：核对服务器实际配置、真实服务与 Telegram 回复/记忆操作链路，以及实际 Bot 停止和重新启动。主回答快照只确认与当前本地配置一致，Linux 离线副本不能替代这些检查。生产继续默认 `legacy/local/responses`。
 
 ### 检索入口
 
@@ -733,6 +683,8 @@ includeContext 门禁
     → 共享 30 条 history 快照 + 结构化 MemoryQuery
     → scope/enabled 完整候选
     → pinned 独立排序；contextual 进入多通道准入
+    → 语义 base（content + tags）过阈值
+    → enhanced（base + hint）只重排已过阈值的语义候选
     → 通过阈值的通道结果做 RRF
     → 在 1500 Unicode 字符内按完整行装入
     → 注入前重新读取并校验状态指纹
@@ -769,7 +721,7 @@ Pinned 不受 legacy 的 20/10 情境记忆的候选限制。统一入口会另�
 
 ---
 
-#### Hybrid 检索（目标路径）
+#### Hybrid 检索（local 路径）
 
 Hybrid 才是解决有限候选池问题的主路径。
 
@@ -808,29 +760,32 @@ Hybrid 才是解决有限候选池问题的主路径。
 
 另外，当 assisted 与 current 实际是同一文本时，不会让同一证据以两个通道身份重复贡献 RRF (Reciprocal Rank Fusion) 分数。
 
-##### 3. 三通道独立准入
+##### 3. 三通道准入与语义双表示
 
 情境记忆（Contextual memory）可以从三个通道获得候选资格：
 
-| 通道 | 查询 | Memory 侧内容 |
-|------|------|---------------|
-| `semanticCurrent` | 当前语义视图 | `content + tags + retrievalHint` |
-| `semanticAssisted` | 辅助语义视图 | `content + tags + retrievalHint` |
-| `lexical` | 词面视图 | `content + 2 × tags` 的 memory 专用 BM25 |
+| 通道 | 查询 | 准入依据 | 通道内排序依据 |
+|------|------|----------|----------------|
+| `semanticCurrent` | 当前语义视图 | base：`content + tags` | enhanced：`content + tags + retrievalHint` |
+| `semanticAssisted` | 辅助语义视图 | base：`content + tags` | enhanced：`content + tags + retrievalHint` |
+| `lexical` | 词面视图 | `content + 2 × tags` 的 memory 专用 BM25 | 同一 BM25 分数 |
 
 中文词面的 tokenizer 生成相邻 2-gram，不生成中文单字；ASCII 英文、数字串保留为完整词。这样可以降低“好”“机”等单个中文字，在一长条信息或某些字符出现得非常频繁的信息中，造成大面积误触发的概率。
 
-每个通道先应用自己的 校准阈值（calibration threshold），再参与融合。一个通道的高分不能替另一个通道中未过门槛的候选放行。
+每个语义查询都会得到两组分数。base 分数先与该通道的 calibration threshold 比较，只有通过的 memory ID 才获得语义候选资格；enhanced 分数随后只能在这组 ID 内改变名次。即使错误或过度宽泛的 hint 让 enhanced 分数很高，只要 base 未过阈值，它就没有该语义通道的 RRF 贡献。没有有效 hint 时，enhanced 直接复用 base 矩阵和分数，不做重复编码、比较或缓存计费。
+
+Lexical 仍独立准入：它通过自己的阈值时可以给 memory 一份 lexical RRF 贡献，但不会因此伪造 semantic 贡献。最终仍是“任一通道合格即可进入融合，多通道合格会累加支持”，而不是要求三通道同时同意。
 
 > 　
 > **校准是如何参与检索的**
 > 
-> 每次 hybrid 检索开始时，`loadCalibratedThresholds()` 会现读 `utils/llm/memory/retrievalCalibration.json` 并当场核对六项绑定——
+> 每次 hybrid 检索开始时，`loadCalibratedThresholds()` 会现读 `utils/llm/memory/retrievalCalibration.json` 并当场核对七项绑定——
 > 
 > - calibration schema 版本；
 > - 固定模型 revision；
 > - encoding version；
 > - lexical version；
+> - 语义表示契约必须是 `base` 准入、`enhanced` 排序；
 > - 人工 fixture 的 SHA-256；
 > - `status` 必须是 `approved`。
 > 
@@ -850,7 +805,7 @@ $$
 \frac{1}{k + \operatorname{rank}_c(m)}
 $$
 
-其中，$C_m$ 是通过准入的通道集合，$rank_c(m)$ 是 memory $m$ 在通道 $c$ 中的名次，$k$ 对应 `LLM_MEMORY_RRF_K`，当前为 `k = 60`。通道内分数相同的候选共享并列名次；最终排序依次使用：
+其中，$C_m$ 是通过准入的通道集合，$rank_c(m)$ 是 memory $m$ 在通道 $c$ 中的名次，$k$ 对应 `LLM_MEMORY_RRF_K`，当前为 `k = 60`。语义通道的名次来自 enhanced 分数，但排名集合已经被 base 阈值限定；词面通道仍使用 BM25 分数。通道内分数相同的候选共享并列名次；最终排序依次使用：
 
 ```text
 RRF 分数 DESC
@@ -912,6 +867,7 @@ Runtime 在 `legacy` 模式下保持休眠，不加载 encoder。只有进入 hy
 
 - 同一 memory ID 的连续通知会合并；
 - 正文、tags、hint、模型 revision 或 encoding version 改变会生成新内容指纹；
+- 每条 contextual memory 缓存 base/enhanced 两种表示；没有有效 hint 时二者引用同一矩阵，既不重复编码，也不重复占用字节预算；
 - priority-only 更新不重新编码；mode 改变会同步调整缓存资格，转为 pinned 时驱逐，转为 contextual 时重新排队；
 - 编码结束后会重读数据库并比较指纹，迟到的旧结果不会覆盖新内容；
 - 删除和禁用会驱逐缓存，不会被在途编码结果复活；
@@ -950,7 +906,7 @@ flowchart TB
 
 ##### 时间预算分层
 
-单次检索的 2 秒墙钟也分两段：
+legacy/local 单次检索的 2 秒墙钟也分两段；llm 的独立选择预算见[LLM 选择后端](#llm-选择后端默认关闭)：
 
 | 阶段 | 时间预算 | 负责工作 |
 |---|---:|---|
@@ -962,7 +918,7 @@ flowchart TB
 
 ##### 缓存预算与驱逐资格
 
-与时间相对应地，当空间，即向量缓存被填满时，也应有相应的应对机制，这就是**驱逐**了。向量缓存（`VECTOR_CACHE_BYTES = 32 MiB`）的驱逐不是单一规则，会按向量的来源，分三种资格：
+与时间相对应地，当空间，即向量缓存被填满时，也应有相应的应对机制，这就是**驱逐**了。向量缓存（`VECTOR_CACHE_BYTES = 32 MiB`）按 base/enhanced 实际唯一矩阵的字节总和计费；没有 hint 的共享矩阵只计算一次。驱逐不是单一规则，会按向量的来源，分三种资格：
 
 | 来源 | allowEviction（允许驱逐） | 理由 |
 |------|---------------|------|
@@ -1131,7 +1087,10 @@ selectLegacyMemoryCandidates(memories, *, perScopeLimit=None, totalLimit=10) -> 
 buildQueryTexts(query, *, now=None) -> tuple[str, str, str]
 buildSemanticQueryPlan(currentText, assistedText, thresholds) -> list[tuple[str, str]]
 loadCalibratedThresholds(calibrationPath=..., *, manifestPath=None) -> tuple[dict, str | None]
-selectContextualCandidates(candidates, channelScores, thresholds) -> tuple[list, dict]
+selectContextualCandidates(
+    candidates, channelScores, thresholds, *,
+    semanticRankingScores=None, includeEvidence=False,
+) -> tuple[list, dict]
 sortPinnedMemories(memories) -> list[dict]
 renderMemoryContext(pinned, contextual, *, maxChars=1500, pinnedMaxChars=500)
 
@@ -1183,7 +1142,9 @@ await buildConversationContext(
 ### `utils/llm/memory/runtime.py`
 
 ```python
-await runtime.scoreSemantic(queryTexts, candidates, *, deadline) -> list[dict[int, float]]
+await runtime.scoreSemantic(
+    queryTexts, candidates, *, deadline,
+) -> list[dict[str, dict[int, float]]]
 runtime.notifyMemoryChanged(memoryID) -> None
 runtime.notifyModeChanged() -> None
 runtime.getSemanticCacheStatus(candidates) -> dict
@@ -1195,6 +1156,8 @@ await runMemoryIndexWorker() -> None
 ```
 
 业务模块不应自行实例化第二个 `MemoryEncoder` 或维护另一套 RAM index。
+`scoreSemantic()` 的每个列表项都包含 `base` 与 `enhanced` 两个
+`{memoryID: score}`；检索层必须用前者准入，只能用后者重排已准入 ID。
 
 ---
 
@@ -1248,7 +1211,7 @@ Memory 管理命令属于 `/llm memory` 子命令：
 
 ## Hybrid 启用、评测与改进
 
-Hybrid 的代码可用，并不代表生产条件就已经齐备。这一节，作为教程，其主轴就是下面这条流水线——从零把 hybrid 开起来的全部步骤，按执行顺序排好。这后面每一小节都对其中一步的展开。
+Hybrid 的代码可用，并不代表生产条件已经齐备。本节保留 local 阈值路线及其原评测 gate；已批准的默认关闭 LLM 原型使用独立选择协议，配置与待验边界见[LLM 选择后端](#llm-选择后端默认关闭)。下面按执行顺序展开 local 流水线。
 
 ```text
 ① 请求门禁开启（/llm memory -on 或 #context / -once）
@@ -1320,7 +1283,7 @@ fixture（人工标注场景集）
 1. **请求门禁可用。** `memoryEnabled` 必须开启，或者使用 `/llm memory -once` 来验证单次请求；切换检索模式本身不会强制所有请求读取 memory。
 2. **运行时已接入。** LLM 模块会注册 `registerMemoryRuntime()` 和 `runMemoryIndexWorker()`；runtime 是单进程单实例，不能另起 encoder 或向量索引。这两项已登记在 modulesRegistry 中随模块启动，通常不需要额外动作——列在这里只是提醒不要绕过。
 3. **依赖和模型已核验。** 安装 `requirements-memory.txt`，按 `modelManifest.json` 的 revision、文件大小和 SHA-256 完成 `verify`；启动 bot 或切模式不会隐式下载模型。具体命令见[固定模型](#固定模型第③步)。
-4. **calibration 已批准且绑定仍有效。** 正式文件必须是 `status: "approved"`，并匹配当前模型有效的 revision、encoding version、`LEXICAL_VERSION` 和 fixture SHA-256。`status` 为 `candidate`、`unconfigured` 或绑定不匹配，都不能作为线上阈值——线上加载时会整体拒绝，不接受部分生效。生成与固化流程见[评测器](#评测器第④⑦步)。
+4. **calibration 已批准且绑定仍有效。** 正式文件必须使用 schema 2、`status: "approved"`，并匹配当前模型 revision、encoding version、`LEXICAL_VERSION`、fixture SHA-256，以及 `base` 准入/`enhanced` 排序的表示契约。`status` 为 `candidate`、`unconfigured`，旧 schema，或任一绑定不匹配，都不能作为线上阈值——线上加载时会整体拒绝，不接受部分生效。生成与固化流程见[评测器](#评测器第④⑦步)。
 5. **holdout 通过质量 gate。** 至少 30 个未参与调阈值的 holdout 场景，contextual precision ≥ `0.95`、required recall ≥ `0.80`、forbidden hit = `0`；有 pinned 标注时还要满足 pinned recall ≥ `0.80` 且 pinned forbidden hit = `0`。
 6. **目标机和人工链路通过。** 在生产同级 Python 3.11、CPU、内存限制和 staging Bot 上验证资源、延迟、增量索引、关闭、scope、prompt 安全和主模型回复质量。
 
@@ -1493,9 +1456,9 @@ python scripts/memoryModel.py install --endpoint https://hf-mirror.com
 
 `buildQueryTexts(query)` 生成三段查询文本 → BM25 / encoder 对 `memories` 打分 → `selectContextualCandidates` 过阈值 + RRF 融合 → `renderMemoryContext` 做字符预算。
 
-四个评测模式共享场景，只有评分方式不同：`legacy` 用旧 priority 规则、`lexical` 只开词面通道、`hybrid` 不编码 hint、`hybrid+hint` 等价线上行为。
+四个评测模式共享场景，只有选择方式不同：`legacy` 用旧 priority 规则；`lexical` 只开词面通道；`hybrid` 与 `hybrid+hint` 都编码同一组 base/enhanced 表示并使用 base 准入，前者继续按 base 排序作为无 hint 权力的对照，后者才用 enhanced 对已准入 ID 排序，等价于线上行为。
 
-calibrate 则只在 calibration split 上，把每个实测分数逐一试作阈值，取满足 “放行 precision ≥ 0.95 且 forbidden 放行 = 0”的**最低**分数——保证召回最大的前提下不放过禁入条目。
+calibrate 则只在 calibration split 上，把每个实测的 **base 分数**逐一试作语义阈值，取满足 “放行 precision ≥ 0.95 且 forbidden 放行 = 0”的**最低**分数——保证召回最大的前提下不放过禁入条目。Enhanced 分数不会进入 threshold 计算。
 
 #### 结果报告字段导读
 
@@ -1515,7 +1478,12 @@ calibrate 则只在 calibration split 上，把每个实测分数逐一试作阈
 
 **逐场景层**
 
-每个 case 出来的报告结果都会有 `selectedIDs`（实际选中的）、`missedRequiredIDs`（理应选上但漏掉的）、`falsePositiveIDs`（选多的）、`forbiddenHitIDs`（踩雷的）、`abstained`，以及 `diagnostics` 里的通道计数（`semanticCurrentQualified` / `lexicalQualified` / `fusedQualified`）。还会两行真实示例（当前 holdout 报告）：
+每个 case 出来的报告结果都会有 `selectedIDs`（实际选中的）、`missedRequiredIDs`（理应选上但漏掉的）、`falsePositiveIDs`（选多的）、`forbiddenHitIDs`（踩雷的）、`abstained`，以及 `diagnostics` 里的通道计数（`semanticCurrentQualified` / `lexicalQualified` / `fusedQualified`）。非 legacy 模式还会输出两组只供离线分析的证据：
+
+- `channelEvidence`：每个通道的 threshold、准入/排序表示、base top 与实际排序 top、top-1/top-2 gap；
+- `candidateEvidence`：逐候选的 `admissionScore` / `rankingScore`、准入名次与实际名次、`qualifiedRank`、base `thresholdMargin`、`rankingBlockedByAdmission`、参与 RRF 的通道与贡献、`selectionPosition`，以及最终是否通过去重和字符预算。
+
+证据只含候选 ID 和数值，不含 query、memory 正文、hint 或向量；其体积随候选池线性增长，所以线上 `retrieveMemoryContext()` 默认不生成。下面是两行真实示例（当前 holdout 报告）：
 
 ```text
 swim-direct（recall 缺口的典型形态）
@@ -1535,16 +1503,9 @@ notebook-followup（forbidden 的典型形态）
 
 对于读报告的顺序，这边的建议是：`qualityGate.passed` → 哪个子项 false → `metrics` 里对应的分子分母（如 precision 0.857 = 18/21，缺口是 3 个 FP）→ 到 `cases` 里按 `forbiddenHitIDs` / `missedRequiredIDs` 过滤出问题场景 → 看 `diagnostics` 通道计数定位丢在哪一层（这正是「诊断与改进路径」表的用法）。另有 `coverage`（有返回的场景比例）和各 subset 统计，防止“几乎从不召回的保守通道”被平均分掩盖。
 
-#### 两份 fixture 与当前不足
-
-- `tests/utils/llm/memory/fixtures/retrievalCases.json`：80 个场景（calibration 50、holdout 30），每个场景约 23/24 条候选；其中约 20 条 `90xxxx` 批量干扰**仍待人工复核**，因此只能产生候选报告，不能直接作为生产批准依据；
-- `tests/utils/llm/memory/fixtures/retrievalSmokeCases.json`：6 个合成边界场景（3/3），用于验证 pinned、disabled、scope、history、空查询、宽候选和字符预算的结构契约，明确标记为 合成边界场景的草案（`synthetic-draft`），不应用于宣称质量达标。
-
-两个 split 已先加入同 scope、enabled、contextual 的约 20 条干扰记忆形成初始规模；仍需补足高词面、低词面和零词面重叠的 hard negative。新增条目必须有人工复核后的 required/allowed/forbidden 标注，且 `groupID` 仍不得跨 split——这样校准得到的 BM25 IDF 和固定 threshold 才不会只适用于过小的候选池。只改 fixture 数据时不需要 bump `LEXICAL_VERSION`，但必须更新 dataset hash 并重新 calibration；修改 tokenizer、BM25 权重、归一化或改用 top-margin 等算法时才必须 bump 版本。
-
 #### 子命令
 
-四个子命令按“目的 → 命令 → 成功后”逐一展开：
+上线流水线按“目的 → 命令 → 成功后”逐一展开；当前扩充与分组对照见 [Calibration 扩充与检索研究](llm-memory-calibration-expansion.md)，相对分数实验实现见 [evaluateMemory.py](../scripts/evaluateMemory.py)：
 
 **④ validate——校验 fixture 结构，不加载模型（改数据后必跑）**
 
@@ -1552,7 +1513,7 @@ notebook-followup（forbidden 的典型形态）
 python scripts/evaluateMemory.py validate --cases tests/utils/llm/memory/fixtures/retrievalCases.json
 ```
 
-成功后：报告写入（或打印）`caseCount: 80`、`calibrationCaseCount: 50`、`holdoutCaseCount: 30` 和整份数据集的 `datasetSha256`——这个散列就是后面所有绑定校验的锚点。失败会以中文错误指出具体哪个场景缺什么字段，修 fixture 再跑。
+成功后：当前报告应写入（或打印）`caseCount: 96`、`calibrationCaseCount: 66`、`holdoutCaseCount: 30` 和整份数据集的 `datasetSha256`——这个散列就是后面所有绑定校验的锚点。失败会以中文错误指出具体哪个场景缺什么字段，修 fixture 再跑。
 
 **⑤ calibrate——在 calibration split 上算出 candidate 阈值（需要模型已装）**
 
@@ -1560,7 +1521,7 @@ python scripts/evaluateMemory.py validate --cases tests/utils/llm/memory/fixture
 python scripts/evaluateMemory.py calibrate --cases tests/utils/llm/memory/fixtures/retrievalCases.json --output .cache/llmMemory/reports/candidateCalibration.json
 ```
 
-成功后：报告写入 `--output` 指定的位置，`status` 固定为 `candidate`，含三个通道的候选阈值。两条强制在此生效：输出路径若指向正式 `retrievalCalibration.json` 会直接报错拒绝；输出的 candidate 不会被任何线上路径加载。
+成功后：报告写入 `--output` 指定的位置，使用 calibration schema 2，`status` 固定为 `candidate`，并声明 `semanticAdmissionRepresentation: "base"` 与 `semanticRankingRepresentation: "enhanced"`。其中语义阈值只由 base 分数产生。两条强制在此生效：输出路径若指向正式 `retrievalCalibration.json` 会直接报错拒绝；输出的 candidate 不会被任何线上路径加载。
 
 **⑥ 人工复核并固化 approved——唯一由人完成的一步**
 
@@ -1574,14 +1535,17 @@ python scripts/evaluateMemory.py evaluate --cases tests/utils/llm/memory/fixture
 
 成功后：报告给出各模式的 precision / recall / forbidden hit 等，对照上线 gate（至少 30 个 holdout 场景、precision ≥ 0.95、recall ≥ 0.80、forbidden hit = 0；有 pinned 标注时还要求 pinned recall ≥ 0.80 且 pinned forbidden hit = 0）判定 pass/fail。三类输入会被当场拒收：calibration 仍是 candidate、与 fixture 散列不匹配、或绑定失效——这正是红线 2 的强制点。
 
-**附带：两个非流水线命令**
+**附带：非流水线命令**
 
 - `encoder --memories 1000 --queries 100`：编码器资源基准（测模型加载、RSS、编码吞吐），装机后跑一次做基线；
 - `benchmark --memories 1000 --queries 100 --concurrency 1 2 4`：热查询延迟与并发基准，供⑧目标机验收参考。
+- `margin --cases <fixture.json> --output <report.json>`：calibration 内的相对分数研究，不产出 approved 配置。
 
-评测模式包括 `legacy`、`lexical`、`hybrid` 和 `hybrid+hint`；`hybrid` 是不编码 `retrievalHint` 的对照，`hybrid+hint` 才等价于当前线上 encoder 的 hint 编码行为。质量统计包括 contextual precision、required recall、forbidden hit、false positive、coverage 和 abstention；pinned 不计入 contextual precision/recall，但单独统计 required/forbidden pinned，并仍经过相同的 scope、预算和渲染流程。
+评测模式包括 `legacy`、`lexical`、`hybrid` 和 `hybrid+hint`；后两者都以 base 分数准入，`hybrid` 使用 base 排序作为对照，`hybrid+hint` 使用 enhanced 排序并等价于线上行为。质量统计包括 contextual precision、required recall、forbidden hit、false positive、coverage 和 abstention；pinned 不计入 contextual precision/recall，但单独统计 required/forbidden pinned，并仍经过相同的 scope、预算和渲染流程。
 
-**当前项目中有的**：本次扩充后的 fixture 已用固定模型重新生成 candidate，数据集 SHA-256 为 `7cc819b05366ba73cf43c7e536297c1171d7fef42816d1f43d03a70bf0fbb7ca`；candidate threshold 为 `semanticCurrent=0.665964663028717`、`semanticAssisted=0.775464653968811`、`lexical=14.85168317199519`。使用临时 approved 副本诊断得到的 `hybrid+hint` holdout precision 为 `0.857143`、recall 为 `0.692308`、forbidden hit 为 `2`，未通过上线 gate——流程停在⑦之前，正式 `retrievalCalibration.json` 仍保持 `unconfigured`，三个 threshold 仍为 `null`，默认模式保持 `legacy`。这些数值只对应待审查报告；不要伪造结果、修改标签或手工猜阈值来开启 hybrid。
+**当前项目中有的**：四处标注与题意修订后的 fixture 数据集 SHA-256 为 `f24e48f2711925ba6464cc031edf39070ebdf4d1414a3d1cbf39fa3394b9f7e6`；重新生成的 schema 2 candidate threshold 为 `semanticCurrent=0.6696333885192871`、`semanticAssisted=0.782344400882721`、`lexical=20.80071401306478`。三个通道在各自观察集中分别放行 16/64、18/64 和 2/44 个正样本（含 allowed），calibration precision 均为 1.0、forbidden 放行均为 0；这不是整体 required recall，不能代替 holdout。正式 `retrievalCalibration.json` 继续保持 `unconfigured`，三个 threshold 继续为 `null`，默认模式保持 `legacy`；旧 encoding/schema、旧 fixture hash 对应的 threshold 和 holdout 指标只可作为历史诊断。
+
+本地 1000 条带 hint 合成记忆的双表示 benchmark 得到 `matrixBytes=4096000`（约 3.91 MiB），索引约 29.98 s；热查询在并发 1/2/4 下的 P95 约为 30/64/100 ms，2 秒超时率均为 0。该结果来自开发机调用进程，RSS 最大增量约 139.6 MiB，只能证明本地成本初步可接受，不能替代生产同级 Python 3.11、内存限制、事件循环和完整 SQLite 链路验收。
 
 资源基准和目标机冒烟的分工、逐项通过条件见[完整冒烟测试方案](llm-memory-smoke-test.md)。
 
@@ -1593,16 +1557,17 @@ python scripts/evaluateMemory.py evaluate --cases tests/utils/llm/memory/fixture
 |---|---|---|
 | 目标记忆不在 `candidateCount` 或 `contextualCandidateCount` | scope、`enabled`、数据库记录和 mode | 修正调用方 scope 或数据状态；不要用模型补 scope 错误 |
 | 候选存在，但三个 `*Qualified` 都没有目标 | query view、fixture 标签、模型/缓存状态和各通道 threshold | 补充零词面、回指、话题切换样例；修正 query 构造或重新 calibration |
+| 目标的语义 base 已过阈值，但融合/预算前排序偏低 | `admissionScore`、`rankingScore`、hint 是否忠于正文、`qualifiedRank` | 先修 hint 的准确性；hint 只能改善已准入条目的顺序，不能弥补 base 未准入 |
 | 通道有资格，`fusedQualified` 却没有目标 | RRF 输入、通道名映射和分数排名 | 修复评分/融合契约；不要在调用方临时加 priority 特例 |
 | `fusedQualified` 有目标，但 `selectedCount` 没有目标 | `contextChars`、`contextualBudgetDropped`、pinned 预算占用 | 检查正文长度和总预算；必要时优化记忆粒度或重新评估预算，不截断事实 |
 | 选中的 ID 正确，但主模型没有使用 | `<UNTRUSTED_MEMORY>` 注入位置、低信任提示和主模型回复 | 做 staging 人工验收；这是上下文/生成质量问题，不要伪造成检索命中 |
-| forbidden hit 增加或 precision 降低 | 对应 case、subset、词面误触发和 hint 内容 | 先修正人工标注与 query/记忆表达，再提高阈值；任何 threshold 改动都要用新 calibration 验证 |
-| recall 低但 forbidden/precision 尚可 | `requiredIDs` 遗漏类别、语义模型覆盖和阈值过严 | 增加真实脱敏变体、改善 content/tags/hint 的表达，之后只在 calibration split 调整阈值 |
+| forbidden hit 增加或 precision 降低 | 对应 case、subset、base/词面是否错误准入，以及 hint 是否把已准入近邻排得过高 | 先修正人工标注与 query/记忆表达；准入错误才调整 threshold，纯排序错误优先修 hint，之后都用新 calibration 与盲测验证 |
+| recall 低但 forbidden/precision 尚可 | `requiredIDs` 遗漏类别、base 语义模型覆盖和阈值过严 | 增加真实脱敏变体、改善 content/tags 或 query view，之后只在 calibration split 调整阈值；hint 不能救回 base 未准入条目 |
 | 分数和结果正确但超时/队列积压 | runtime status、P95/P99、cache coverage、候选规模 | 优先测量和调度/缓存/数据库成本；不要增加一次生成型 LLM 调用 |
 
 评估时必须同时看总体指标、每个 case、`zeroLexicalOverlap`/`noHint`/`hasHint` 等 subset、abstention 和 pinned 独立指标。只看平均 precision，可能把“几乎从不召回”的保守通道误判成好方案；只看 recall，又可能掩盖一条错误记忆进入 prompt 的风险。
 
-改进顺序建议固定为：**先确认候选范围 → 再确认 query 与标注 → 再确认词面/语义通道 → 最后调整阈值和资源预算。** 更换模型、修改编码输入或修改词面算法都会使旧 calibration 失效，必须更新 manifest/版本绑定并重新划分、校准和验收。当前不建议为补语义断层增加额外生成型 LLM：它会把主链路延迟、失败概率和上下文污染一起扩大。
+改进顺序建议固定为：**先确认候选范围 → 再确认 query 与标注 → 再确认词面/语义通道 → 最后调整阈值和资源预算。** 更换模型、修改编码输入或修改词面算法都会使旧 calibration 失效，必须更新 manifest/版本绑定并重新划分、校准和验收。后续研究支持将 LLM 用于候选 ID 选择，已经获得默认关闭原型的实现批准；额外延迟、可用率和下游误用风险仍须按[接入归档](archive/llm-memory-hybrid-research-2026-09.md#默认关闭的选择后端接入)逐项验收。
 
 > 　
 > 文档将一大堆一大堆的东西直接就塞到正在看文档的你的脸上了，感到迷糊是正常的……（目移
@@ -1617,7 +1582,7 @@ python scripts/evaluateMemory.py evaluate --cases tests/utils/llm/memory/fixture
 ### 当前已知限制
 
 - **默认仍是 legacy**：`memoryRetrievalMode` 的默认值为 `legacy`，新检索不会因为代码存在而自动上线。
-- **Hybrid 尚未通过质量 gate**：候选 calibration 已计算，但当前 holdout 的 precision、recall 和 forbidden-hit 均未同时达标；正式 calibration 的数据集散列和三个阈值仍为空，显式切换后通常只有 pinned，不能视为语义检索可用。
+- **Hybrid 尚未获生产启用批准**：local 正式 calibration 仍未配置；新增 llm 原型绕开的是阈值准入，不是人工质量/隐私/资源验收。标签保持 draft，旧 holdout 已被分析，不能称为新盲测。实际接入后的检索质量、长等待下的吞吐和冲突回答行为仍待验证。
 - **模型未随普通安装部署**：缺少可选依赖或 artifact 时，runtime 会报告 encoder unavailable，不会访问外部 embedding API。
 - **RAM index 重启后丢失**：后台会 best-effort 重新对账，冷启动期间未覆盖条目仍可参加已校准 lexical 通道。
 - **RAM index 的完整覆盖是 best-effort**：32 MiB 字节预算满时，对账不会驱逐热缓存，未缓存条目会持续跳过，直到在线变更/删除或重启释放空间；`/llm memory status` 的 `reconcileCapacitySaturated` 是这一状态的明确观测信号。当前不预留固定容量：预留只能降低热缓存覆盖率，不能保证在持续增长时补齐，因此用状态观测和在线变更优先级明确暴露边界。
@@ -1625,7 +1590,9 @@ python scripts/evaluateMemory.py evaluate --cases tests/utils/llm/memory/fixture
 - **宽候选没有独立的业务 hard cap**：这是为避免相关记忆在评分前被挤掉而接受的取舍；候选规模增长会直接增加 SQLite、解密和 BM25 成本。批准灰度前必须补做真实全链路 benchmark（而不是只测 encoder），并以结果决定是否引入分页或成本上限。
 - **Scope 授权有意区分共享与私有层**：`chat/user` action 必须匹配入口传入的可信身份，缺失身份时 fail closed；首次生成中的普通 global contextual action 不绑定会话并可按产品策略自动执行，retry/feedback 仍强制人工审核，pinned 始终必须人工审核。
 - **BM25 threshold 依赖候选分布**：校准语料规模或干扰项分布明显偏离生产时，候选集 IDF 和分数会漂移；扩充 fixture 后必须重新校准。修改 tokenizer、BM25 权重、归一化或词面准入规则（例如从绝对 threshold 改为 top-margin）时必须 bump `LEXICAL_VERSION`；只改 fixture 数据则更新 dataset hash 并重新 calibration 即可。
-- **Benchmark 尚非完整目标机验收**：现有 benchmark 在调用进程中运行，尚未覆盖隔离进程 heartbeat 和所有增量生命周期场景。
+- **新增 calibration 分布仍是草稿**：无答案、多 required、错误 hint、话题切换、真实回指和相反近邻已经补入，但 16 个新场景尚待人工复核，且现有 holdout 已参与问题分析。在完成复核并准备新盲测 holdout 前，top-margin、top-1-only 或 assisted 新门禁仍只能做离线实验。
+- **双表示已落地但尚未完成质量验收**：base 已成为唯一语义准入表示，hint 只进入 enhanced 排序表示；相应的 `encodingVersion` 与 calibration schema 已升级，旧阈值会 fail closed。本地资源 benchmark 已完成，但仍须人工复核 calibration，并使用新的盲测 holdout 验证“拒绝错误 hint”和“已准入多记忆排序”。
+- **目标机验收仍未完成**：Windows 本机已用 `tmp/runMessagesNativeLifecycle.py` 补验 1000 条真实 BGE、加密 SQLite、CRUD、缓存失效、同进程 runtime 重建和 heartbeat；该证据不代表 Linux/Python3.11 或生产同级容量，目标机部署与跨进程重启仍须单独验证。
 - **审核状态是进程内短生命周期数据**：Telegram/console 审核项会过期，应用重启后不能继续使用旧卡片。
 
 ### 切换 Hybrid 前必须完成

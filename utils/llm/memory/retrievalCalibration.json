@@ -1,9 +1,11 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "status": "unconfigured",
   "modelRevision": "46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59",
-  "encodingVersion": "bge-small-zh-v1.5-cls-v1",
+  "encodingVersion": "bge-small-zh-v1.5-cls-base-hint-v2",
   "lexicalVersion": "memory-bm25-v1",
+  "semanticAdmissionRepresentation": "base",
+  "semanticRankingRepresentation": "enhanced",
   "datasetSha256": null,
   "thresholds": {
     "semanticCurrent": null,

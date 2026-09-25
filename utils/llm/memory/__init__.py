@@ -42,6 +42,7 @@ from .types import (
 from .retrieval import (
     buildQueryTexts,
     buildSemanticQueryPlan,
+    deduplicateMemoryCandidates,
     loadCalibratedThresholds,
     renderMemoryContext,
     retrieveMemoryContext,

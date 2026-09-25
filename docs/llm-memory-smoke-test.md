@@ -1,6 +1,6 @@
 # LLM Memory 冒烟测试方案
 
-> 最后更新：2026-09-13
+> 最后更新：2026-09-25
 >
 > 这份文档是 Structured Memory 重构后的验收 runbook：把自动化回归、离线检索评测、目标机运行时冒烟和 Telegram 人工验收分开，说明每一层能证明什么、不能证明什么，以及什么时候允许进入 `hybrid` 灰度。它面向开发者、部署管理员和负责人工验收的 operator；完整架构仍以 [LLM Structured Memory 设计与运维文档](llm-memory.md) 为准。
 >
@@ -27,6 +27,7 @@ Memory 是在线变化的数据。数据库写入成功、向量索引追上、�
 
 ## 目录
 
+- [Messages交付候选的验收范围](#messages交付候选的验收范围)
 - [测试边界](#测试边界)
 - [通过门槛](#通过门槛)
 - [一自动化回归](#一自动化回归)
@@ -37,6 +38,58 @@ Memory 是在线变化的数据。数据库写入成功、向量索引追上、�
 - [观测与记录](#观测与记录)
 - [回滚与停止条件](#回滚与停止条件)
 - [维护原则](#维护原则)
+
+---
+
+## Messages交付候选的验收范围
+
+咱当前验收的是已获批、默认关闭的LLM选择后端：本地BGE/BM25宽池交一次 `claude-opus-4-8` / Messages选ID，再由程序按原文、预算和数据库状态复核，主回答另外生成。下面旧章节的calibration/holdout gate、总等待2秒、256MiB增量和“不能增加生成调用”描述的是local后端；不能拿它们要求本路线重新拟合阈值、批准旧holdout或删去已获准的单次selector调用。
+
+| 项目 | 本轮验收口径 |
+| --- | --- |
+| 质量 | 同时报告P≥0.85与P≥0.90、required R≥0.65；背景计P分母，多R/无答案单列 |
+| 竞争事实 | 按错误内容、有效竞争机会与主回答后果逐项裁决；本批三例受委托审阅已完成，结论限于这些样本，不是普遍F许可 |
+| 时间 | 选择阶段最多30秒，组装和清理占同一预算；本地候选和最终复核另计，主回答另计 |
+| 内存 | 本轮研究进程先限制512MiB；同时记录原生峰值，不自动转成生产容量承诺 |
+| 调用 | 单次selector，无重试、竞速或生成式修复；仍有独立主回答。离线mock零网络 |
+| 失败 | 仅保留通过复核且预算内的pinned，无本地情境回退；慢清理占原lease直到实际结束 |
+| 开关 | 默认 `legacy/local/responses`；生产启用另行批准，正式calibration不为LLM后端伪造approved |
+
+[固定32题结果及错误清单](archive/llm-memory-hybrid-research-2026-09.md#2026-09-22messages固定最终验收)已经完成，P34/39、R32/32、零超时；3个竞争项的[六次主回答检查](archive/llm-memory-hybrid-research-2026-09.md#2026-09-25三例冲突的六次主回答裁决)也已完成，两组各 3/3 正确。错误标签与原检索分数保留。旧holdout已经被观察，不能复用成新盲测，也不重复发送固定最终批次。所有新实验读写都使用 `tmp/` 中的合成材料、模型及报告，下面历史 `.cache/` 命令不是本轮执行路径。
+
+### 离线目标机副本
+
+目标为用户指定的Linux虚拟机，代码与依赖放在该账户独立的 `tmp/` 副本中。打包入口 `tmp/buildMessagesDeploymentBundle.py` 只包含已验证源码、schema、合成作者素材及manifest绑定的BGE文件；不包含生产data、`.env`、数据库、API凭据、SSH私钥或旧holdout。先核对 `tmp/messagesDeployment-bundle-manifest-v1.json` 的逐文件SHA256，再运行。环境安装使用该副本 `tmp/` 内的venv、pip缓存和系统临时目录，不安装到系统Python。
+
+以下是目标机包装器的命令形式；用户带回的执行记录及实际解释器路径见 [Linux 验证报告](../tmp/linux311-final-validation.md)。复现时使用新输出目录，保留已完成报告，不覆盖原证据：
+
+```bash
+python3.11 -B -X utf8 tmp/runMessagesDeploymentTests.py --output tmp/messagesDeployment-linux311-v1
+python3.11 -B -X utf8 tmp/runMessagesDeploymentRuntime.py --prepare
+python3.11 -B -X utf8 tmp/runMessagesDeploymentRuntime.py --mock normal
+python3.11 -B -X utf8 tmp/runMessagesDeploymentRuntime.py --mock stop
+python3.11 -B -X utf8 tmp/runMessagesNativeLifecycle.py --output tmp/messagesNativeLifecycle-linux311-v1
+```
+
+`runMessagesDeploymentTests.py`复用原隔离guard，禁用dotenv、网络及生产数据访问。根配置声明data目录时只跳过精确的无副作用声明，不放行该目录内容；Linux用 `resource.ru_maxrss × 1024` 记录累计峰值，Windows用 `peak_wset`。报告保留OS、Python、依赖、源码散列、JUnit原始失败数及 `targetLinux311`。Windows3.13先前335项通过；随后 Debian 13.4 / Python 3.11.16 独立执行也为335项通过，Linux结论来自目标机报告。
+
+`runMessagesDeploymentRuntime.py`仅提供prepare和两种mock，没有live或凭据入口。它经真实BGE、加密SQLite及正式检索入口，记录心跳与系统峰值；normal应完成32题，stop应在第4次身份错误后保留28未发分母。mock模拟选第一候选，其P/R不衡量模型效果。运行结束核验runtime/native、lease和transport状态；实际远端服务、目标主回答profile、并发生产容量及Telegram操作闭环不由这些mock证明。
+
+静态mock之外，`tmp/runMessagesNativeLifecycle.py`补1000条真实BGE负载、并发1/2/4评分、正式CRUD通知和同进程runtime重建，见[本机补验](archive/llm-memory-hybrid-research-2026-09.md#2026-09-22真实索引生命周期补验)。Windows3.13.9单次峰值221.69MiB；后续 Linux 执行峰值344.76MiB，首建26.44秒、同进程重建27.27秒，并发1/2/4热查询 P95 为0.174/0.230/0.321秒。这些查询覆盖加密库读取与本地评分，不含远程选择和主回答。Linux正常mock32/32、身份错误停批mock及清理均按预期完成，详见[目标机独立审计](../tmp/linux311-final-audit.json)。
+
+模板负载不计质量分数，同进程重建不等于 Bot 进程重启，也不承诺长期容量。Linux 实际使用部署包及生命周期补充包，三个研究包装器有适配改动，正式文件保持与原包一致；不要将当前 Windows 包装器未经替换的重跑称作同一 Linux 执行。目标报告还保留了初次 ONNX 导入在项目根生成 `:memory:.ses` 及后续迁移的隔离疏漏；不能将其改写为全程无越界。本地收到的是汇总和独立审计，未带回全部远端原日志。
+
+### 审阅结果和启用顺序
+
+用户已授权六次主回答并委托助手完成裁决。[审阅报告](../tmp/messagesFinalAnswers-review-v1.md)记录三例各“实际双事实原顺序”和“仅正确事实”一次，6/6有效、全部核心答案正确；没有重新选择或修改提示。编号题双事实组申请删除错误项，仅正确组申请追加“已向用户说明”的低价值状态，两项均未执行。三例的错误标签仍成立；不再要求用户重复评分，也不把助手审阅写成人类批准整份 draft 数据集。
+
+结合 Linux 离线验证，目前可以进入实际应用验收，依次完成：
+
+1. 在目标机器核对显式的 `hybrid/llm/messages` 配置、selector模型与服务，以及主回答人设、模型和参数。主回答快照目前仅与本地配置匹配；LLM后端不要求批准local阈值。
+2. 在测试chat验证一条实际消息经检索进入主回复，并验证新增/更新/删除、global自动批准策略与pinned审核。故障时保留合格pinned、放弃情境选择，主回复继续。记录真实调用总耗时，不能把Linux本地查询P95当作整体回复耗时。
+3. 检查 `/llm memory status`，执行实际Bot停止和重新启动，确认后台索引恢复、在途请求清理和回滚到 `legacy` 的操作。已完成的同进程runtime重建不替代这一步。
+
+完成这些应用检查后再决定小范围生产启用。当前保持 `legacy/local/responses`，本轮六次诊断既未改开关，也未执行模型申请的记忆写入。不要为了收尾重新拟合local阈值、重发固定32题或追加同题回答。
 
 ---
 
@@ -120,15 +173,15 @@ python -m pytest tests/scripts/test_evaluateMemory.py tests/scripts/test_memoryM
 | 区域 | 必须确认的行为 |
 |---|---|
 | `database.py` | 加密、scope、enabled、`contextual/pinned`、CRUD 成功后通知 runtime |
-| `retrieval.py` | 宽候选、三通道独立准入、RRF、去重、字符预算、注入前快照复核和降级 |
-| `runtime.py` | 同 ID 合并、队列上限、缓存字节预算、迟到结果、对账、超时、worker 自恢复和关闭 |
-| `encoder.py` | 256 token 输入边界、分片、归一化以及可选依赖缺失时的导入行为 |
+| `retrieval.py` | 宽候选、base 语义准入、enhanced 仅重排已准入 ID、lexical 独立贡献、RRF、去重、字符预算、注入前快照复核和降级 |
+| `runtime.py` | 双表示评分、共享矩阵不重复比较/计费、队列上限、缓存字节预算、迟到结果、对账、超时、worker 自恢复和关闭 |
+| `encoder.py` | base 文本排除 hint、enhanced 文本包含 hint、无 hint 复用矩阵、256 token 输入边界、分片、归一化以及可选依赖缺失时的导入行为 |
 | `review.py` 与 handler | pinned 独立审核、`targetState`、retry/feedback 和 memory query 透传 |
 | `memoryCmd.py` | mode/hint/clearhint、status、retrieval 切换和人工 CRUD |
-| `evaluateMemory.py` | fixture schema、split 隔离、候选 calibration、approved 校验和零 LLM 调用 |
+| `evaluateMemory.py` | fixture schema、split 隔离、calibration 只读 base、`hybrid+hint` 只改变排序、approved 校验和零 LLM 调用 |
 | `memoryModel.py` | 固定 revision、artifact hash、路径边界、事务发布和失败回滚 |
 
-本轮已经实测通过上述命令，结果为 `266 passed`（另有 2 个 pytest cache 目录权限 warning，不影响测试结果）。这只是当前工作区的自动化结果，目标机和 Telegram 层仍须继续执行。
+此前双表示实现阶段运行上述命令得到 `282 passed`；后续新增了实验和测试，不能把这份历史数量当成当前工作区的验证结果。目标机和 Telegram 层仍须独立执行。
 
 ### 2. 模块登记与差异检查
 
@@ -152,7 +205,7 @@ python scripts/evaluateMemory.py validate --cases tests/utils/llm/memory/fixture
 python scripts/evaluateMemory.py validate --cases tests/utils/llm/memory/fixtures/retrievalSmokeCases.json
 ```
 
-正式集 `retrievalCases.json` 用于 calibration/holdout 质量评测；合成集 `retrievalSmokeCases.json` 只有 6 个结构边界场景，覆盖 pinned、disabled、scope、history、空查询、宽候选和预算。合成集不能替代人工标注集。
+正式集 `retrievalCases.json` 用于 calibration/holdout 质量评测，当前包含 96 个场景（calibration 66、holdout 30）；合成集 `retrievalSmokeCases.json` 只有 6 个结构边界场景，覆盖 pinned、disabled、scope、history、空查询、宽候选和预算。合成集不能替代人工标注集。
 
 校验时特别检查：
 
@@ -189,23 +242,48 @@ python scripts/evaluateMemory.py calibrate --cases tests/utils/llm/memory/fixtur
 候选文件必须满足：
 
 - `status` 是 `candidate`，不是 `approved`；
+- `schemaVersion` 是 `2`，并声明语义使用 `base` 准入、`enhanced` 排序；
 - 只使用 calibration split；
 - `datasetSha256` 与 `validate` 报告一致；
 - threshold 是从实际分数边界产生的有限非负数，不能手工填写；
 - 没有满足精确率和 forbidden 约束的通道必须是 `null`；
 - 输出路径不能是正式 `utils/llm/memory/retrievalCalibration.json`。
 
-本次扩充正式 fixture 后，已用固定模型重新生成 candidate。当前数据集 SHA-256 为 `7cc819b05366ba73cf43c7e536297c1171d7fef42816d1f43d03a70bf0fbb7ca`；以下数值只属于待人工审查的 candidate，不得复制进正式 calibration：
+四处标注与题意修订后的 fixture 数据集 SHA-256 为 `f24e48f2711925ba6464cc031edf39070ebdf4d1414a3d1cbf39fa3394b9f7e6`。旧 hash 对应的 candidate 已失效；本次重新生成的报告位于 `.cache/llmMemory/reports/candidateCalibration-reviewed-baseline.json`，仍保持 `status: "candidate"`，必须与新增场景的人工标注一起复核：
 
-| 通道 | candidate threshold |
-|---|---:|
-| `semanticCurrent` | `0.665964663028717` |
-| `semanticAssisted` | `0.775464653968811` |
-| `lexical` | `14.85168317199519` |
+| 通道 | candidate threshold | 放行正样本 / 观察到的正样本 |
+|---|---:|---:|
+| `semanticCurrent` | `0.6696333885192871` | `16 / 64` |
+| `semanticAssisted` | `0.782344400882721` | `18 / 64` |
+| `lexical` | `20.80071401306478` | `2 / 44` |
 
-candidate 报告位于 `.cache/llmMemory/reports/candidateCalibration.json`，状态仍是 `candidate`，并绑定上述 hash；正式文件仍不应被脚本覆盖。
+语义 threshold 只从不含 hint 的 base 分数产生；enhanced 分数不参与校准。这里的分数是各通道独立统计，不等于 RRF 融合后的整体 recall；但较低的放行比例提示阈值可能偏严，不能仅因三个通道 precision 都是 `1.0` 就批准。
+
+#### 可选：相对分数研究
+
+需要判断 top-margin 是否值得加入线上规则时，在 calibration 内运行：
+
+```bash
+python scripts/evaluateMemory.py margin --cases tests/utils/llm/memory/fixtures/retrievalCases.json --output .cache/llmMemory/reports/margin-study-base-hint-v2.json
+```
+
+该命令要求 calibration 同时存在无答案和多 required 场景，只生成 `status: "experimental"`、`productionEligible: false` 的研究报告。它重新计算绝对阈值基线，并比较固定绝对阈值加 margin、配合 margin 重校准和 top-1 对照。语义差值只读 base；通过 margin 的通道仍保留所有满足绝对阈值的记忆。报告不作为 approved calibration 使用，也不评分 holdout。
+
+核对以下结果：
+
+- `trials[].metrics` 同时看 precision、recall、forbidden、`noAnswerFalseRecallCount`、`multiRequiredCompleteCount`；必须连同对应场景总数一起读，不能把零预测当成 100% precision。
+- `lostRequiredCount` / `recoveredRequiredCount` 与逐场景 ID 解释相对基线的损失和收益；不要只比较净变化。
+- `channelEvidence` 中找第一名标为 forbidden 且 `topGap` 很大的案例，确认绝对阈值仍在阻止它进入；不要用普通报告中的 enhanced 排序差值替代 base 差值。
+- 检查缺少第二个有效分数时弃权、第二名低于绝对阈值仍参与差值、多 required 可以同时通过、pinned 不受 top-1 截断影响。对应行为由 `test_evaluateMemory.py` 回归覆盖。
+- 基线 `trials[0].cases[].diagnostics.candidateEvidence` 保留每条事实的准入、排序和预算证据，供追查多 required 遗漏。
+
+2026-09-16 的 26 组 calibration 内实验中，绝对阈值基线召回 31/62 条 required；assisted margin=0.01 或 0.02 配合重校准后为 34/62，precision=1.0、forbidden=0、无答案误召回=0/8。但多 required 完整召回仍为 0/4。top-1 对照没有额外损失，仅因基线每场景本来最多选到一条，不能据此批准 top-1。
+
+相对分数实验定义及默认网格见 [evaluateMemory.py](../scripts/evaluateMemory.py)，当前数据扩充与基线结果见 [Calibration 扩充与检索研究](llm-memory-calibration-expansion.md)。上述 margin 数字仅属于旧 66 题上的历史实验，新增标注仍待人工复核；若据此修改线上准入规则，必须更新相应版本契约、重校准，再用新的盲测 holdout 验收。
 
 ### 3. Holdout 验收
+
+**当前尚未进入这一步。** `scripts/buildMemoryCalibration.py` 已生成多版 calibration 草稿：v1 为 120 条、v2 为 138 条、v3/v4 为 162 条；它们都保留 30 条旧 holdout，且仍是 `draft`，不等于正式 fixture。`scripts/studyMemoryRetrieval.py` 仅做 calibration 对照与分组验证，不批准配置，也不评分 holdout。本轮基线分组验证 precision=0.9286、recall=0.0675、forbidden=1；旧/新增样本、多 required、无答案误召回、201 项相关测试和待人审问题见 [Calibration 扩充与检索研究](llm-memory-calibration-expansion.md)。待规则成熟后再冻结并准备新盲测，不能反复使用已经查看过的旧 holdout。
 
 `evaluate` 拒绝 `candidate` calibration，并要求 calibration 与当前模型、词面版本和 fixture hash 绑定。只有人工审查通过后，才可以把 approved calibration 放在一个临时路径进行验收：
 
@@ -219,9 +297,11 @@ python scripts/evaluateMemory.py evaluate --cases tests/utils/llm/memory/fixture
 python scripts/evaluateMemory.py evaluate --cases tests/utils/llm/memory/fixtures/retrievalCases.json --split holdout --calibration <approved-calibration-copy.json> --modes legacy lexical hybrid hybrid+hint --output .cache/llmMemory/reports/holdout-approved-all-modes.json
 ```
 
-重点看 `hybrid+hint`，因为它才与当前线上 encoder 的正文、tags、hint 编码行为一致；`hybrid` 是不带 hint 的对照。报告必须同时检查整体指标、每个 case、每个 `subsets` 子集和 pinned 独立指标，不能只看平均 precision。
+重点看 `hybrid+hint`，因为它与线上一样先用 `content + tags` 的 base 表示准入，再用加入 hint 的 enhanced 表示排序；`hybrid` 使用同一 base 准入集合但继续按 base 排序，是“不给 hint 排序权”的对照。报告必须同时检查整体指标、每个 case、每个 `subsets` 子集和 pinned 独立指标，不能只看平均 precision。定位失败项时再查看 `diagnostics.channelEvidence` 的准入/排序 top 与 gap，以及 `candidateEvidence` 的 `admissionScore`、`rankingScore`、base threshold margin、`rankingBlockedByAdmission`、RRF 支持、去重和预算结果；这些离线字段不得包含正文或 hint。
 
-使用该 candidate 的临时 approved 副本进行 holdout 诊断后，`hybrid+hint` precision 为 `0.857143`、recall 为 `0.692308`、forbidden hit 为 `2`，未通过上线 gate；`hybrid` 对照为 precision `0.833333`、recall `0.576923`、forbidden hit `2`。因此正式 `retrievalCalibration.json` 继续保持 `unconfigured`，三个 threshold 继续为 `null`，默认模式保持 `legacy`。临时 approved 副本只用于诊断，不能视为人工批准。
+旧单表示编码下的 `hybrid+hint` precision `0.900000`、recall `0.692308`、forbidden hit `1`，以及 `hybrid` 对照 precision `0.882353`、recall `0.576923`、forbidden hit `1`，现在都只属于历史诊断。encoding version 与 calibration schema 均已变化，评测器会拒绝继续绑定旧 threshold；正式 `retrievalCalibration.json` 保持 `unconfigured`，三个 threshold 保持 `null`，默认模式保持 `legacy`。
+
+当前 calibration 有 66 个场景，其中新增 8 个无答案/应弃权场景、4 个多 required 场景，并覆盖错误 hint、明确话题切换、真实回指和相反近邻。新增 16 个场景均标记为 `metadata.reviewStatus: "draft"`，必须先人工复核；hint 权限已经拆分，而当前 holdout 又已被多轮查看，因此必须换一份未参与本次设计的新盲测 holdout，不能在现有 holdout 上观察结果后直接批准。
 
 ### 4. 资源 benchmark
 
@@ -236,7 +316,9 @@ python scripts/evaluateMemory.py benchmark --memories 1000 --queries 100 --concu
 - `lifecycleScenarios.*` 仍为 `not-run`，除非目标机运行时冒烟另行填充；
 - 加载、索引、关闭、矩阵字节、RSS、P50/P95/P99 和 2 秒超时比例。
 
-因此 benchmark 通过只能说明本地 encoder 和串行评分初步可行，不能单独宣布 256 MiB、事件循环或增量生命周期验收通过。
+本次开发机双表示基线（1000 条均带 hint、100 个查询）为：`matrixBytes=4096000`（约 3.91 MiB）、索引约 29.98 s；并发 1/2/4 的热查询 P95 约为 30/64/100 ms，2 秒超时率均为 0；调用进程 RSS 最大增量约 139.6 MiB。后续目标机报告应与这组数值对照，明显回退时先排查模型、CPU 和候选规模。
+
+因此 benchmark 通过只能说明本地 encoder、双表示缓存和串行评分初步可行，不能单独宣布 256 MiB、事件循环或增量生命周期验收通过。
 
 ### 5. 批准流程
 
@@ -345,7 +427,7 @@ python bot.py
 | 两个阶段都适用 | pinned 不参加 contextual 的 BM25/semantic/RRF 竞争，也不占语义向量缓存 |
 | 两个阶段都适用 | pinned 先按独立 `500` 字符预算裁剪，context 总块不超过 `1500` Unicode 字符 |
 | 两个阶段都适用 | 超长条目整条跳过，不把半条事实截进 prompt；后续短条目仍有机会进入 |
-| 两个阶段都适用 | `retrievalHint` 只影响检索导流，不出现在最终 `<UNTRUSTED_MEMORY>` 块、诊断日志或普通导出 |
+| 两个阶段都适用 | `retrievalHint` 只影响 base 已准入条目的 enhanced 排序，不出现在最终 `<UNTRUSTED_MEMORY>` 块、诊断日志或普通导出 |
 | 两个阶段都适用 | 最终 prompt 中的 memory 内容仍被 `<UNTRUSTED_MEMORY>` 包裹并经过分隔符中和 |
 
 ### 5. 历史窗口与主模型调用次数
@@ -368,7 +450,7 @@ python bot.py
 
 - 语义 query queue 满时，当前请求放弃语义分数但不阻塞主回复；
 - index queue 满时，通知可以丢弃；周期对账会在容量允许时补排，容量饱和时持续跳过冷条目，直到驱逐/删除/重启释放空间；
-- 单矩阵超过 `32 MiB` 时不驱逐全缓存硬塞，条目进入 blocked 诊断；
+- 单条记忆的 base/enhanced 唯一矩阵合计超过 `32 MiB`，或任一矩阵没有有效字节大小时，不驱逐全缓存硬塞，条目进入 blocked 诊断；
 - lexical、semantic、数据库或最终复核超时不会抛到主生成链路；
 - timeout 后底层 native 作业仍占用名额直到真正完成，不会无限创建替代作业；
 - 连续 query 流量达到 `8` 次后，worker 会让出一次 index 机会；
@@ -399,7 +481,8 @@ python bot.py
 - 多轮后切换话题再回到早前问题（approved assisted semantic）；
 - 多义短句和中文单字，确认不会因为单字造成大面积误召回（两阶段）；
 - 当前 chat/user 与其他 chat/user 的同主题冲突（两阶段，含 action 授权）；
-- 有 hint 与没有 hint 的同类事实（approved semantic）；
+- 正确 hint 能在 base 已准入的同类事实间改善顺序，但不能改变准入集合（approved semantic）；
+- 错误或过度宽泛的 hint 即使 enhanced 分数很高，base 未过阈值时仍不得获得 semantic RRF 贡献（approved semantic）；
 - 空查询在 `hybrid`/fail-closed 阶段只保留可见 pinned；`legacy` 仍遵循旧的 priority/配额选择，可能返回 contextual，必须分别记录。
 
 人工记录的不只是“回复听起来对不对”，还要记录当轮 diagnostics 中的 mode、候选数量、各通道 qualified 数、最终 selected 数、预算淘汰数和降级原因。错误记忆比少记一条更严重：出现 forbidden 条目时停止继续灰度。

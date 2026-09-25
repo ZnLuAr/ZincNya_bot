@@ -1,0 +1,168 @@
+{
+  "schemaVersion": 1,
+  "reviewStatus": "draft",
+  "domain": "work",
+  "annotationNotes": "全部标注仍为draft。每组a/b/c主要是同一信息需求的问法变体，不能算作独立主题或独立语义样本；分组验证必须整组隔离。travel与leisure只提供个人行程和爱好事实，即使共享青岚、照片、main等字词也不回答指定软件项目规则。历史正文若明确包含当前正确事实，不能只因出现旧版本字样而标forbidden。",
+  "groups": [
+    {
+      "groupID": "exp26-work-ticket-runtime",
+      "primaryCategory": "multiRequired",
+      "backgroundDomains": ["travel", "leisure"],
+      "memories": [
+        {"id": 2100000, "content": "自2025年12月起，用户在Windows办公机开发青岚工单的前端仓库时，团队锁定的Node.js版本是22.14.0；这一约定不适用于其他仓库。", "tags": ["青岚工单", "前端", "运行时"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100001, "content": "青岚工单团队当前要求用户在Windows办公机为该前端仓库安装依赖时使用pnpm 9.15.4，与该仓库的锁文件生成工具一致。", "tags": ["青岚工单", "依赖工具"], "retrieval_hint": "青岚前端 本地依赖 pnpm版本", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100002, "content": "用户给青岚工单前端保存的办公机终端配置名叫青岚本地，使用PowerShell 7；重装环境时可以沿用这个终端入口。", "tags": ["青岚工单", "终端"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100003, "content": "2025年11月及以前，青岚工单前端的旧开发镜像使用Node.js 20.18.1；该镜像已封存，只用于复现旧版本问题。", "tags": ["青岚工单", "旧镜像"], "retrieval_hint": "青岚前端 Node版本", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100004, "content": "用户自己的组件试验仓库ui-scratch当前使用Node.js 24.1.0，它不属于青岚工单团队的交付代码。", "tags": ["组件试验", "运行时"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100005, "content": "青岚工单的Python后端由另一套工具管理，用户当前在后端仓库使用uv 0.7.2，这不是前端包管理器的版本约定。", "tags": ["青岚工单", "后端"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100006, "content": "测试组的青岚回归面板是单独的仓库，Linux执行机为它使用pnpm 10.8.0；该面板不共享青岚工单前端的锁文件。", "tags": ["回归面板", "依赖工具"], "retrieval_hint": "青岚 pnpm 环境", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100007, "content": "同事周衡维护自己的桌面插件仓库时仍用Node.js 18.20.4；这不是用户在青岚工单前端中的开发环境。", "tags": ["周衡", "桌面插件"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"}
+      ],
+      "cases": [
+        {"caseID": "exp26-work-ticket-runtime-a", "query": {"currentText": "我这台Windows办公机要重新拉青岚工单前端。按现在团队的约定，Node和包管理器各装哪个版本？只核对这个仓库。", "replyText": "", "history": []}, "requiredIDs": [2100000, 2100001], "allowedIDs": [2100002], "forbiddenIDs": [2100003, 2100004, 2100005, 2100006, 2100007], "allowAbstain": false, "subsets": ["multiRequired"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100000提供当前Node版本、2100001提供包管理器及版本，缺任一都不能答全；2100002仅补充可用终端入口。2100003是封存旧镜像，2100004是个人试验仓库，2100005属于后端，2100006是独立回归面板，2100007是同事的插件环境，均禁止替代当前前端约定。查询限定办公机上的指定仓库版本，travel与leisure背景无关，不需跨域覆盖。"}},
+        {"caseID": "exp26-work-ticket-runtime-b", "query": {"currentText": "青岚工单前端那个项目，我本地Windows环境想跟团队锁文件对齐，运行时和装包工具的版本号分别是多少来着？", "replyText": "", "history": []}, "requiredIDs": [2100000, 2100001], "allowedIDs": [2100002], "forbiddenIDs": [2100003, 2100004, 2100005, 2100006, 2100007], "allowAbstain": false, "subsets": ["multiRequired"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100000决定运行时版本，2100001决定装包工具版本，两项均为所问；2100002的终端配置可附带但不影响这两个版本答案。2100003仅适用历史镜像，2100004仅适用个人试验，2100005仅适用Python后端，2100006仅适用回归面板，2100007仅适用周衡的插件，逐条禁止。问题只核对青岚前端的当前本地环境，travel、leisure不能补充答案。"}},
+        {"caseID": "exp26-work-ticket-runtime-c", "query": {"currentText": "准备给办公用Windows重装青岚工单前端环境。别拿旧镜像那套，帮我把现在Node加依赖管理器这一对版本报一下。", "replyText": "", "history": []}, "requiredIDs": [2100000, 2100001], "allowedIDs": [2100002], "forbiddenIDs": [2100003, 2100004, 2100005, 2100006, 2100007], "allowAbstain": false, "subsets": ["multiRequired"], "metadata": {"reviewStatus": "draft", "annotationRationale": "完整版本对必须同时引用2100000的Node与2100001的pnpm；2100002只帮助找到既有终端，属于可选。2100003被当前时点和排除旧镜像的措辞排除，2100004是另一仓库，2100005是后端工具，2100006是另一项目的执行机，2100007是另一人的环境，不能召回作答。限定工作前端重装的版本决策，travel与leisure均无关。"}}
+      ]
+    },
+    {
+      "groupID": "exp26-work-budget-csv",
+      "primaryCategory": "multiRequired",
+      "backgroundDomains": ["travel", "leisure"],
+      "memories": [
+        {"id": 2100010, "content": "用户为予算看板团队导入报销桥当前生产模板的费用CSV时，文件编码必须是带BOM的UTF-8；该模板自2025年12月启用。", "tags": ["予算看板", "费用CSV", "编码"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100011, "content": "予算看板交给报销桥当前生产模板的费用CSV，团队约定分隔符为英文分号，不使用英文逗号。", "tags": ["予算看板", "费用CSV", "分隔符"], "retrieval_hint": "报销桥 导入 CSV 分号", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100012, "content": "用户生成报销桥当前生产模板的费用CSV时，金额字段按团队约定保留两位小数、不带千位分隔符，例如1234.50。", "tags": ["予算看板", "金额格式"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100013, "content": "予算看板团队通常把交给报销桥的费用CSV命名为cost_年月.csv；这个命名便于文件协作归档，导入器不据此校验内容。", "tags": ["予算看板", "文件命名"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100014, "content": "予算看板2025年11月以前使用的报销桥旧模板要求GBK编码；旧模板现已停用，只保留历史上传记录。", "tags": ["予算看板", "旧模板"], "retrieval_hint": "报销桥 CSV编码", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100015, "content": "同一团队另给分析沙箱导出的点击日志CSV采用英文逗号分隔；该日志不送入报销桥费用模板。", "tags": ["分析沙箱", "日志CSV"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100016, "content": "同事许澄人工核对费用时要的是带公式的XLSX工作簿，这份核对件不是用户上传报销桥的机器导入文件。", "tags": ["许澄", "费用核对"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100017, "content": "用户2025年10月给内部汇报做费用展示表时，金额显示带千位逗号并四舍五入到整数；这是展示稿，不是当前生产导入CSV。", "tags": ["历史汇报", "金额展示"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"}
+      ],
+      "cases": [
+        {"caseID": "exp26-work-budget-csv-a", "query": {"currentText": "予算看板这次要上传报销桥的生产费用CSV，我导出时编码、分隔符和金额显示这三项分别怎么设？只说当前导入模板。", "replyText": "", "history": []}, "requiredIDs": [2100010, 2100011, 2100012], "allowedIDs": [2100013], "forbiddenIDs": [2100014, 2100015, 2100016, 2100017], "allowAbstain": false, "subsets": ["multiRequired"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100010回答编码，2100011回答分隔符，2100012回答金额格式，三项分别必需；2100013的命名只是可选归档提醒。2100014是停用模板，2100015是日志导出，2100016是人工核对工作簿，2100017是历史展示稿，都不适用于所问生产导入。限定机器文件格式而非费用用途，travel、leisure背景均无关。"}},
+        {"caseID": "exp26-work-budget-csv-b", "query": {"currentText": "我在予算看板导费用文本给报销桥，导出框卡在字符编码、列之间用啥、金额留几位这几项。现在生产那版团队怎么约定的？", "replyText": "", "history": []}, "requiredIDs": [2100010, 2100011, 2100012], "allowedIDs": [2100013], "forbiddenIDs": [2100014, 2100015, 2100016, 2100017], "allowAbstain": false, "subsets": ["multiRequired"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100010的带BOM编码、2100011的列分隔符、2100012的两位小数及无千位符共同组成完整导出设置；2100013文件名可补充但不参与这三项。2100014时间已过，2100015交付对象不同，2100016是人工审阅件，2100017是展示件，分别禁止。问题仅询问该团队生产导入选项，不涉及travel或leisure的具体消费事实。"}},
+        {"caseID": "exp26-work-budget-csv-c", "query": {"currentText": "报销桥吃的那份予算看板费用CSV，帮我核一下当前的字符集、分列符号和金额写法，别套人工看表那套。", "replyText": "", "history": []}, "requiredIDs": [2100010, 2100011, 2100012], "allowedIDs": [2100013], "forbiddenIDs": [2100014, 2100015, 2100016, 2100017], "allowAbstain": false, "subsets": ["multiRequired"], "metadata": {"reviewStatus": "draft", "annotationRationale": "所问三种机器格式分别由2100010、2100011、2100012提供，任一缺失都不完整；2100013仅为可选命名建议。2100014的GBK限旧模板，2100015的逗号限分析日志，2100016的XLSX限许澄人工核对，2100017的整数和千位符限历史汇报，均应禁止。当前查询排除了人工看表且仅限文件格式，travel、leisure无关。"}}
+      ]
+    },
+    {
+      "groupID": "exp26-work-diagram-checkout",
+      "primaryCategory": "multiRequired",
+      "backgroundDomains": ["travel", "leisure"],
+      "memories": [
+        {"id": 2100020, "content": "自2025年12月起，映川SDK团队唯一可编辑的交付架构图主文件是共享盘\\\\files\\yingchuan\\design\\delivery.drawio，用户修改应从这个文件开始。", "tags": ["映川SDK", "架构图", "主文件"], "retrieval_hint": "映川 架构图 编辑路径", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100021, "content": "映川SDK的delivery.drawio不支持多人同时改。团队要求用户打开编辑前在同目录创建delivery.editing，内容写自己的姓名；若锁文件已存在，应等待持有人释放。", "tags": ["映川SDK", "文件协作", "占用锁"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100022, "content": "映川SDK团队习惯在架构图修改完后给同目录changes.txt补一行改动摘要，便于其他人查看；这不是开始编辑的前置条件。", "tags": ["映川SDK", "改动摘要"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100023, "content": "2025年11月以前，映川SDK架构图通过邮件附件轮流修改；团队在12月切换共享盘后，旧邮件只作为历史参考。", "tags": ["映川SDK", "旧协作流程"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100024, "content": "映川SDK的同名PDF文件放在共享盘review目录，专供评审阅读；它是导出件，不是可编辑架构图的主文件。", "tags": ["映川SDK", "评审导出"], "retrieval_hint": "映川 交付架构图 文件", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100025, "content": "同事陈朔桌面的delivery_try.drawio是他个人尝试重新布局的草稿，团队没有把它设为映川SDK的共同编辑入口。", "tags": ["陈朔", "个人草稿"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100026, "content": "映川SDK共享盘archive目录中的2025年10月架构图是已冻结的验收快照，用户和其他组员都不在该快照上继续编辑。", "tags": ["映川SDK", "冻结快照"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100027, "content": "另一个项目松台插件的架构图放在Git仓库，用户通过分支和合并请求协作；松台插件不使用映川SDK的共享盘占用锁流程。", "tags": ["松台插件", "图文件协作"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"}
+      ],
+      "cases": [
+        {"caseID": "exp26-work-diagram-checkout-a", "query": {"currentText": "我要改映川SDK现在的交付架构图。具体打开哪个主文件，动笔前又怎么占用，才能不和同事同时写？", "replyText": "", "history": []}, "requiredIDs": [2100020, 2100021], "allowedIDs": [2100022], "forbiddenIDs": [2100023, 2100024, 2100025, 2100026, 2100027], "allowAbstain": false, "subsets": ["multiRequired"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100020给出唯一主文件位置，2100021给出写入前占用规则，两者均直接回答；2100022是完成后的可选摘要提醒。2100023为过期邮件流程，2100024为只读用途导出件，2100025为陈朔个人草稿，2100026为冻结快照，2100027属于另一项目，均禁止。问题限定团队主文件和占用操作，travel与leisure背景没有可用关联。"}},
+        {"caseID": "exp26-work-diagram-checkout-b", "query": {"currentText": "映川SDK交付图我来补一块，现在要从哪份源文件下手？开始编辑前用什么办法告诉大家这份先归我改？", "replyText": "", "history": []}, "requiredIDs": [2100020, 2100021], "allowedIDs": [2100022], "forbiddenIDs": [2100023, 2100024, 2100025, 2100026, 2100027], "allowAbstain": false, "subsets": ["multiRequired"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100020是源文件选择依据，2100021是当前互斥编辑办法，缺一不能完成所问准备操作；2100022不属开始前条件，只可附带。2100023已被新流程取代，2100024不是源图，2100025未经团队采用，2100026不可续改，2100027是松台插件的规则，逐条禁止。查询只涉及映川SDK文件协作，travel、leisure均无关。"}},
+        {"caseID": "exp26-work-diagram-checkout-c", "query": {"currentText": "别让我改到评审副本了，映川SDK这张交付架构图的现行源路径和编辑前的占位步骤一起给我。", "replyText": "", "history": []}, "requiredIDs": [2100020, 2100021], "allowedIDs": [2100022], "forbiddenIDs": [2100023, 2100024, 2100025, 2100026, 2100027], "allowAbstain": false, "subsets": ["multiRequired"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100020必需用于定位现行源图，2100021必需用于说明创建锁及遇锁等待；2100022仅能作为改完后的补充。2100023是旧时间流程，2100024是题目明确不要的评审副本，2100025是他人试稿，2100026是历史封存件，2100027是另一仓库的协作方式，均禁止。所问已限定路径与占位，travel与leisure背景无需允许。"}}
+      ]
+    },
+    {
+      "groupID": "exp26-work-release-md",
+      "primaryCategory": "normalRecall",
+      "backgroundDomains": ["travel", "leisure"],
+      "memories": [
+        {"id": 2100030, "content": "白鹭支付项目的发布说明统一写在仓库根目录RELEASE.md，用户负责的版本发布沿用此文件。", "tags": ["白鹭支付", "发布说明"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100031, "content": "白鹭支付RELEASE.md的版本标题格式是## v版本号 - 日期，例如## v2.8.0 - 2026-01-01。", "tags": ["白鹭支付", "Markdown格式"], "retrieval_hint": "白鹭 发布说明 标题", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100032, "content": "白鹭支付发布说明的变更条目按Added、Changed、Fixed三个英文小标题分组。", "tags": ["白鹭支付", "变更分类"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100033, "content": "白鹭支付的发布说明由用户提交到main分支后再由值班同事打标签。", "tags": ["白鹭支付", "分支流程"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100034, "content": "白鹭支付旧版发布说明曾放在docs/release-notes.md，2025年12月迁移后该文件只保留迁移链接。", "tags": ["白鹭支付", "旧路径"], "retrieval_hint": "白鹭 release notes 路径", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100035, "content": "用户个人demo仓库的说明文件叫CHANGELOG.md，和白鹭支付的RELEASE.md不是同一约定。", "tags": ["demo", "变更日志"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100036, "content": "白鹭支付设计团队的Figma发布页是视觉预览，不承载工程发布说明。", "tags": ["白鹭支付", "设计预览"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100037, "content": "同事陆遥在另一个项目用中文小标题写过发布说明，但白鹭支付团队没有采用那套标题。", "tags": ["陆遥", "其他项目"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"}
+      ],
+      "cases": [
+        {"caseID": "exp26-work-release-md-a", "query": {"currentText": "白鹭支付这次发布，我要在仓库里补说明。根目录那份文件的标题和变更分类怎么写？", "replyText": "", "history": []}, "requiredIDs": [2100031, 2100032], "allowedIDs": [2100030, 2100033], "forbiddenIDs": [2100034, 2100035, 2100036, 2100037], "allowAbstain": false, "subsets": ["normalRecall"], "metadata": {"reviewStatus": "draft", "annotationRationale": "保留原问题，只问版本标题和变更分类，2100031与2100032为必需；2100030的文件定位和2100033的提交流程可作补充，不把未问的文件名计入完整召回。旧路径、demo惯例、设计页及其他项目标题不适用于当前格式。"}},
+        {"caseID": "exp26-work-release-md-b", "query": {"currentText": "帮我回忆一下白鹭支付的release note模板，放哪儿，版本行长什么样，下面分哪几栏？", "replyText": "", "history": []}, "requiredIDs": [2100030, 2100031, 2100032], "allowedIDs": [2100033], "forbiddenIDs": [2100034, 2100035, 2100036, 2100037], "allowAbstain": false, "subsets": ["normalRecall"], "metadata": {"reviewStatus": "draft", "annotationRationale": "所问位置、版本行、分栏必须由2100030至2100032共同覆盖；提交main是可选背景。2100034已迁移，2100035属demo，2100036属设计，2100037属他人项目，均禁止。"}},
+        {"caseID": "exp26-work-release-md-c", "query": {"currentText": "白鹭支付要发版了，RELEASE.md那种写法再说一遍：文件在哪、标题如何标日期、改动按什么英文小节归类？", "replyText": "", "history": []}, "requiredIDs": [2100030, 2100031, 2100032], "allowedIDs": [2100033], "forbiddenIDs": [2100034, 2100035, 2100036, 2100037], "allowAbstain": false, "subsets": ["normalRecall"], "metadata": {"reviewStatus": "draft", "annotationRationale": "三项明确格式要求各对应一条必需事实；main分支流程可选。历史docs路径、个人demo、Figma页和其他项目中文标题都与当前项目无关，禁止。"}}
+      ]
+    },
+    {
+      "groupID": "exp26-work-terminal-alias",
+      "primaryCategory": "normalRecall",
+      "backgroundDomains": ["travel", "leisure"],
+      "memories": [
+        {"id": 2100040, "content": "用户在公司Windows办公机的PowerShell配置中，把启动青岚工单项目的脚本别名设为start-qinglan。", "tags": ["Windows", "PowerShell", "青岚工单"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100041, "content": "start-qinglan别名实际调用的是项目tools\\start-dev.ps1，而不是根目录的run.ps1。", "tags": ["青岚工单", "启动脚本"], "retrieval_hint": "青岚 启动别名 脚本", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100042, "content": "青岚工单本地启动脚本默认监听5178端口，用户前端调试需访问该端口。", "tags": ["青岚工单", "端口"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100043, "content": "用户把PowerShell个人配置备份在OneDrive\\work-profile目录，备份目录不是项目脚本目录。", "tags": ["PowerShell", "备份"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100044, "content": "2025年10月青岚工单曾用run.ps1启动，但该入口已经被tools/start-dev.ps1替换。", "tags": ["青岚工单", "旧入口"], "retrieval_hint": "青岚 run.ps1", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100045, "content": "用户在Linux家用机的shell别名也叫start-qinglan，但它指向个人学习项目，并非公司办公机配置。", "tags": ["Linux", "个人项目"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100046, "content": "青岚工单后端调试服务监听8010端口，不能把它当作前端页面入口。", "tags": ["青岚工单", "后端端口"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100047, "content": "同事周衡的Windows配置用start-qinglan-old别名启动自己的旧分支，用户不应照抄。", "tags": ["周衡", "旧分支"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"}
+      ],
+      "cases": [
+        {"caseID": "exp26-work-terminal-alias-a", "query": {"currentText": "在公司Windows机上打开青岚工单前端，我平时那个快捷命令叫什么、它跑哪份脚本、页面端口是多少？", "replyText": "", "history": []}, "requiredIDs": [2100040, 2100041, 2100042], "allowedIDs": [2100043, 2100044], "forbiddenIDs": [2100045, 2100046, 2100047], "allowAbstain": false, "subsets": ["normalRecall"], "metadata": {"reviewStatus": "draft", "annotationRationale": "办公机前端的别名、实际脚本、页面端口由2100040至2100042提供；2100043的配置备份可选。2100044虽提旧run.ps1，但明确说明已替换为tools/start-dev.ps1，也提供当前正确入口，应允许召回且保留新旧限定。Linux个人项目、后端端口及同事旧分支不能替代办公机设置。"}},
+        {"caseID": "exp26-work-terminal-alias-b", "query": {"currentText": "青岚那个本地页面怎么起？说的是办公Windows上的PowerShell shortcut，不是后端服务。", "replyText": "", "history": []}, "requiredIDs": [2100040, 2100042], "allowedIDs": [2100041, 2100043, 2100044], "forbiddenIDs": [2100045, 2100046, 2100047], "allowAbstain": false, "subsets": ["normalRecall"], "metadata": {"reviewStatus": "draft", "annotationRationale": "办公机前端的别名、实际脚本、页面端口由2100040至2100042提供；2100043的配置备份可选。2100044虽提旧run.ps1，但明确说明已替换为tools/start-dev.ps1，也提供当前正确入口，应允许召回且保留新旧限定。Linux个人项目、后端端口及同事旧分支不能替代办公机设置。本题仅问页面如何启动，快捷别名和访问端口足以执行；背后的脚本路径不是显式所问，保留为allowed，不能人为扩大required。"}},
+        {"caseID": "exp26-work-terminal-alias-c", "query": {"currentText": "我忘了青岚工单的启动入口：办公机上敲哪个PowerShell名字，背后执行什么，浏览器连哪个端口？", "replyText": "", "history": []}, "requiredIDs": [2100040, 2100041, 2100042], "allowedIDs": [2100043, 2100044], "forbiddenIDs": [2100045, 2100046, 2100047], "allowAbstain": false, "subsets": ["normalRecall"], "metadata": {"reviewStatus": "draft", "annotationRationale": "办公机前端的别名、实际脚本、页面端口由2100040至2100042提供；2100043的配置备份可选。2100044虽提旧run.ps1，但明确说明已替换为tools/start-dev.ps1，也提供当前正确入口，应允许召回且保留新旧限定。Linux个人项目、后端端口及同事旧分支不能替代办公机设置。"}}
+      ]
+    },
+    {
+      "groupID": "exp26-work-hint-export",
+      "primaryCategory": "misleadingHint",
+      "backgroundDomains": ["travel", "leisure"],
+      "memories": [
+        {"id": 2100080, "content": "苍梧数据项目的接口导出脚本位于tools/export-api.ts，用户在该项目中用它生成交付JSON。", "tags": ["苍梧", "接口导出"], "retrieval_hint": "苍梧 导出脚本", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100081, "content": "苍梧数据项目交付JSON的顶层键固定为schemaVersion、generatedAt、items。", "tags": ["苍梧", "JSON格式"], "retrieval_hint": "苍梧 JSON 顶层字段", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100082, "content": "苍梧导出脚本输出到dist/api-export.json，提交前不应手工改生成文件。", "tags": ["苍梧", "生成文件"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100083, "content": "苍梧接口的日期字段使用UTC ISO 8601字符串，例如2026-01-01T04:00:00Z。", "tags": ["苍梧", "日期格式"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100084, "content": "用户的照片压缩脚本也叫export-api，但它位于home-tools并输出ZIP，不属于苍梧项目。", "tags": ["个人脚本", "照片"], "retrieval_hint": "export-api JSON 字段", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100085, "content": "旧版苍梧脚本曾把日期写成本地时间，2025年11月后已改为UTC。", "tags": ["苍梧", "旧格式"], "retrieval_hint": "苍梧 日期 UTC", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100086, "content": "同事许澄负责的报表导出使用CSV，不产生苍梧接口交付JSON。", "tags": ["许澄", "报表"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100087, "content": "苍梧项目的README只建议运行导出脚本，没有把生成文件改名的例外规则。", "tags": ["苍梧", "README"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"}
+      ],
+      "cases": [
+        {"caseID": "exp26-work-hint-export-a", "query": {"currentText": "苍梧接口交付JSON怎么导出？我只记得有个脚本名像照片工具，但想确认实际输出文件和三个顶层字段。", "replyText": "", "history": []}, "requiredIDs": [2100080, 2100081, 2100082], "allowedIDs": [2100083, 2100085, 2100087], "forbiddenIDs": [2100084, 2100086], "allowAbstain": false, "subsets": ["misleadingHint"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100080给导出脚本，2100081给JSON顶层字段，2100082给输出路径。2100083的UTC日期格式可选；2100085明确已改UTC，不是当前错误事实；2100087说明README要求运行脚本且无改名例外，可作相关补充。这两条不得因含历史或README字样一律禁入。2100084的同名照片脚本和2100086的他人CSV不能回答苍梧JSON问题。"}},
+        {"caseID": "exp26-work-hint-export-b", "query": {"currentText": "要给苍梧交付一份接口JSON，别被同名个人脚本带偏：运行什么、文件落哪儿、根字段有哪些？", "replyText": "", "history": []}, "requiredIDs": [2100080, 2100081, 2100082], "allowedIDs": [2100083, 2100085, 2100087], "forbiddenIDs": [2100084, 2100086], "allowAbstain": false, "subsets": ["misleadingHint"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100080给导出脚本，2100081给JSON顶层字段，2100082给输出路径。2100083的UTC日期格式可选；2100085明确已改UTC，不是当前错误事实；2100087说明README要求运行脚本且无改名例外，可作相关补充。这两条不得因含历史或README字样一律禁入。2100084的同名照片脚本和2100086的他人CSV不能回答苍梧JSON问题。"}},
+        {"caseID": "exp26-work-hint-export-c", "query": {"currentText": "苍梧那个export-api到底生成什么？我关心交付JSON的schema、落盘名，不问旧版本时间格式。", "replyText": "", "history": []}, "requiredIDs": [2100081, 2100082], "allowedIDs": [2100080, 2100083, 2100085, 2100087], "forbiddenIDs": [2100084, 2100086], "allowAbstain": false, "subsets": ["misleadingHint"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100080给导出脚本，2100081给JSON顶层字段，2100082给输出路径。2100083的UTC日期格式可选；2100085明确已改UTC，不是当前错误事实；2100087说明README要求运行脚本且无改名例外，可作相关补充。这两条不得因含历史或README字样一律禁入。2100084的同名照片脚本和2100086的他人CSV不能回答苍梧JSON问题。本题已点名export-api，只问schema和落盘名，脚本路径2100080为可选定位，不列为额外必需。"}}
+      ]
+    },
+    {
+      "groupID": "exp26-work-hint-branch",
+      "primaryCategory": "misleadingHint",
+      "backgroundDomains": ["travel", "leisure"],
+      "memories": [
+        {"id": 2100090, "content": "栖霞Web项目的代码审查目标分支是main，用户的合并请求应以main为目标。", "tags": ["栖霞Web", "代码审查"], "retrieval_hint": "栖霞 MR 目标分支", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100091, "content": "栖霞Web项目的功能分支命名格式是feature/编号-短名。", "tags": ["栖霞Web", "分支命名"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100092, "content": "栖霞Web要求提交信息使用动词开头的英文短句，长度不超过72个字符。", "tags": ["栖霞Web", "提交信息"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100093, "content": "栖霞Web的CI在提交请求打开后自动运行，不需要用户手工推送一个ci分支。", "tags": ["栖霞Web", "CI"], "retrieval_hint": "栖霞 CI 分支", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100094, "content": "用户旅行照片仓库的默认分支叫main，但没有栖霞Web的审查规则。", "tags": ["照片仓库", "main"], "retrieval_hint": "默认分支 代码审查", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100095, "content": "栖霞Web 2025年9月曾把develop设为审查目标，后来已切换到main。", "tags": ["栖霞Web", "旧分支"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100096, "content": "同事周衡的插件项目使用branch/编号命名，不是栖霞Web的feature格式。", "tags": ["周衡", "插件"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100097, "content": "栖霞Web的发布标签由合并后机器人创建，不影响提交请求目标分支。", "tags": ["栖霞Web", "发布标签"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"}
+      ],
+      "cases": [
+        {"caseID": "exp26-work-hint-branch-a", "query": {"currentText": "栖霞Web我准备开MR，目标分支、我的功能分支怎么命名、提交标题有何格式？", "replyText": "", "history": []}, "requiredIDs": [2100090, 2100091, 2100092], "allowedIDs": [2100093, 2100097, 2100095], "forbiddenIDs": [2100094, 2100096], "allowAbstain": false, "subsets": ["misleadingHint"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100090、2100091、2100092分别回答目标分支、功能分支和提交格式。CI和发布标签为可选背景；2100095虽含旧develop，但明确已经切换main，同样支持当前目标，故应允许而非禁止。照片仓库的main和周衡插件命名与本项目无关，仍禁止。"}},
+        {"caseID": "exp26-work-hint-branch-b", "query": {"currentText": "别按我照片仓库那个main流程来，栖霞的代码审查该合到哪儿，分支前缀和commit写法是什么？", "replyText": "", "history": []}, "requiredIDs": [2100090, 2100091, 2100092], "allowedIDs": [2100093, 2100097, 2100095], "forbiddenIDs": [2100094, 2100096], "allowAbstain": false, "subsets": ["misleadingHint"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100090、2100091、2100092分别回答目标分支、功能分支和提交格式。CI和发布标签为可选背景；2100095虽含旧develop，但明确已经切换main，同样支持当前目标，故应允许而非禁止。照片仓库的main和周衡插件命名与本项目无关，仍禁止。"}},
+        {"caseID": "exp26-work-hint-branch-c", "query": {"currentText": "栖霞Web开功能MR前，帮我核一下现在的target、feature命名和英文提交句式，不要引用去年的develop。", "replyText": "", "history": []}, "requiredIDs": [2100090, 2100091, 2100092], "allowedIDs": [2100093, 2100097, 2100095], "forbiddenIDs": [2100094, 2100096], "allowAbstain": false, "subsets": ["misleadingHint"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100090、2100091、2100092分别回答目标分支、功能分支和提交格式。CI和发布标签为可选背景；2100095虽含旧develop，但明确已经切换main，同样支持当前目标，故应允许而非禁止。照片仓库的main和周衡插件命名与本项目无关，仍禁止。"}}
+      ]
+    },
+    {
+      "groupID": "exp26-work-reference-migration",
+      "primaryCategory": "reference",
+      "backgroundDomains": ["travel", "leisure"],
+      "memories": [
+        {"id": 2100100, "content": "2025年12月，青岚工单前端把构建工具从webpack迁移到Vite 6.0；当前新构建命令是pnpm build。", "tags": ["青岚工单", "Vite", "迁移"], "retrieval_hint": "青岚 构建迁移", "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100101, "content": "迁移前的青岚工单构建命令是npm run build:prod，只有旧分支仍保留该脚本。", "tags": ["青岚工单", "旧构建"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100102, "content": "青岚工单当前生产构建由Vite生成dist目录，部署脚本读取该目录。", "tags": ["青岚工单", "dist"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100103, "content": "用户曾在2025年11月记录webpack配置文件位置为config/webpack.prod.js。", "tags": ["青岚工单", "历史配置"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100104, "content": "同事许澄的管理后台仍使用webpack，但不是青岚工单前端。", "tags": ["许澄", "管理后台"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100105, "content": "青岚工单迁移记录写明，迁移后不再修改旧webpack配置来解决新构建问题。", "tags": ["青岚工单", "迁移规则"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100106, "content": "青岚工单的部署服务器仍是Linux，但这不改变本地构建工具选择。", "tags": ["青岚工单", "部署"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"},
+        {"id": 2100107, "content": "用户希望保留旧构建记录以便回滚，但回滚记录不是当前开发命令。", "tags": ["青岚工单", "回滚"], "scope_type": "global", "scope_id": "global", "enabled": true, "mode": "contextual"}
+      ],
+      "cases": [
+        {"caseID": "exp26-work-reference-migration-a", "query": {"currentText": "我翻到去年webpack的笔记了。现在青岚前端构建到底该用什么命令，旧配置还要不要改？", "replyText": "", "history": [{"content": "我刚翻到2025年11月的旧笔记：青岚前端用webpack，构建命令是npm run build:prod。", "timestamp": "2026-01-01T11:58:00", "direction": "incoming"}]}, "requiredIDs": [2100100, 2100105], "allowedIDs": [2100102, 2100106, 2100107, 2100103, 2100101], "forbiddenIDs": [2100104], "allowAbstain": false, "subsets": ["reference"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100100给当前Vite构建工具及pnpm build，2100105说明新构建问题不应改旧webpack配置。旧命令2100101和旧配置路径2100103在明确历史对照时可作相关背景，不能作为当前入口；dist、部署及回滚说明可选。2100104是他人后台，仍禁止。历史消息表示评估时钟前两分钟重新查看2025年11月笔记，既保留旧事实时间，也确保历史确实进入assisted query。本题所问只有现行构建命令及旧配置处置，旧命令的具体拼写不是额外必需。原问题并列询问开发和构建，但素材未提供开发服务器命令；删除未有事实支持的开发一词，修正题目范围，不制造对应事实。"}},
+        {"caseID": "exp26-work-reference-migration-b", "query": {"currentText": "之前那份webpack构建记录和我现在要做的青岚发布不一致，帮我判断现行命令以及旧webpack配置怎么处置。", "replyText": "", "history": [{"content": "我刚翻到2025年11月的旧笔记：青岚前端用webpack，构建命令是npm run build:prod。", "timestamp": "2026-01-01T11:58:00", "direction": "incoming"}]}, "requiredIDs": [2100100, 2100105], "allowedIDs": [2100102, 2100106, 2100107, 2100103, 2100101], "forbiddenIDs": [2100104], "allowAbstain": false, "subsets": ["reference"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100100给当前Vite构建工具及pnpm build，2100105说明新构建问题不应改旧webpack配置。旧命令2100101和旧配置路径2100103在明确历史对照时可作相关背景，不能作为当前入口；dist、部署及回滚说明可选。2100104是他人后台，仍禁止。历史消息表示评估时钟前两分钟重新查看2025年11月笔记，既保留旧事实时间，也确保历史确实进入assisted query。本题所问只有现行构建命令及旧配置处置，旧命令的具体拼写不是额外必需。"}},
+        {"caseID": "exp26-work-reference-migration-c", "query": {"currentText": "别直接照抄我之前的webpack笔记，青岚现在的构建链是什么，旧脚本和配置是否仍是修复入口？", "replyText": "", "history": [{"content": "我刚翻到2025年11月的旧笔记：青岚前端用webpack，构建命令是npm run build:prod。", "timestamp": "2026-01-01T11:58:00", "direction": "incoming"}]}, "requiredIDs": [2100100, 2100101, 2100105], "allowedIDs": [2100102, 2100106, 2100107, 2100103], "forbiddenIDs": [2100104], "allowAbstain": false, "subsets": ["reference"], "metadata": {"reviewStatus": "draft", "annotationRationale": "2100100给当前Vite构建工具及pnpm build，2100105说明新构建问题不应改旧webpack配置。旧命令2100101和旧配置路径2100103在明确历史对照时可作相关背景，不能作为当前入口；dist、部署及回滚说明可选。2100104是他人后台，仍禁止。历史消息表示评估时钟前两分钟重新查看2025年11月笔记，既保留旧事实时间，也确保历史确实进入assisted query。本题另问旧脚本是否仍是入口，因此2100101的仅旧分支保留条件也为必需。"}}
+      ]
+    }
+  ]
+}

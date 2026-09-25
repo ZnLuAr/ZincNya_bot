@@ -8,6 +8,7 @@ import pytest
 import json
 from unittest.mock import patch, mock_open
 from utils.llm.config import (
+    getMemorySelectorSettings,
     loadLLMConfig,
     saveLLMConfig,
     _boundedInt,
@@ -24,6 +25,46 @@ from utils.llm.config import (
     setKnowledgeMaxResults,
     setKnowledgeMinScore,
 )
+
+
+@pytest.mark.parametrize("key,value", [
+    ("memoryHybridSelector", "typo"), ("memorySelectorModel", ""),
+    ("memorySelectorProtocol", "message"), ("memorySelectorProtocol", "MESSAGES"),
+    ("memorySelectorProtocol", None), ("memorySelectorProtocol", True),
+    ("memorySelectorEffort", "invalid"), ("memorySelectorTimeoutSeconds", float("nan")),
+    ("memorySelectorTimeoutSeconds", float("inf")), ("memorySelectorTimeoutSeconds", 31),
+    ("memorySelectorTimeoutSeconds", 0), ("memorySelectorTimeoutSeconds", True),
+    ("memorySelectorTimeoutSeconds", None),
+])
+def test_memorySelectorRejectsInvalidSettings(key, value):
+    """非法配置必须在发送前失败，不能悄悄扩大选择期限。"""
+    with pytest.raises(ValueError, match="^selectorConfig$"):
+        getMemorySelectorSettings({key: value})
+
+
+def test_memorySelectorDefaultsStayDisabledAndThirtySeconds():
+    """默认 local，显式 llm 才能使用已批准的独立远程预算。"""
+    from utils.llm.config import _DEFAULT_CONFIG
+    assert _DEFAULT_CONFIG["memoryRetrievalMode"] == "legacy"
+    assert _DEFAULT_CONFIG["memoryEnabled"] is False
+    assert getMemorySelectorSettings({}) == {
+        "backend": "local", "protocol": "responses", "model": "gpt-5.6-terra",
+        "effort": "high", "timeoutSeconds": 30.0,
+    }
+    supplied = {"memoryHybridSelector": "llm", "memorySelectorTimeoutSeconds": "15"}
+    assert getMemorySelectorSettings(supplied)["timeoutSeconds"] == 15
+    assert supplied["memorySelectorTimeoutSeconds"] == "15"
+
+
+def test_memorySelectorMessagesRequiresExplicitProtocolWithoutChangingModelDefault():
+    """协议显式选择，配置读取不替用户换模型或修改原始快照。"""
+    supplied = {"memoryHybridSelector": "llm", "memorySelectorProtocol": "messages",
+                "memorySelectorModel": " claude-test ", "memorySelectorEffort": "medium"}
+    result = getMemorySelectorSettings(supplied)
+    assert result == {"backend": "llm", "protocol": "messages", "model": "claude-test",
+                      "effort": "medium", "timeoutSeconds": 30.0}
+    assert supplied["memorySelectorModel"] == " claude-test "
+    assert getMemorySelectorSettings({"memorySelectorProtocol": "messages"})["model"] == "gpt-5.6-terra"
 
 
 # ============================================================================

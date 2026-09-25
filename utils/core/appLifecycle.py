@@ -109,6 +109,8 @@ _logger = logging.getLogger(__name__)
 
 async def stopApp(app):
     """关闭 Telegram Application"""
+    # 清理先于updater停止，先阻止新检索；直接设事件以保留既有重启意图。
+    getStateManager().getShutdownEvent().set()
     for name, coro in [
         ("cleanupAllResources", cleanupAllResources()),
         ("updater.stop", app.updater.stop()),

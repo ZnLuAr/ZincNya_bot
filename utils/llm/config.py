@@ -12,6 +12,7 @@ settable 配置都会通过 _setConfig 加锁串行写盘（read-modify-write �
 import os
 import json
 import threading
+import math
 from enum import IntEnum
 from urllib.parse import urlsplit
 
@@ -19,6 +20,7 @@ from config import (
     LLM_CONFIG_PATH,
     LLM_PROMPTS_PATH,
     LLM_DEFAULT_MODEL,
+    LLM_MEMORY_SELECTOR_MAX_SECONDS,
     PROJECT_ROOT,
 )
 
@@ -56,6 +58,11 @@ _DEFAULT_CONFIG = {
     "memoryEnabled": False,
     "memoryAutoApprove": False,
     "memoryRetrievalMode": "legacy",
+    "memoryHybridSelector": "local",
+    "memorySelectorProtocol": "responses",
+    "memorySelectorModel": "gpt-5.6-terra",
+    "memorySelectorEffort": "high",
+    "memorySelectorTimeoutSeconds": 30.0,
     "urlReadEnabled": False,
     "urlReadMaxUrls": 3,
     "urlReadMaxBytes": 512 * 1024,
@@ -292,6 +299,32 @@ def setMemoryRetrievalMode(mode: str):
             runtime.notifyModeChanged()
     except Exception:
         pass
+
+
+def getMemorySelectorSettings(configSnapshot: dict) -> dict:
+    """验证单次请求的选择配置；非法值拒绝远程选择，不扩大等待预算。"""
+    backend = configSnapshot.get("memoryHybridSelector", _DEFAULT_CONFIG["memoryHybridSelector"])
+    protocol = configSnapshot.get("memorySelectorProtocol", _DEFAULT_CONFIG["memorySelectorProtocol"])
+    model = configSnapshot.get("memorySelectorModel", _DEFAULT_CONFIG["memorySelectorModel"])
+    effort = configSnapshot.get("memorySelectorEffort", _DEFAULT_CONFIG["memorySelectorEffort"])
+    timeout = configSnapshot.get("memorySelectorTimeoutSeconds", _DEFAULT_CONFIG["memorySelectorTimeoutSeconds"])
+    # 不把拼错的后端或非有限时限悄悄转成另一种远程行为。
+    if backend not in ("local", "llm") or protocol not in ("responses", "messages"):
+        raise ValueError("selectorConfig")
+    if not isinstance(model, str) or not model.strip() or len(model) > 128:
+        raise ValueError("selectorConfig")
+    if effort not in ("low", "medium", "high", "xhigh", "max", "ultra"):
+        raise ValueError("selectorConfig")
+    if isinstance(timeout, bool):
+        raise ValueError("selectorConfig")
+    try:
+        timeout = float(timeout)
+    except (ValueError, TypeError, OverflowError):
+        raise ValueError("selectorConfig") from None
+    if not math.isfinite(timeout) or not 0 < timeout <= LLM_MEMORY_SELECTOR_MAX_SECONDS:
+        raise ValueError("selectorConfig")
+    return {"backend": backend, "protocol": protocol, "model": model.strip(),
+            "effort": effort, "timeoutSeconds": timeout}
 
 
 

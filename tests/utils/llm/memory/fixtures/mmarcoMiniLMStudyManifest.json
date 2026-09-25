@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "task": "text-pair-relevance",
+  "status": "experimental",
+  "repository": "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+  "revision": "1427fd652930e4ba29e8149678df786c240d8825",
+  "license": "apache-2.0",
+  "maxTokens": 256,
+  "modelFile": "onnx/model_quint8_avx2.onnx",
+  "tokenizerFile": "tokenizer.json",
+  "padToken": "<pad>",
+  "source": {
+    "modelCard": "https://huggingface.co/cross-encoder/mmarco-mMiniLMv2-L12-H384-v1/blob/1427fd652930e4ba29e8149678df786c240d8825/README.md",
+    "artifactMetadata": "https://huggingface.co/api/models/cross-encoder/mmarco-mMiniLMv2-L12-H384-v1/tree/1427fd652930e4ba29e8149678df786c240d8825?recursive=true",
+    "downloadMirror": "https://hf-mirror.com",
+    "baseModel": "nreimers/mMiniLMv2-L12-H384-distilled-from-XLMR-Large",
+    "trainingDataset": "unicamp-dl/mmarco",
+    "languageEvidence": "固定版本模型卡列出 zh；训练集为 MS MARCO 经机器翻译得到的 14 语 mMARCO，不等于中文个人记忆任务效果已验证。"
+  },
+  "compatibility": {
+    "architecture": "XLMRobertaForSequenceClassification",
+    "configuredLabelCount": 1,
+    "padTokenID": 1,
+    "tokenizerPairCheck": "中文 query/content 成对编码成功，未出现 unk；按 longest_first 截断到 256 tokens。",
+    "onnxGraphIOVerified": false,
+    "modelExecutionVerified": false,
+    "note": "尚未创建推理 session；单 logit 由 config 的单标签声明推断，ONNX 实际输入输出须在受内存限制的首次实验中验证。"
+  },
+  "resourceStatus": {
+    "budgetMiB": 512,
+    "peakRSSVerified": false,
+    "note": "预算针对整个实验进程，包括 embedding、reranker、tokenizer 和运行时；文件大小不是峰值内存。"
+  },
+  "artifacts": [
+    {
+      "path": "onnx/model_quint8_avx2.onnx",
+      "size": 118620016,
+      "sha256": "6c2513767fb63d008a4377bef7a7a3555433d9436342bb53e35a3a72ffc52d4b",
+      "sourceHashType": "lfs-sha256"
+    },
+    {
+      "path": "tokenizer.json",
+      "size": 17082660,
+      "sha256": "62c24cdc13d4c9952d63718d6c9fa4c287974249e16b7ade6d5a85e7bbb75626",
+      "sourceHashType": "lfs-sha256"
+    },
+    {
+      "path": "config.json",
+      "size": 891,
+      "sha256": "cc2cfe51aa3fd759d21d21acf5dfd6994aa67a3c9210636d22e143699d336c77",
+      "sourceGitBlobSha1": "43ac97f1bef372d4f1d30a32f9a84baffcf6575d"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "size": 435,
+      "sha256": "e7fbfbfa6347b4e414c1cee50d142e2c2f9a895dad68b068ae83a8b564c3837e",
+      "sourceGitBlobSha1": "b59159d44c6bd4b1d9f7ae4f8da028da4238e06e"
+    },
+    {
+      "path": "special_tokens_map.json",
+      "size": 239,
+      "sha256": "378eb3bf733eb16e65792d7e3fda5b8a4631387ca04d2015199c4d4f22ae554d",
+      "sourceGitBlobSha1": "2ea7ad0e45a9d1d1591782ba7e29a703d0758831"
+    },
+    {
+      "path": "README.md",
+      "size": 2278,
+      "sha256": "474736a65d6393a060119a8dc304563af67af4d8d86ccfee4a05dd0df107fc11",
+      "sourceGitBlobSha1": "c0f626ab888d9512bc57b224b13ff97ca93e3cb0"
+    }
+  ]
+}

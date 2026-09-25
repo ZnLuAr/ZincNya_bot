@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "repository": "Xenova/bge-base-zh-v1.5",
+  "revision": "71e50dc531959f9e04ebf190ea25b00261a0a186",
+  "encodingVersion": "bge-base-zh-v1.5-int8-cls-base-hint-v2-study",
+  "queryPrefix": "为这个句子生成表示以用于检索相关文章：",
+  "maxTokens": 256,
+  "embeddingDimension": 768,
+  "pooling": "cls",
+  "normalization": "l2",
+  "specialTokens": {"cls": "[CLS]", "sep": "[SEP]", "pad": "[PAD]"},
+  "modelFile": "onnx/model_quantized.onnx",
+  "artifacts": [
+    {
+      "path": "onnx/model_quantized.onnx",
+      "size": 102868746,
+      "sha256": "b665f3bba56c3119bc76ba131ebcc544d720a7408cb11581bdf354aaa0198d43"
+    },
+    {
+      "path": "tokenizer.json",
+      "size": 439124,
+      "sha256": "7dfbf1966ebf99d471c3796e9b457329d2b2182b817e144f1e904b957745c839"
+    }
+  ]
+}
