@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scripts/evaluateMemory.py
+scripts/llmMemory/evaluateMemory.py
 
 回答一个问题：hybrid 检索的分数阈值该定多少、定完效果好不好。
 
@@ -35,7 +35,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import psutil

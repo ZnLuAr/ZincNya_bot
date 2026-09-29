@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts.evaluateMemory import (
+from scripts.llmMemory.evaluateMemory import (
     EvaluationError,
     _chooseThreshold,
     _calibrationObservations,
@@ -753,7 +753,7 @@ def test_largeMarginDoesNotBypassAbsoluteThreshold():
 
 def test_marginStudyShowsJointThresholdTradeoffsWithoutScoringHoldout(tmp_path, monkeypatch):
     """真实回放应同时暴露重校准救回的事实和 margin 删掉的共同必要事实。"""
-    from scripts import evaluateMemory as evaluationModule
+    from scripts.llmMemory import evaluateMemory as evaluationModule
 
     rawCases = []
     for caseID in ("multi", "clear", "recover", "ambiguous-wrong", "clear-wrong"):
@@ -830,7 +830,7 @@ def test_marginStudyRequiresBothBoundaryDistributions():
 @pytest.mark.parametrize("target", ["fixture", "manifest", "calibration"])
 def test_marginCliProtectsInputsBeforeLoadingEncoder(tmp_path, monkeypatch, target):
     """报告不能覆盖输入或正式阈值，路径错误须在加载 encoder 前发现。"""
-    from scripts import evaluateMemory as evaluationModule
+    from scripts.llmMemory import evaluateMemory as evaluationModule
 
     casesPath = tmp_path / "cases.json"
     casesPath.write_text("input sentinel", encoding="utf-8")

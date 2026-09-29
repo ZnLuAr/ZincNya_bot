@@ -18,7 +18,7 @@ from pathlib import Path
 import psutil
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
 POLL_SECONDS = 0.02
 PROBE_TIMEOUT_SECONDS = 120
@@ -63,7 +63,7 @@ def worker(args) -> int:
 
     try:
         stage("worker-imports-start")
-        from scripts.studyMemoryRetrieval import StudyReranker
+        from scripts.llmMemory.studyMemoryRetrieval import StudyReranker
 
         stage("worker-imports-complete")
         reranker = StudyReranker(args.model_dir, args.manifest, runtimeProfile="low-memory", stageObserver=stage)
@@ -196,7 +196,7 @@ def main() -> int:
                    "--output", str(output.resolve())]
         report = supervise(command)
         report["manifestSha256"] = manifestHash
-        report["studyScriptSha256"] = hashlib.sha256((PROJECT_ROOT / "scripts/studyMemoryRetrieval.py").read_bytes()).hexdigest()
+        report["studyScriptSha256"] = hashlib.sha256((PROJECT_ROOT / "scripts/llmMemory/studyMemoryRetrieval.py").read_bytes()).hexdigest()
         output.parent.mkdir(parents=True, exist_ok=True)
         temporary = output.with_suffix(output.suffix + ".tmp")
         temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

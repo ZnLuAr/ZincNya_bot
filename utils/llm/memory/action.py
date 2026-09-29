@@ -171,6 +171,19 @@ def _normalizeTags(tags) -> Optional[list[str]]:
     return result
 
 
+def _optionalInt(raw, field: str) -> Optional[int]:
+    """把模型给的整数字段转为 int；缺省返回 None，布尔值直接拒绝。
+
+    JSON 的 true/false 在 Python 里是 bool，而 int(True) == 1：不拦下来，
+    priority 会被悄悄当成 1，memory_id 会误指 #1。
+    """
+    if raw in (None, ""):
+        return None
+    if isinstance(raw, bool):
+        raise ValueError(f"{field} 必须是整数")
+    return int(raw)
+
+
 def _parseActionDict(data: dict) -> MemoryAction:
     """将模型的 snake_case JSON 对象规范化为内部的 `MemoryAction`。"""
     if not isinstance(data, dict):
@@ -187,17 +200,8 @@ def _parseActionDict(data: dict) -> MemoryAction:
     contentRaw = data.get("content")
     content = None if contentRaw is None else str(contentRaw).strip()
 
-    priorityRaw = data.get("priority")
-    if priorityRaw in (None, ""):
-        priority = None
-    else:
-        priority = int(priorityRaw)
-
-    memoryIDRaw = data.get("memory_id")
-    if memoryIDRaw in (None, ""):
-        memoryID = None
-    else:
-        memoryID = int(memoryIDRaw)
+    priority = _optionalInt(data.get("priority"), "priority")
+    memoryID = _optionalInt(data.get("memory_id"), "memory_id")
 
     reason = str(data.get("reason", "")).strip()
 

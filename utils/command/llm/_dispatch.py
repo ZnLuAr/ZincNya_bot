@@ -235,7 +235,7 @@ def getHelp():
             "/llm memory -autoapprove             切换普通 global contextual 自动批准\n"
             "/llm memory list                     列出所有启用的 memory\n"
             "/llm memory del 3                    删除 memory #3\n"
-            "/llm memory edit -mid 1 -priority 10\n"
+            "/llm memory edit -mid 1 -priority 3\n"
             "/llm visionmodel switch claude-sonnet-4-6\n"
             "/llm memory add -scope global -text '偏好简体中文'\n"
             "/llm knowledge reindex --force       强制重建知识库索引\n"

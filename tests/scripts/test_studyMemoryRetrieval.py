@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts import studyMemoryRetrieval as study
+from scripts.llmMemory import studyMemoryRetrieval as study
 from tests.scripts.test_evaluateMemory import _case
 
 

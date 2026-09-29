@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from scripts.memoryModel import (
+from scripts.llmMemory.memoryModel import (
     MemoryEncoderError,
     buildArtifactURL,
     installModel,
@@ -177,7 +177,7 @@ def test_installModelRollsBackWholeDirectoryWhenPublishFails(tmp_path):
         return realReplace(source, destination)
 
     with (
-        patch("scripts.memoryModel.os.replace", side_effect=_failStagingPublish),
+        patch("scripts.llmMemory.memoryModel.os.replace", side_effect=_failStagingPublish),
         pytest.raises(OSError, match="publish interrupted"),
     ):
         installModel(modelDir, manifestPath, opener=_opener)
@@ -208,7 +208,7 @@ def test_installModelKeepsOldDirectoryWhenBackupMoveFails(tmp_path):
         return realReplace(source, destination)
 
     with (
-        patch("scripts.memoryModel.os.replace", side_effect=_failBackupMove),
+        patch("scripts.llmMemory.memoryModel.os.replace", side_effect=_failBackupMove),
         pytest.raises(OSError, match="backup interrupted"),
     ):
         installModel(modelDir, manifestPath, opener=_opener)
@@ -241,7 +241,7 @@ def test_installModelPreservesBackupWhenRollbackFails(tmp_path):
         return realReplace(source, destination)
 
     with (
-        patch("scripts.memoryModel.os.replace", side_effect=_failPublishAndRollback),
+        patch("scripts.llmMemory.memoryModel.os.replace", side_effect=_failPublishAndRollback),
         pytest.raises(MemoryEncoderError, match="旧安装保留于"),
     ):
         installModel(modelDir, manifestPath, opener=_opener)

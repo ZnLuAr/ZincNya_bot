@@ -220,10 +220,15 @@ async def test_llmUnconfiguredTransportMakesNoNetworkAndRetainsPinned(llmHarness
     assert result.diagnostics["selectorFailure"] == "selectorUnconfigured"
 
 
-async def test_llmInvalidBackendAndDeadlineDoNotSend(llmHarness):
-    """无效后端与超过授权的时限均在读取候选之前拒绝。"""
-    for override in ({"memoryHybridSelector": "typo"}, {"memorySelectorTimeoutSeconds": 31}):
-        await _retrieveWithLLM(llmConfig={"memoryRetrievalMode": "hybrid", "memoryHybridSelector": "llm", **override})
+@pytest.mark.parametrize("override", [
+    {"memoryHybridSelector": "typo"}, {"memorySelectorTimeoutSeconds": 31},
+    {"memorySelectorProtocol": "message"}, {"memorySelectorEffort": "turbo"}, {"memorySelectorModel": " "},
+])
+async def test_llmInvalidSelectorConfigDoesNotSend(llmHarness, override):
+    """无效后端或选择配置在读取候选之前拒绝，原因统一记为 selectorConfig。"""
+    result = await _retrieveWithLLM(
+        llmConfig={"memoryRetrievalMode": "hybrid", "memoryHybridSelector": "llm", **override})
+    assert result.diagnostics["degradedReasons"] == ["selectorConfig"]
     assert not llmHarness.requests and llmHarness.dbRead.await_count == 0
     assert retrievalModule._activeRetrievals == 0
 

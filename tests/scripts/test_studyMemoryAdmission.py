@@ -12,7 +12,7 @@ import pytest
 
 # 独立执行该文件也禁止配置导入读取真实 .env。
 with patch("dotenv.load_dotenv", return_value=False), patch.dict(os.environ, {"BOT_TOKEN": "offline-fixture-test"}):
-    from scripts import studyMemoryAdmission as admission
+    from scripts.llmMemory import studyMemoryAdmission as admission
     from tests.scripts.test_evaluateMemory import _case
 
 

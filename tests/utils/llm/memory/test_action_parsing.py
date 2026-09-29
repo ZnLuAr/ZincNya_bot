@@ -170,6 +170,17 @@ async def test_parse_errors_do_not_logMemoryBody(mockLog):
 # 基线测试 — 正常路径
 # ===========================================================================
 
+@pytest.mark.parametrize("payload", [
+    '{"action": "add", "scope_type": "global", "scope_id": "global", "content": "x", "priority": true}',
+    '{"action": "delete", "scope_type": "global", "scope_id": "global", "memory_id": true}',
+])
+def test_booleanIntegerFieldsAreRejected(payload):
+    """JSON true 不能当作整数 1：priority 会被提级，memory_id 会误指 #1。"""
+    cleaned, actions = parseMemoryActions(f"<MEMORY_ACTION>{payload}</MEMORY_ACTION>")
+    assert actions == []
+    assert "<MEMORY_ACTION>" not in cleaned
+
+
 def test_normal_path_strips_memory_blocks():
     """验证正常路径（非 retry）能正确清理"""
     text = "回复内容\n\n<MEMORY_ACTION>\n{\"action\":\"add\",\"scope_type\":\"global\",\"scope_id\":\"global\",\"content\":\"测试\"}\n</MEMORY_ACTION>"

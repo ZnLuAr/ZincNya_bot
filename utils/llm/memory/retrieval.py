@@ -1079,7 +1079,13 @@ async def retrieveMemoryContext(
             return MemoryRetrievalResult(diagnostics=diagnostics)
         useLLM = mode == "hybrid" and backend == "llm"
         if useLLM:
-            selectorSettings = getMemorySelectorSettings(configSnapshot)
+            try:
+                selectorSettings = getMemorySelectorSettings(configSnapshot)
+            except ValueError:
+                # 与未知后端同一原因码：配置错误要能从 diagnostics 直接定位，
+                # 不能落到外层兜底后只剩异常类名 ValueError。
+                _recordDegradedReason(diagnostics, "selectorConfig")
+                return MemoryRetrievalResult(diagnostics=diagnostics)
             selectorOwner = getStateManager().getMemoryRuntime()
             if selectorOwner is None or not selectorOwner.registerSelectorRetrieval(lease):
                 _recordDegradedReason(diagnostics, "selectorRuntimeUnavailable")

@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from scripts import buildMemoryCalibration as builder
+from scripts.llmMemory import buildMemoryCalibration as builder
 from tests.scripts.test_evaluateMemory import _case
 
 

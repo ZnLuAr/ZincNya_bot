@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts import studyMemoryPairPipeline as pipeline
-from scripts import studyMemoryRetrieval as study
+from scripts.llmMemory import studyMemoryPairPipeline as pipeline
+from scripts.llmMemory import studyMemoryRetrieval as study
 from tests.scripts.test_evaluateMemory import _case
 
 
@@ -207,8 +207,8 @@ def _cliFixture(tmpPath, monkeypatch, *, failedStage=None, probeOnly=False):
     _writeJSON(casesPath, {"cases": fixture.raw + [{"split": "holdout", "broken": "never-normalize-or-score"}]})
     pairManifest = tmpPath / "pair.json"
     _writeJSON(pairManifest, {"revision": "pair-revision"})
-    scripts = tmpPath / "scripts"
-    scripts.mkdir()
+    scripts = tmpPath / "scripts" / "llmMemory"
+    scripts.mkdir(parents=True)
     for name in ("studyMemoryRetrieval.py", "probeMemoryReranker.py"):
         (scripts / name).write_text("# isolated test source\n", encoding="utf-8")
     monkeypatch.setattr(pipeline, "PROJECT_ROOT", tmpPath)

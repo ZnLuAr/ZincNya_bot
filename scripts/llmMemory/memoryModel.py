@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-scripts/memoryModel.py
+scripts/llmMemory/memoryModel.py
 
 安装或校验固定版本的本地 memory 语义模型。
 
-用法：`python scripts/memoryModel.py install` / `verify`。
+用法：`python scripts/llmMemory/memoryModel.py install` / `verify`。
 模型身份（仓库 / 完整 commit SHA / 逐产物 SHA-256）以
 modelManifest.json 为准，从 Hugging Face 按 revision 下载——不取
 latest、不接受部分成功：install 在同级临时目录完整下载并校验后，
@@ -24,7 +24,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import LLM_MEMORY_MODEL_DIR, LLM_MEMORY_MODEL_MANIFEST_PATH

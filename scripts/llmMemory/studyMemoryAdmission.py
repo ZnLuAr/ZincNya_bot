@@ -15,11 +15,11 @@ from collections import Counter
 from pathlib import Path
 from statistics import median
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import LLM_MEMORY_CALIBRATION_PATH, LLM_MEMORY_MODEL_DIR, LLM_MEMORY_MODEL_MANIFEST_PATH
-from scripts import studyMemoryRetrieval as study
+from scripts.llmMemory import studyMemoryRetrieval as study
 from utils.llm.memory.lexical import tokenizeMemoryText
 from utils.llm.memory.retrieval import buildQueryTexts
 

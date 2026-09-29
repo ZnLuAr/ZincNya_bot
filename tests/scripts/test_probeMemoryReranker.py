@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts import probeMemoryReranker as probe
-from scripts import studyMemoryRetrieval as study
+from scripts.llmMemory import probeMemoryReranker as probe
+from scripts.llmMemory import studyMemoryRetrieval as study
 
 
 
@@ -83,8 +83,8 @@ def test_cliRejectsManifestCollisionBeforeLaunchingWorker(tmp_path, monkeypatch,
 def test_cliWritesResourceStatusAndInputDigests(tmp_path, monkeypatch, status):
     """Only a complete resource probe exits successfully; reports bind their inputs."""
     monkeypatch.setattr(probe, "PROJECT_ROOT", tmp_path)
-    script = tmp_path / "scripts/studyMemoryRetrieval.py"
-    script.parent.mkdir()
+    script = tmp_path / "scripts/llmMemory/studyMemoryRetrieval.py"
+    script.parent.mkdir(parents=True)
     script.write_bytes(b"fake study source")
     manifest = tmp_path / "manifest.json"
     manifest.write_text('{"revision":"test-revision"}', encoding="utf-8")

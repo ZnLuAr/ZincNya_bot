@@ -13,11 +13,11 @@ import sys
 import time
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import LLM_MEMORY_CALIBRATION_PATH, LLM_MEMORY_MODEL_DIR, LLM_MEMORY_MODEL_MANIFEST_PATH
-from scripts import evaluateMemory as evaluation
+from scripts.llmMemory import evaluateMemory as evaluation
 from utils.llm.memory.encoder import (
     MemoryEncoder, calculateFileSha256, resolveModelArtifactPath,
 )

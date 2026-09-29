@@ -14,11 +14,11 @@ from pathlib import Path
 import sys
 import unicodedata
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import LLM_MEMORY_CALIBRATION_PATH, LLM_MEMORY_MODEL_MANIFEST_PATH
-from scripts import evaluateMemory as evaluation
+from scripts.llmMemory import evaluateMemory as evaluation
 
 
 FIXTURE_ROOT = PROJECT_ROOT / "tests/utils/llm/memory/fixtures"

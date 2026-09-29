@@ -16,10 +16,10 @@ import tempfile
 import time
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts import probeMemoryReranker as probe
+from scripts.llmMemory import probeMemoryReranker as probe
 
 
 STUDY_TIMEOUT_SECONDS = 1800
@@ -34,7 +34,7 @@ def loadStudy():
 
     dotenv.load_dotenv = lambda *a, **k: False
     os.environ["BOT_TOKEN"] = "offline-fixture-test"
-    from scripts import studyMemoryRetrieval as study
+    from scripts.llmMemory import studyMemoryRetrieval as study
 
     return study
 
@@ -268,8 +268,8 @@ def main() -> int:
                   "status": "running", "productionEligible": False, "trials": [],
                   "runtimeProfile": "low-memory-serial-tokenization", "modelManifestSha256": fileDigest(args.manifest),
                   "scriptSha256": fileDigest(__file__),
-                  "studyScriptSha256": fileDigest(PROJECT_ROOT / "scripts/studyMemoryRetrieval.py"),
-                  "supervisorScriptSha256": fileDigest(PROJECT_ROOT / "scripts/probeMemoryReranker.py"),
+                  "studyScriptSha256": fileDigest(PROJECT_ROOT / "scripts/llmMemory/studyMemoryRetrieval.py"),
+                  "supervisorScriptSha256": fileDigest(PROJECT_ROOT / "scripts/llmMemory/probeMemoryReranker.py"),
                   "pythonVersion": platform.python_version(), "stages": [],
                   "note": "仅串行离线流程；父子采样不是操作系统硬限额，不证明模型同时常驻或上线质量。"}
         if args.probe_only:
