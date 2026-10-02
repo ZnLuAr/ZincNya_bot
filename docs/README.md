@@ -7,6 +7,7 @@
 ### Memory（长期记忆）
 - **[llm-memory.md](llm-memory.md)** — Memory 系统主文档：架构、核心概念、使用指南、FAQ
 - **[llm-memory-hybrid.md](llm-memory-hybrid.md)** — Hybrid 混合检索详细文档：算法原理、实验数据、上线指南、故障排查
+- **[../SMOKE_TEST.md](../SMOKE_TEST.md)** — Memory 冒烟测试：自动化、部署、灰度与回滚检查
 
 ### 其他 LLM 模块
 - **[llm-handler.md](llm-handler.md)** — LLM Handler 架构：从收到消息到发出回复的完整流水线
@@ -33,10 +34,7 @@
 
 ## 内部文档
 
-以下文档记录了特定功能的验收测试或扩展研究：
-
-- **[llm-memory-smoke-test.md](llm-memory-smoke-test.md)** — Memory 系统冒烟测试
-- **[llm-memory-calibration-expansion.md](llm-memory-calibration-expansion.md)** — Memory 校准数据集扩充
+特定批次的实验材料已归档；当前验收入口见 [Memory 冒烟测试](../SMOKE_TEST.md)。
 
 ---
 

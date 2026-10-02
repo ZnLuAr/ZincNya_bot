@@ -684,8 +684,7 @@ python scripts/merge_data.py --source /path/to/other/data --apply
 - [**上下文组装**](docs/llm-context-assembly.md) — Query Reinforcement + 三层结构设计
 - [**长期记忆**](docs/llm-memory.md) — Memory 系统主文档：架构、核心概念、使用指南、FAQ
 - [**Memory Hybrid 检索**](docs/llm-memory-hybrid.md) — 混合检索详细文档：算法原理、实验数据、上线指南
-- [**Memory 冒烟测试**](docs/llm-memory-smoke-test.md) — 校准、运行时、故障注入与灰度验收清单
-- [**Memory Calibration 研究**](docs/llm-memory-calibration-expansion.md) — 扩充素材、分组验证结果与待审标注
+- [**Memory 验收门槛**](docs/llm-memory-hybrid.md#验收门槛) — 四层验收、故障注入与回滚
 - [**知识库（RAG）**](docs/llm-knowledge.md) — BM25 检索、分词、评分机制
 - [**知识库内容编写**](docs/llm-knowledge-authoring.md) — 分类规范、frontmatter 字段说明
 

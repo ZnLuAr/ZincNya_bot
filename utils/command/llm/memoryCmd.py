@@ -37,14 +37,21 @@ from .._helpRender import renderSubcommands
 # 子命令速查表（case _ 提示的数据源；新增子命令时同步此处与 match 分支）
 _MEMORY_SUBCOMMANDS = {
     "-on | -off | -once": "开启 / 关闭记忆模式，或仅下一次带入历史",
-    "-autoapprove": "切换普通 global contextual 自动批准（其他 action 仍审核）",
-    "list": "列出记忆条目及 mode/hint",
-    "add": "新增记忆条目（支持 -mode / -hint）",
-    "edit": "编辑记忆条目（支持 -mode / -hint / -clearhint）",
+    "-autoapprove": "切换自动批准（global contextual 操作无需审核，其他仍需）",
+    "list": "列出记忆条目（-scope / -id / -all / -limit）",
+    "add": "新增记忆（-scope / -id / -text / -tags / -priority / -mode / -hint / -off）",
+    "edit": "编辑记忆（-mid / -text / -tags / -priority / -enabled / -source / -mode / -hint / -clearhint）",
     "del <id>": "删除一条记忆",
-    "retrieval <legacy|hybrid>": "切换检索模式（不会安装模型）",
-    "status": "显示检索校准、运行时与缓存状态",
-    "ui": "打开 Memory 管理界面",
+    "retrieval <legacy|hybrid>": "切换检索模式（hybrid 需先安装模型和依赖）",
+    "status": "显示检索模式、校准状态、运行时与缓存诊断",
+    "ui": "打开 Memory 管理界面（TUI）",
+}
+
+# 用法提示文本（错误时引用，保持与 _MEMORY_SUBCOMMANDS 同步）
+_MEMORY_USAGE = {
+    "flags": "-on | -off | -once | -autoapprove",
+    "add": "/llm memory add -scope <{global|chat|user|session}> [-id <scopeID>] -text <content> [-tags ...] [-priority <0-3>] [-mode <contextual|pinned>] [-hint <text>] [-off]",
+    "edit": "/llm memory edit -mid <id> [-text <内容>] [-tags <标签...>] [-priority <n>] [-enabled <on|off>] [-source <manual|inferred>] [-mode <contextual|pinned>] [-hint <text> | -clearhint]",
 }
 
 _MEMORY_LIST_DEFAULTS = {
@@ -118,7 +125,7 @@ async def _handleMemoryFlags(action):
         newState = "开启" if not current else "关闭"
         await logAction("System", f"LLM 记忆自动批准{newState}", "OK", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
     else:
-        print(f"❌ 给出的参数 {val} 是无效的（{{-on|-off|-once|-autoapprove}}）\n")
+        print(f"❌ 无效参数 {val}，可用选项：{_MEMORY_USAGE['flags']}\n")
 
 
 async def _handleMemoryList(args):
@@ -156,7 +163,7 @@ async def _handleMemoryAdd(args):
     scopeType = parsed["scope"]
     content = parsed["text"]
     if not scopeType or scopeType is True or not content or content is True:
-        print("memory add 的用法应该是：\n    /llm memory add -scope <{global|chat|user|session}> [-id <scopeID>] -text <content>")
+        print(f"❌ 缺少必需参数，用法：\n    {_MEMORY_USAGE['add']}\n")
         return
     if parsed["mode"] is True or parsed["hint"] is True:
         print("❌ -mode 与 -hint 都必须提供具体值的说\n")
@@ -186,7 +193,7 @@ async def _handleMemoryEdit(args):
     parsed = _parseMemoryOptions(_MEMORY_EDIT_DEFAULTS, _MEMORY_EDIT_ALIASES, args)
     memoryID = parsed["mid"]
     if not memoryID or memoryID is True:
-        print("memory edit 的用法应该是：\n    /llm memory edit -mid <id> [-text <内容>] [-tags <标签...>] [-priority <n>] [-enabled <on|off>]")
+        print(f"❌ 缺少必需参数，用法：\n    {_MEMORY_USAGE['edit']}\n")
         return
     if parsed["hint"] is not None and parsed["clearhint"] is not None:
         print("❌ -hint 与 -clearhint 不能同时使用的说\n")

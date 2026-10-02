@@ -21,6 +21,8 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch, AsyncMock
 
+from config import LLM_MEMORY_CONTEXT_MAX_CHARS
+
 from utils.llm.memory.database import (
     buildMemoryContextBlock,
     retrieveMemories,
@@ -499,7 +501,7 @@ async def test_llmEmptyQueryNeverRequestsNetwork(llmHarness):
 
 async def test_llmRenderingDropsWholeItemsAndMatchesBlock(llmHarness):
     """多条长记忆预算不足时整条丢弃，items 与最终块一致。"""
-    llmHarness.rows = [_candidate(index, content=f"记忆{index}：" + "正文" * 200) for index in range(2, 6)]
+    llmHarness.rows = [_candidate(index, content=f"记忆{index}：" + "正文" * 400) for index in range(2, 6)]
     llmHarness.primary, llmHarness.optional = [2, 3, 4, 5], []
     # fake 响应映射须使用同一组内容；此处用协议边界返回实际句柄。
     async def allPrimary(body, **options):
@@ -518,7 +520,7 @@ async def test_llmRenderingDropsWholeItemsAndMatchesBlock(llmHarness):
     with patch.object(selectionClient, "requestMemorySelection", allPrimary):
         result = await _retrieveWithLLM()
     assert 0 < len(result.items) < 4
-    assert len(result.contextBlock) <= 1500
+    assert len(result.contextBlock) <= LLM_MEMORY_CONTEXT_MAX_CHARS
     assert {int(value) for value in re.findall(r"id=(\d+)", result.contextBlock)} == {row["id"] for row in result.items}
 
 
@@ -1092,14 +1094,14 @@ def test_lexicalAdmissionDoesNotCreateSemanticRrfContribution():
 
 def test_renderMemoryContextHonorsHardBudgetAndSkipsOversizedFact():
     contextual = [
-        _candidate(1, content="长" * 1500),
+        _candidate(1, content="长" * (LLM_MEMORY_CONTEXT_MAX_CHARS + 200)),
         _candidate(2, content="短事实"),
     ]
 
     items, block, diagnostics = renderMemoryContext([], contextual)
 
     assert [item["id"] for item in items] == [2]
-    assert len(block) <= 1500
+    assert len(block) <= LLM_MEMORY_CONTEXT_MAX_CHARS
     assert "短事实" in block
     assert "不应进入最终上下文" not in block
     assert diagnostics["contextualBudgetDropped"] == 1
@@ -1111,7 +1113,23 @@ def test_renderMemoryContextCanSelectMoreThanTenShortFacts():
     items, block, _ = renderMemoryContext([], contextual)
 
     assert len(items) > 10
-    assert len(block) <= 1500
+    assert len(block) <= LLM_MEMORY_CONTEXT_MAX_CHARS
+
+
+def test_renderMemoryContextUsesExpandedPinnedBudget():
+    """扩大的 pinned 预算允许多条常驻事实，但仍保留硬上限。"""
+    pinned = [
+        _candidate(index, content="常" * 200, mode="pinned")
+        for index in (1, 2, 3)
+    ]
+    contextual = [_candidate(4, content="情境事实")]
+
+    items, block, diagnostics = renderMemoryContext(pinned, contextual)
+
+    assert [item["id"] for item in items] == [1, 2, 3, 4]
+    assert diagnostics["pinnedBudgetDropped"] == 0
+    assert diagnostics["contextualBudgetDropped"] == 0
+    assert len(block) <= LLM_MEMORY_CONTEXT_MAX_CHARS
 
 
 @pytest.mark.asyncio

@@ -211,8 +211,10 @@ LLM_MEMORY_MAX_TAGS = 10                   # 单条记忆最多标签数
 LLM_MEMORY_HINT_MAX_CHARS = 80             # 单条记忆检索说明最大长度（字符）
 LLM_MEMORY_RETRIEVE_PER_SCOPE = 20         # 检索时每作用域候选上限
 LLM_MEMORY_RETRIEVE_TOTAL = 10             # 检索时汇池后取前 N 条
-LLM_MEMORY_CONTEXT_MAX_CHARS = 1500         # 最终 memory 块硬上限（Unicode 字符）
-LLM_MEMORY_PINNED_MAX_CHARS = 500           # 常驻记忆段默认字符预算
+# pinned 不参与相关性筛选，会每轮无条件进入候选；单独保留 1000 字符，
+# 同时给 contextual 留出约 1500 字符，避免扩大常驻记忆时挤掉全部情境记忆。
+LLM_MEMORY_CONTEXT_MAX_CHARS = 2500         # 最终 memory 块硬上限（Unicode 字符）
+LLM_MEMORY_PINNED_MAX_CHARS = 1000          # 常驻记忆段字符预算
 LLM_MEMORY_QUERY_HISTORY_LIMIT = 20         # memory 语义检索使用的近期历史条数上限
 LLM_MEMORY_QUERY_HISTORY_SECONDS = 1800     # 检索历史时间窗口（秒）
 LLM_MEMORY_QUERY_HISTORY_MAX_CHARS = 600    # 检索历史总字符上限

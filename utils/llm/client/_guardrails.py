@@ -42,8 +42,8 @@ MEMORY_ACTION_INSTRUCTIONS: list[str] = [
     (
         "字段定义（按 action 类型分组）：\n"
         "\n【add 操作】必需字段：\n"
-        '  {"action": "add", "scope_type": "global", "scope_id": "global", "content": "记忆内容"}\n'
-        "  可选字段：tags, priority, mode, retrieval_hint, reason\n"
+        '  {"action": "add", "scope_type": "global", "scope_id": "global", "content": "记忆内容", "mode": "contextual"}\n'
+        "  可选字段：tags, priority, retrieval_hint, reason\n"
         "\n【update 操作】必需字段：\n"
         '  {"action": "update", "scope_type": "global", "scope_id": "global", "memory_id": 123}\n'
         "  可选字段：content, tags, priority, mode, retrieval_hint, reason（至少提供一个可选字段）\n"
@@ -56,7 +56,7 @@ MEMORY_ACTION_INSTRUCTIONS: list[str] = [
         "  - priority: 整数 0-3（0=日常闲聊，1=一般偏好，2=重要事实，3=关键信息）\n"
         "  - memory_id: 整数，update/delete 时为目标记忆的 ID\n"
         "  - tags: 字符串数组，如 [\"标签1\", \"标签2\"]\n"
-        "  - mode: \"contextual\"（按对话相关性召回，默认）或 \"pinned\"（常驻）\n"
+        "  - mode: 必需字段，\"contextual\"（按对话相关性召回）或 \"pinned\"（常驻）；大部分情况使用 contextual\n"
         "  - retrieval_hint: 可选的单行检索说明，最多 80 字；只描述未来可能相关的话题、措辞或别名，不增加事实"
     ),
     (
@@ -75,7 +75,7 @@ MEMORY_ACTION_INSTRUCTIONS: list[str] = [
     (
         "完整示例：\n"
         "<MEMORY_ACTION>\n"
-        '{"action": "add", "scope_type": "global", "scope_id": "global", "content": "用户喜欢在周末下午喝咖啡时看书", "tags": ["生活习惯", "休闲偏好"], "priority": 1, "reason": "记录日常偏好"}\n'
+        '{"action": "add", "scope_type": "global", "scope_id": "global", "content": "用户喜欢在周末下午喝咖啡时看书", "mode": "contextual", "tags": ["生活习惯", "休闲偏好"], "priority": 1, "reason": "记录日常偏好"}\n'
         "</MEMORY_ACTION>\n"
         "\n输出要求：<MEMORY_ACTION> 块必须放在回复末尾，与正文用空行分隔。输出前自查 JSON 语法。"
     ),

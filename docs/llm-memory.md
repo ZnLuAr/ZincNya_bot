@@ -11,7 +11,7 @@
 
 ## 系统概述
 
-LLM Memory 是 Bot 的长期记忆系统。它存放对话里值得留下的事实：用户偏好、约定、需要跨对话复用的信息——比如「用户很讨厌香菜」「这个群每周五晚上一起打游戏」。
+LLM Memory 是 Bot 的长期记忆系统，负责存放对话里值得留下的事实——用户偏好、约定、需要跨对话复用的信息，比如「用户很讨厌香菜」「这个群每周五晚上一起打游戏」这些……
 
 LLM 本身是无状态的，每次调用都从零开始。如果把所有东西都塞进聊天历史，很快会超出上下文长度，无关的信息也会拖累回复质量。所以应该把值得记住的事实单独存放，需要时再取出来给 LLM——这就是 Memory 子系统的职责。
 
@@ -67,7 +67,7 @@ LLM Memory 在重构之后已经变成了比较复杂的系统，文档略长。
 
 ## 架构总览
 
-Memory 不是独立服务。它由一个 SQLite 正本和一套「本轮选哪些记忆进 prompt」的逻辑组成，挂在原有的回复链路上。legacy 和 hybrid local 都不产生额外的 LLM 调用；只有显式启用 llm 选择后端，才会多一次远程请求。
+Memory 并不是一个独立的服务，它由一个 SQLite 正本和一套「本轮选哪些记忆进 prompt」的逻辑组成，挂在原有的回复链路上。legacy 和 hybrid local 都不产生额外的 LLM 调用；只有在 hybrid 模式中显式启用 llm 选择后端，才会多一次远程请求。
 
 下图按「谁能调用谁」分成五层，另有两条旁路。图中的 `memory/`、`client/` 指 `utils/llm/` 下的子目录。
 
@@ -108,7 +108,7 @@ flowchart TB
 
 两条规则贯穿全层：
 
-1. **SQLite 是唯一正本。** 向量缓存是派生数据，丢了可以从数据库重建：重启后清空，hybrid 模式下 runtime 会在后台按容量尽力补回。审核队列只在进程内存里，内容来自模型输出，重启后连同旧审核卡一起丢失，数据库不受影响。
+1. **SQLite 是唯一正本。** 向量缓存是派生数据，丢了可以从数据库重建——重启后清空，hybrid 模式下 runtime 会在后台按容量尽力补回。审核队列只在进程内存里，内容来自模型输出，重启后连同旧审核卡一起丢失——而数据库不受影响。
 2. **选择只发生在检索入口。** 哪些记忆进 prompt，只由 `retrieveMemoryContext()` 决定，阈值、融合、预算和注入前复核都在 `retrieval.py`（legacy 的配额排序是 `database.py` 里的纯函数，生产代码只从这个入口调用）。上层只构造输入，原样放入返回的 `contextBlock`；下层只打分或读写。`database.py` 还保留着旧接口 `retrieveMemories()` 和 `buildMemoryContextBlock()`，经 `utils.llm` 导出，目前只有测试在用；新代码应调用 `retrieveMemoryContext()`。
 
 ### 关键文件职责
@@ -169,7 +169,7 @@ user scope 按触发请求的人判断：同一个群里其他成员的 user 记
 | `contextual`（默认） | 参与选择：legacy 按 priority 配额取，hybrid 按相关性准入 | 大部分记忆 |
 | `pinned` | 不参与相关性竞争，检索读到候选后直接放进「常驻记忆」段 | 每轮都可能用到、又短又稳定的事实 |
 
-常驻段最多 500 字符（`LLM_MEMORY_PINNED_MAX_CHARS`），整个记忆块最多 1500 字符（`LLM_MEMORY_CONTEXT_MAX_CHARS`）。放不下的条目整条跳过，不会截断。
+常驻段最多 1000 字符（`LLM_MEMORY_PINNED_MAX_CHARS`），整个记忆块最多 2500 字符（`LLM_MEMORY_CONTEXT_MAX_CHARS`）。放不下的条目整条跳过，不会截断。
 
 检索提前返回时，pinned 也不会注入：并发名额已满、正在关停、选择配置无效、llm 后端下 runtime 未注册，或读库失败（`retrieval.py:retrieveMemoryContext`）。
 
@@ -230,7 +230,7 @@ System prompt 更适合放固定的身份、安全约束和行为规则。把动
 2. **上下文膨胀** — 无关信息会降低模型生成质量
 3. **难以在线编辑** — 修改记忆需要改配置文件
 
-所以记忆独立存储，**按需检索**，并受固定字符预算限制（默认 pinned 500 + contextual 1000 = 1500 字符）。
+所以记忆独立存储，**按需检索**，并受固定字符预算限制（默认 pinned 1000 + contextual 1500 = 2500 字符）。
 
 ### 为什么不直接用聊天历史
 
@@ -247,7 +247,7 @@ Memory 是**浓缩的、结构化的、可编辑的事实**。
 旧检索（Legacy）有两个致命缺陷：
 
 1. **候选缺失** — 按 priority 截断后取每 scope 20 条、合计 10 条，低优先级但相关的记忆无法参与判断
-2. **语义断层** — 取出候选后不打分，只按字符预算装填，换种说法就召回失败
+2. **无相关性判断** — 不计算记忆与查询的相关性，只按 priority 机械排序注入
 
 Hybrid 通过**混合检索（语义 + 词面）+ RRF 融合**解决这两个问题。详见 [Hybrid 详细文档](llm-memory-hybrid.md)。
 
@@ -319,7 +319,7 @@ result = await retrieveMemoryContext(query=query, chatID=chatID, userID=userID)
 **检索过程（Legacy 模式）：**
 1. 从数据库读取所有 `enabled=1` 且 scope 匹配的记忆
 2. 按 `priority > scope 专属度 > updated_at > id` 降序排序，每个 scope 取前 20 条，汇总后取前 10 条
-3. 按字符预算裁剪（整块 1500 字符，其中 pinned 段 500 字符）
+3. 按字符预算裁剪（整块 2500 字符，其中 pinned 段 1000 字符）
 4. 注入前回数据库复核，剔除已删除/已修改的记忆
 
 **检索过程（Hybrid 模式）：**
@@ -441,7 +441,7 @@ Memory 检索分两种模式：**Legacy**（默认，按 priority 配额）和 *
 
 1. **读取候选池：** 从数据库读取所有 `enabled=1` 且 scope 匹配的记忆
 2. **优先级截断：** 按 `priority > scope 专属度 > updated_at > id` 降序排序，每个 scope 取前 20 条，汇总后取前 10 条
-3. **按字符预算裁剪：** 整块最多 1500 字符，其中 pinned 段最多 500 字符
+3. **按字符预算裁剪：** 整块最多 2500 字符，其中 pinned 段最多 1000 字符
 4. **去重：** 按 `(scope_type, scope_id, 正文)` 去重（保留排序靠前的）
 5. **注入前复核：** 回数据库查一遍，剔除已删除/已修改（指纹不匹配）的记忆
 
@@ -464,11 +464,8 @@ Memory 检索分两种模式：**Legacy**（默认，按 priority 配额）和 *
 5. **按字符预算裁剪、去重、注入前复核：** 同 Legacy
 
 **特点：** 候选池更宽，准入靠相关性而非 priority。详见 [Hybrid 详细文档](llm-memory-hybrid.md)。
-3. 调用独立的 LLM API（实验时使用的是 gpt-5.6-terra，30 秒超时）
-4. 严格校验返回的句柄（防止编造 ID）
-5. 恢复数据库 ID 并渲染
 
-详见 [Hybrid 详细文档](llm-memory-hybrid.md)。
+如果选择后端配置为 LLM Selector，才会额外调用独立的 LLM API；它的候选构造、句柄校验和数据库 ID 恢复流程见 [Hybrid 详细文档](llm-memory-hybrid.md#llm-selector可选)。local 后端不会执行这一步。
 
 可以在控制台中通过命令来切换检索模式：`/llm memory retrieval legacy|hybrid`
 
@@ -721,17 +718,17 @@ success = await executeAction(action, humanApproved=True, actionContext=context)
    - `global`：所有对话可见
    - `chat`：只在该群组可见
    - `user`：该用户在任何对话都可见
-3. **检查字符预算：** Priority 更高的记忆可能占满了预算（pinned 500 + contextual 1000）
+3. **检查字符预算：** Priority 更高的记忆可能占满了预算（pinned 1000 + contextual 1500）
 4. **检查相关性（Hybrid）：** 记忆正文是否与查询语义/词面相关？用 `/llm memory status` 查看诊断
 
-### Hybrid 检索一直降级到 Legacy？
+### Hybrid 检索为什么没有 contextual 记忆？
 
 检查 `/llm memory status` 的诊断信息：
 
-- **encoderReady: false** → 模型未就绪，运行 `python scripts/llmMemory/memoryModel.py install`
-- **calibration 不可用** → 阈值未配置或校准文件损坏，见 [Hybrid 详细文档](llm-memory-hybrid.md)
-- **runtimeStatus: null** → Runtime 未初始化，检查日志
-- **reconcileCapacitySaturated: true** → 向量缓存已满（32 MiB），冷条目暂不编码
+- **Runtime：运行中；编码器未就绪** → 模型未就绪，运行 `python scripts/llmMemory/memoryModel.py install`
+- **calibration 不可用** → local Hybrid 会 fail-closed，只保留 pinned，不会自动退回 Legacy；需要已批准且与当前模型、编码版本和词面版本匹配的校准文件，见 [Hybrid 详细文档](llm-memory-hybrid.md)
+- **Runtime：未注册** → Runtime 未初始化，检查日志
+- **对账容量：已饱和** → 向量缓存已满（32 MiB），冷条目暂不编码
 
 ### 如何备份记忆？
 
@@ -775,7 +772,7 @@ sqlite3 data/llmMemory.db "DELETE FROM memory_entries;"
 - `queryTimeout`：查询超时（2 秒）
 - `queryQueueFull`：查询队列已满（4 条并发上限）
 
-这些只是降级（跳过本次语义检索），不会影响词面通道和 pinned 记忆。
+对于上面列出的 Runtime 原因，这表示本次跳过语义检索，词面通道和 pinned 记忆仍可用；这不适用于 calibration 无效，因为 local Hybrid 在校准无效时会关闭全部 contextual 通道。
 
 ---
 
@@ -787,12 +784,12 @@ sqlite3 data/llmMemory.db "DELETE FROM memory_entries;"
    - **解决方案：** 切换到 Hybrid 检索（需完成校准）
 
 2. **Hybrid 检索：**
-   - 本地阈值校准未完成（召回仅 0.0675），暂不可用
-   - LLM selector 有 30 秒超时风险（28% 超时率）
+   - 当前 calibration 为 `unconfigured`，local 后端暂不放行 contextual 记忆；历史实验指标不代表当前线上状态
+   - LLM Selector 是独立的远程路径，单次选择最多等待 30 秒，并且存在网络或服务失败风险
    - 向量缓存预算 32 MiB，大量记忆时容量饱和会跳过冷条目
 
 3. **通用限制：**
-   - 字符预算固定（整块 1500 字符，其中 pinned 段 500 字符），无法按对话动态调整
+   - 字符预算固定（整块 2500 字符，其中 pinned 段 1000 字符），无法按对话动态调整
    - 去重只看正文，同一事实的不同表述可能并存
    - 记忆过期没有自动清理机制（需手动删除或禁用）
    - 审核队列只在内存，Bot 重启后，待审核操作会丢失
