@@ -321,7 +321,14 @@ async def _runLLMPipeline(
         # 门禁：includeContext=False 时不解析，<MEMORY_ACTION> 块保留在 reply 原文中
         memoryActions = []
         if batch.includeContext:
-            reply, memoryActions, _ = await extractValidatedMemoryActions(reply, logLabel="generate")
+            # scope_id 属于模型输出，不能作为授权依据；把入口已经确认的
+            # Telegram chat/user 身份传入校验层，阻止跨会话或跨用户写入。
+            reply, memoryActions, _ = await extractValidatedMemoryActions(
+                reply,
+                logLabel="generate",
+                chatID=target.chatID,
+                userID=target.userID,
+            )
 
         # 最终分发 output，包含 文字回复 与 记忆操作
         generated = GeneratedOutput(

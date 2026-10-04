@@ -205,14 +205,13 @@ class MemoryTUIController(ListMenuController):
 
 
     def buildTable(self, visibleEntries, selectedIndex, windowStart):
-        """渲染包含 scope、priority、mode、hint 与启用状态的管理表格。"""
+        """渲染包含 scope、priority、mode 与启用状态的管理表格。"""
         table = Table(title="Memory 管理")
         table.add_column("No.", justify="right")
         table.add_column("ID", justify="right")
         table.add_column("Scope", justify="left")
         table.add_column("P", justify="right")
         table.add_column("Mode", justify="left")
-        table.add_column("Hint", justify="left")
         table.add_column("Status", justify="center")
         table.add_column("Preview", justify="left")
 
@@ -224,9 +223,9 @@ class MemoryTUIController(ListMenuController):
 
             if isAddRow:
                 if isSelected:
-                    table.add_row("[bold yellow]>[/]", "", "[bold yellow](+) 添加[/]", "", "", "", "", "")
+                    table.add_row("[bold yellow]>[/]", "", "[bold yellow](+) 添加[/]", "", "", "", "")
                 else:
-                    table.add_row("", "", "[cyan](+) 添加[/]", "", "", "", "", "")
+                    table.add_row("", "", "[cyan](+) 添加[/]", "", "", "", "")
             else:
                 scopeType = e['scope_type']
                 scopeID = e['scope_id']
@@ -241,7 +240,6 @@ class MemoryTUIController(ListMenuController):
                         f"[bold yellow]{scopeStr}[/]",
                         f"[bold yellow]{e['priority']}[/]",
                         f"[bold yellow]{e.get('mode', MEMORY_MODE_CONTEXTUAL)}[/]",
-                        f"[bold yellow]{e.get('retrievalHint') or '-'}[/]",
                         f"[bold yellow]{'ON' if e['enabled'] else 'OFF'}[/]",
                         f"[bold yellow]{preview}[/]",
                     )
@@ -252,7 +250,6 @@ class MemoryTUIController(ListMenuController):
                         f"[dim]{scopeStr}[/]",
                         f"[dim]{e['priority']}[/]",
                         f"[dim]{e.get('mode', MEMORY_MODE_CONTEXTUAL)}[/]",
-                        f"[dim]{e.get('retrievalHint') or '-'}[/]",
                         "[red]OFF[/red]",
                         f"[dim]{preview}[/]",
                     )
@@ -263,7 +260,6 @@ class MemoryTUIController(ListMenuController):
                         scopeStr,
                         str(e['priority']),
                         e.get('mode', MEMORY_MODE_CONTEXTUAL),
-                        e.get('retrievalHint') or "-",
                         "[green]ON[/green]",
                         preview,
                     )

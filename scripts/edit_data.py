@@ -27,6 +27,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple, Any
 
+# 脚本以 ``python scripts/edit_data.py`` 启动而非作为一个模块被导入
+# 所以声明一下项目的根路径
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from config import LLM_MEMORY_HINT_MAX_CHARS
+
 # 可选依赖检测
 try:
     import jsonschema
@@ -54,8 +62,6 @@ except ImportError:
 # 配置常量
 # ============================================================================
 
-# 项目根目录
-PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 DATA_DIR = PROJECT_ROOT / "data"
 BACKUP_DIR = DATA_DIR / "zincnya_backup" / "edit_data"
 KEY_PATH = DATA_DIR / ".chatKey"
@@ -96,6 +102,10 @@ ENCRYPTED_COLUMNS = {
 
 _ENCRYPTED_WRAPPER_KEY = "encrypted"
 
+# 这是合并/优化文件中的辅助字段，不属于 memory_entries 表，导入时只读不写。
+_MEMORY_IMPORT_METADATA_FIELDS = {"_optimization_reason"}
+_MEMORY_OPTIMIZATION_MARKER = "_optimization_reason"
+
 
 # ============================================================================
 # JSON Schema 定义
@@ -125,6 +135,11 @@ SCHEMAS = {
                         "retrieval_hint": {
                             "oneOf": [
                                 {"type": "null"},
+                                {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": LLM_MEMORY_HINT_MAX_CHARS,
+                                },
                                 {
                                     "type": "object",
                                     "required": [_ENCRYPTED_WRAPPER_KEY],
@@ -609,6 +624,28 @@ class DBEditor:
     """数据库 ↔ JSON 转换编辑器"""
 
     @staticmethod
+    def _ensure_memory_schema(conn, table_name: str):
+        """为旧版 memory_entries 补齐 mode 与 retrieval_hint 列。
+
+        运行时初始化会执行同样的迁移；编辑器直接打开数据库时不能假定
+        bot 已经启动过，因此在导出和导入前重复做一次幂等检查。
+        """
+        if table_name != "memory_entries":
+            return
+
+        columns = {
+            row[1]
+            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if "mode" not in columns:
+            conn.execute(
+                "ALTER TABLE memory_entries "
+                "ADD COLUMN mode TEXT NOT NULL DEFAULT 'contextual'"
+            )
+        if "retrieval_hint" not in columns:
+            conn.execute("ALTER TABLE memory_entries ADD COLUMN retrieval_hint BLOB")
+
+    @staticmethod
     def _load_fernet() -> "Fernet":
         """
         加载共享密钥的 Fernet 实例（用于 memory_entries / todos 的 content 列）。
@@ -649,11 +686,24 @@ class DBEditor:
 
     @staticmethod
     def _import_opaque_value(fernet: "Fernet", value) -> Optional[bytes]:
-        """只接受单字段密文封装，并验证 token 可由当前数据库密钥解密。"""
+        """导入 hint，并确保最终写入数据库的始终是密文。
+
+        edit_data 导出的 hint 是 opaque 封装，供原样往返；优化配置文件则
+        需要允许管理员直接编辑明文。明文只在这里短暂存在，写库前立即用
+        当前数据库密钥加密，避免把可读 hint 落盘到 SQLite。
+        """
         if value is None:
             return None
+        if isinstance(value, str):
+            if not value or "\n" in value or "\r" in value:
+                raise ValueError("retrieval_hint 明文不能为空或包含换行")
+            if len(value) > LLM_MEMORY_HINT_MAX_CHARS:
+                raise ValueError(
+                    f"retrieval_hint 明文不能超过 {LLM_MEMORY_HINT_MAX_CHARS} 个字符"
+                )
+            return fernet.encrypt(value.encode("utf-8"))
         if not isinstance(value, dict) or set(value) != {_ENCRYPTED_WRAPPER_KEY}:
-            raise ValueError("retrieval_hint 只能是 encrypted 密文封装或 null")
+            raise ValueError("retrieval_hint 只能是明文、encrypted 密文封装或 null")
         tokenText = value.get(_ENCRYPTED_WRAPPER_KEY)
         if not isinstance(tokenText, str) or not tokenText:
             raise ValueError("retrieval_hint 的 encrypted 密文不能为空")
@@ -693,6 +743,9 @@ class DBEditor:
             # 验证表名安全性（防止 SQL 注入）
             if not is_valid_table_name(table_name):
                 raise ValueError(f"不安全的表名: {table_name}")
+
+            DBEditor._ensure_memory_schema(conn, table_name)
+            conn.commit()
 
             rows = cur.execute(f"SELECT * FROM {table_name}").fetchall()
             records = [dict(row) for row in rows]
@@ -766,6 +819,20 @@ class DBEditor:
         cur = conn.cursor()
 
         try:
+            DBEditor._ensure_memory_schema(conn, table_name)
+
+            # 优化文件不是完整数据库快照：它可能缺少记录，且正文可能来自另一份
+            # 导出。只要出现优化说明，就把它当作只更新检索元数据的补丁，避免
+            # “导入”意外覆盖正文、标签，或删除当前数据库中未出现在文件里的记忆。
+            isOptimizationPatch = (
+                table_name == "memory_entries"
+                and any(
+                    _MEMORY_OPTIMIZATION_MARKER in rec
+                    for rec in new_records
+                    if isinstance(rec, dict)
+                )
+            )
+
             # 取出表的真实列名作为白名单。列名来自被编辑/恢复的 JSON（不可信），
             # 会被直接拼进 INSERT/UPDATE 语句，因此必须按真实 schema 校验，
             # 防止恶意 key（如 "x); DROP TABLE ..--"）注入 SQL。
@@ -799,6 +866,13 @@ class DBEditor:
             existing_rows = cur.execute(f"SELECT * FROM {table_name}").fetchall()
             existing_records = {row["id"]: dict(row) for row in existing_rows if "id" in row.keys()}
 
+            if isOptimizationPatch:
+                patchIDs = [rec.get("id") for rec in new_records]
+                if any(recID is None or recID not in existing_records for recID in patchIDs):
+                    raise ValueError("memory 优化补丁只能更新现有记录，且每条记录必须有有效 id")
+                if len(patchIDs) != len(set(patchIDs)):
+                    raise ValueError("memory 优化补丁中不能包含重复 id")
+
             # 对比生成 SQL
             sql_statements = []
             stats = {"insert": 0, "update": 0, "delete": 0}
@@ -807,10 +881,25 @@ class DBEditor:
             for rec in new_records:
                 rec_id = rec.get("id")
 
-                # 校验本条记录的所有列名都属于真实 schema（防 SQL 注入）
-                _check_columns(rec.keys())
+                if isOptimizationPatch:
+                    # 优化文件只负责给现有记忆补充检索元数据；正文和标签即使
+                    # 出现在文件中也故意忽略，确保人工整理 hint 不会改动记忆本身。
+                    prepared = {"id": rec_id}
+                    for key in ("mode", "retrieval_hint"):
+                        if key in rec:
+                            prepared[key] = rec[key]
+                else:
+                    # 优化文件可以携带人工决策说明；它只用于阅读，禁止进入 SQL。
+                    prepared = {
+                        key: value
+                        for key, value in rec.items()
+                        if key not in _MEMORY_IMPORT_METADATA_FIELDS
+                    }
 
-                prepared = dict(rec)
+                # 校验本条记录的所有列名都属于真实 schema（防 SQL 注入）
+                _check_columns(prepared.keys())
+                if isOptimizationPatch and len(prepared) == 1:
+                    continue
                 existing = existing_records.get(rec_id)
                 contentChanged = bool(
                     existing is not None
@@ -889,16 +978,17 @@ class DBEditor:
                     if not dry_run:
                         cur.execute(sql, values)
 
-            # 处理删除（现有记录在新 JSON 中不存在）
-            new_ids = {rec.get("id") for rec in new_records if rec.get("id") is not None}
-            for existing_id in existing_records:
-                if existing_id not in new_ids:
-                    sql = f"DELETE FROM {table_name} WHERE id = ?"
-                    sql_statements.append((sql, [existing_id]))
-                    stats["delete"] += 1
+            if not isOptimizationPatch:
+                # 处理删除（现有记录在新 JSON 中不存在）。优化补丁不能删除记录。
+                new_ids = {rec.get("id") for rec in new_records if rec.get("id") is not None}
+                for existing_id in existing_records:
+                    if existing_id not in new_ids:
+                        sql = f"DELETE FROM {table_name} WHERE id = ?"
+                        sql_statements.append((sql, [existing_id]))
+                        stats["delete"] += 1
 
-                    if not dry_run:
-                        cur.execute(sql, [existing_id])
+                        if not dry_run:
+                            cur.execute(sql, [existing_id])
 
             # 提交或回滚
             if not dry_run:

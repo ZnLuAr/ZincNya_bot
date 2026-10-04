@@ -23,7 +23,7 @@ from telegram.ext import ContextTypes, CallbackQueryHandler
 from config import Permission, LLM_REVIEW_TTL_SECONDS, TG_MESSAGE_MAX_LEN
 
 from utils.core.errorDecorators import handleTelegramErrors
-from utils.llm.memory.action import MemoryAction, executeAction
+from utils.llm.memory.action import MemoryAction, MemoryActionContext, executeAction
 from utils.llm.review import (
     MEMORY_FAILED_WARNING,
     dispatchMemoryActions,
@@ -496,10 +496,17 @@ async def handleMemoryReviewCallback(update: Update, context: ContextTypes.DEFAU
 
     if action == "approve":
         memAction = MemoryAction.fromDict(actionData)
+        # 回调里的 actionData 可被模型影响，不能用其中的 scope_id 做授权；
+        # 审核项保存的原始 chat/user 才是这次请求的可信身份边界。
+        actionContext = MemoryActionContext(
+            chatID=reviewData.get("chatID"),
+            userID=reviewData.get("userID"),
+        )
         success = await executeAction(
             memAction,
             humanApproved=True,
             expectedState=actionData.get("targetState"),
+            actionContext=actionContext,
         )
         if not success:
             refreshed = await refreshMemoryReviewItem(reviewData)

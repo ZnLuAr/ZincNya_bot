@@ -4,6 +4,8 @@ utils/command/llm/memoryCmd.py
 /llm memory 子命令处理：模式开关、列表、增删改、管理界面。
 """
 
+from config import LLM_MEMORY_SELECTOR_API_KEY, LLM_MEMORY_SELECTOR_BASE_URL
+
 from handlers.cli import parseArgsTokens
 
 from utils.core.logger import logAction, LogLevel, LogChildType
@@ -27,6 +29,7 @@ from utils.llm import (
     setMemoryRetrievalMode,
     updateMemory,
 )
+from utils.llm.config import getMemorySelectorSettings, loadLLMConfig
 
 from .._helpRender import renderSubcommands
 
@@ -34,14 +37,21 @@ from .._helpRender import renderSubcommands
 # 子命令速查表（case _ 提示的数据源；新增子命令时同步此处与 match 分支）
 _MEMORY_SUBCOMMANDS = {
     "-on | -off | -once": "开启 / 关闭记忆模式，或仅下一次带入历史",
-    "-autoapprove": "切换记忆自动批准（跳过审核）",
-    "list": "列出记忆条目及 mode/hint",
-    "add": "新增记忆条目（支持 -mode / -hint）",
-    "edit": "编辑记忆条目（支持 -mode / -hint / -clearhint）",
+    "-autoapprove": "切换自动批准（global contextual 操作无需审核，其他仍需）",
+    "list": "列出记忆条目（-scope / -id / -all / -limit）",
+    "add": "新增记忆（-scope / -id / -text / -tags / -priority / -mode / -hint / -off）",
+    "edit": "编辑记忆（-mid / -text / -tags / -priority / -enabled / -source / -mode / -hint / -clearhint）",
     "del <id>": "删除一条记忆",
-    "retrieval <legacy|hybrid>": "切换检索模式（不会安装模型）",
-    "status": "显示检索校准、运行时与缓存状态",
-    "ui": "打开 Memory 管理界面",
+    "retrieval <legacy|hybrid>": "切换检索模式（hybrid 需先安装模型和依赖）",
+    "status": "显示检索模式、校准状态、运行时与缓存诊断",
+    "ui": "打开 Memory 管理界面（TUI）",
+}
+
+# 用法提示文本（错误时引用，保持与 _MEMORY_SUBCOMMANDS 同步）
+_MEMORY_USAGE = {
+    "flags": "-on | -off | -once | -autoapprove",
+    "add": "/llm memory add -scope <{global|chat|user|session}> [-id <scopeID>] -text <content> [-tags ...] [-priority <0-3>] [-mode <contextual|pinned>] [-hint <text>] [-off]",
+    "edit": "/llm memory edit -mid <id> [-text <内容>] [-tags <标签...>] [-priority <n>] [-enabled <on|off>] [-source <manual|inferred>] [-mode <contextual|pinned>] [-hint <text> | -clearhint]",
 }
 
 _MEMORY_LIST_DEFAULTS = {
@@ -115,7 +125,7 @@ async def _handleMemoryFlags(action):
         newState = "开启" if not current else "关闭"
         await logAction("System", f"LLM 记忆自动批准{newState}", "OK", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
     else:
-        print(f"❌ 给出的参数 {val} 是无效的（{{-on|-off|-once|-autoapprove}}）\n")
+        print(f"❌ 无效参数 {val}，可用选项：{_MEMORY_USAGE['flags']}\n")
 
 
 async def _handleMemoryList(args):
@@ -153,7 +163,7 @@ async def _handleMemoryAdd(args):
     scopeType = parsed["scope"]
     content = parsed["text"]
     if not scopeType or scopeType is True or not content or content is True:
-        print("memory add 的用法应该是：\n    /llm memory add -scope <{global|chat|user|session}> [-id <scopeID>] -text <content>")
+        print(f"❌ 缺少必需参数，用法：\n    {_MEMORY_USAGE['add']}\n")
         return
     if parsed["mode"] is True or parsed["hint"] is True:
         print("❌ -mode 与 -hint 都必须提供具体值的说\n")
@@ -183,7 +193,7 @@ async def _handleMemoryEdit(args):
     parsed = _parseMemoryOptions(_MEMORY_EDIT_DEFAULTS, _MEMORY_EDIT_ALIASES, args)
     memoryID = parsed["mid"]
     if not memoryID or memoryID is True:
-        print("memory edit 的用法应该是：\n    /llm memory edit -mid <id> [-text <内容>] [-tags <标签...>] [-priority <n>] [-enabled <on|off>]")
+        print(f"❌ 缺少必需参数，用法：\n    {_MEMORY_USAGE['edit']}\n")
         return
     if parsed["hint"] is not None and parsed["clearhint"] is not None:
         print("❌ -hint 与 -clearhint 不能同时使用的说\n")
@@ -286,33 +296,118 @@ async def _handleMemoryCommand(args, app=None):
 
 
 
+def _resolveSelectorStatus(config: dict) -> tuple[str, dict | None, str | None]:
+    """按检索入口的同一规则解析选择后端，返回 (后端原值, llm 设置, 原因码)。
+
+    只有 llm 后端会校验 protocol / model / effort / timeout；local 后端不读
+    这些字段，其中的错误值不影响检索，这里也就不能报成配置无效。
+    """
+    backend = config.get("memoryHybridSelector", "local")
+    if backend not in ("local", "llm"):
+        return str(backend), None, "selectorConfig"
+    if backend == "local":
+        return backend, None, None
+    try:
+        return backend, getMemorySelectorSettings(config), None
+    except ValueError:
+        return backend, None, "selectorConfig"
+
+
+def _selectorCredentialsSet() -> bool:
+    """只报告 selector 凭据是否齐全，不回显值：status 输出可能进截图或日志。"""
+    return all(
+        isinstance(value, str) and value.strip()
+        for value in (LLM_MEMORY_SELECTOR_BASE_URL, LLM_MEMORY_SELECTOR_API_KEY)
+    )
+
+
+def _describeRetrievalEffect(
+    mode: str,
+    backend: str,
+    selectorReason: str | None,
+    credentialsSet: bool,
+    calibrationReason: str | None,
+    runtimeStatus: dict | None,
+) -> str:
+    """按检索入口的实际分支说明本次配置下的检索效果。
+
+    llm 后端不读 calibration，失败路径也与 local 不同：runtime 缺席时整次
+    检索返回空结果；凭据缺失时远程选择失败，只保留常驻记忆。
+    """
+    if mode != "hybrid":
+        return mode
+    if selectorReason:
+        return f"hybrid 已配置，但选择配置无效（{selectorReason}），检索返回空结果"
+    if backend == "llm":
+        if runtimeStatus is None:
+            return "hybrid 已配置，但 Runtime 未注册，检索返回空结果"
+        if runtimeStatus.get("closing"):
+            return "hybrid 已配置，但 Runtime 正在关闭，检索返回空结果"
+        if not credentialsSet:
+            return "hybrid 已配置，但 selector 凭据未设置，只保留常驻记忆"
+        if not runtimeStatus.get("encoderReady"):
+            return "hybrid（llm 选择）；语义编码器尚未就绪，候选只来自词面通道"
+        return "hybrid（llm 选择）"
+    if calibrationReason:
+        return f"hybrid 已配置，但检索会降级（{calibrationReason}），只保留常驻记忆"
+    if runtimeStatus is None or not runtimeStatus.get("encoderReady"):
+        return "hybrid 已配置，但语义编码器尚未就绪"
+    return mode
+
+
 async def _printMemoryStatus():
     """汇总配置、校准、数据库计数和 runtime 状态，供管理员只读查看。"""
     mode = getMemoryRetrievalMode()
+    backend, selectorSettings, selectorReason = _resolveSelectorStatus(loadLLMConfig())
+    credentialsSet = _selectorCredentialsSet()
     thresholds, calibrationReason = loadCalibratedThresholds()
     counts = await getMemoryCounts()
     runtime = getStateManager().getMemoryRuntime()
     runtimeStatus = runtime.getStatus() if runtime is not None else None
 
     enabledCount = counts.get("enabled", 0)
+    contextualEnabledCount = counts.get("contextualEnabled", enabledCount)
     totalCount = counts.get("total", 0)
     cacheEntries = runtimeStatus.get("cacheEntries", 0) if runtimeStatus else 0
-    coverage = (cacheEntries / enabledCount * 100) if enabledCount else 100.0
+    coverage = (
+        cacheEntries / contextualEnabledCount * 100
+        if contextualEnabledCount else 100.0
+    )
 
     print("[memory] 检索状态：")
     print(f"  配置模式：{mode}")
+    if selectorReason:
+        print(f"  选择后端：{backend}（配置无效：{selectorReason}）")
+    elif backend == "llm":
+        # messages 协议不发送 effort，照实标出，免得误以为配置已生效。
+        effort = (
+            selectorSettings["effort"]
+            if selectorSettings["protocol"] == "responses" else "不发送"
+        )
+        print(
+            f"  选择后端：llm（protocol={selectorSettings['protocol']}，"
+            f"model={selectorSettings['model']}，effort={effort}，"
+            f"timeout={selectorSettings['timeoutSeconds']:g}s；"
+            f"凭据{'已设置' if credentialsSet else '未设置'}）"
+        )
+    else:
+        print("  选择后端：local")
     if calibrationReason:
-        print(f"  校准：不可用（{calibrationReason}）")
+        calibrationText = f"不可用（{calibrationReason}）"
     else:
         thresholdText = ", ".join(
             f"{name}={value}" for name, value in thresholds.items()
         )
-        print(f"  校准：可用（{thresholdText}）")
+        calibrationText = f"可用（{thresholdText}）"
+    if backend == "llm":
+        calibrationText += "；llm 后端不使用"
+    print(f"  校准：{calibrationText}")
     print(f"  记忆条目：启用 {enabledCount} / 总计 {totalCount}")
 
     if runtimeStatus is None:
         print("  Runtime：未注册")
         print("  向量缓存：0 条（未启动编码器）")
+        print("  对账容量：不可用（Runtime 未注册）")
     else:
         runtimeState = "运行中" if runtimeStatus.get("running") else "已停止"
         if runtimeStatus.get("closing"):
@@ -322,7 +417,7 @@ async def _printMemoryStatus():
             f"{'已就绪' if runtimeStatus.get('encoderReady') else '未就绪'}"
         )
         print(
-            f"  向量缓存：{cacheEntries}/{enabledCount} "
+            f"  向量缓存：{cacheEntries}/{contextualEnabledCount} contextual "
             f"({coverage:.1f}%)，{runtimeStatus.get('cacheBytes', 0)} bytes"
         )
         print(
@@ -330,12 +425,38 @@ async def _printMemoryStatus():
             f"index={runtimeStatus.get('indexPending', 0)}，"
             f"oldest={runtimeStatus.get('oldestIndexAgeMs', 0.0):.1f} ms"
         )
+        print(
+            "  累计："
+            + "，".join(
+                f"{name}={runtimeStatus.get(name, 0)}"
+                for name in (
+                    "queryRejected",
+                    "queryTimedOut",
+                    "indexDropped",
+                    "staleResults",
+                    "encodeFailures",
+                    "workerFailures",
+                )
+            )
+        )
+        print(
+            f"  Native：active={runtimeStatus.get('activeNativeJobs', 0)}，"
+            f"blocked={runtimeStatus.get('blockedFingerprints', 0)}"
+        )
+        # 容量饱和不是普通 native 运行指标：它意味着对账会有意跳过冷条目，
+        # 直到在线驱逐、删除或重启释放空间，因此单独成行让 operator 不会漏看。
+        capacitySaturated = bool(runtimeStatus.get("reconcileCapacitySaturated", False))
+        if capacitySaturated:
+            print(
+                "  对账容量：已饱和（reconcileCapacitySaturated=true；"
+                "冷条目暂不补齐，等待容量释放）"
+            )
+        else:
+            print("  对账容量：正常（reconcileCapacitySaturated=false）")
         print(f"  最近运行时降级：{runtimeStatus.get('lastReason') or '-'}")
 
-    if mode == "hybrid" and calibrationReason:
-        print(f"  当前效果：hybrid 已配置，但检索会降级（{calibrationReason}）")
-    elif mode == "hybrid" and (runtimeStatus is None or not runtimeStatus.get("encoderReady")):
-        print("  当前效果：hybrid 已配置，但语义编码器尚未就绪")
-    else:
-        print(f"  当前效果：{mode}")
+    effect = _describeRetrievalEffect(
+        mode, backend, selectorReason, credentialsSet, calibrationReason, runtimeStatus,
+    )
+    print(f"  当前效果：{effect}")
     print()
