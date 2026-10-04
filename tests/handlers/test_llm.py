@@ -280,7 +280,7 @@ class TestMemoryQueryWiring:
                 "handlers.llm.extractValidatedMemoryActions",
                 new_callable=AsyncMock,
                 return_value=("回复", [], 0),
-            ),
+            ) as mockExtract,
             patch("handlers.llm.addRateLimit"),
             patch("handlers.llm.getAutoMode", return_value="on"),
             patch("handlers.llm.getOperatorsWithPermission", return_value=[]),
@@ -296,5 +296,7 @@ class TestMemoryQueryWiring:
             )
 
         assert mockGenerate.await_args.kwargs["memoryQuery"] is memoryQuery
+        assert mockExtract.await_args.kwargs["chatID"] == target.chatID
+        assert mockExtract.await_args.kwargs["userID"] == target.userID
         generated = mockDispatch.await_args.args[0]
         assert generated.memoryQuery is memoryQuery

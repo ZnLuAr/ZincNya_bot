@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "task": "text-pair-relevance",
+  "repository": "Xenova/bge-reranker-base",
+  "revision": "280bcc27a84e0b898c251e06fddb25171bd9b101",
+  "maxTokens": 256,
+  "modelFile": "onnx/model_quantized.onnx",
+  "tokenizerFile": "tokenizer.json",
+  "padToken": "<pad>",
+  "artifacts": [
+    {
+      "path": "onnx/model_quantized.onnx",
+      "size": 279301077,
+      "sha256": "dd98f3e67837d23210a6b7550c08cced4f61845b940ac45be3565840a10f3244"
+    },
+    {
+      "path": "tokenizer.json",
+      "size": 17098079,
+      "sha256": "48564c5c7d3fa64d85d95e65414a542385f88b0f128fd8d4163fd7a57f2be05c"
+    }
+  ]
+}

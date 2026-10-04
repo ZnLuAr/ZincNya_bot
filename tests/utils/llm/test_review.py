@@ -3,6 +3,7 @@ tests/utils/llm/test_review.py
 
 测试 LLM 审核共享操作（utils/llm/review.py）：
     - extractValidatedMemoryActions：解析 + 截断 + 逐个校验编排
+    - chat/user scope 的可信身份授权与 global 自动批准边界
     - queueMemoryActionsToConsole：转发到 console 审核队列
     - reviewRetryWithFeedback：补充反馈拼接 enhancedMsg 并重试
     - dispatchTextReply / dispatchGeneratedOutput：首生成 autoMode 三分流（原 handlers/llm.py 下沉）
@@ -11,6 +12,7 @@ tests/utils/llm/test_review.py
 
 约定：
     - parseMemoryActions / validateAction 用真实实现（add 路径不查 DB）
+    - 首生成普通 global contextual 可自动执行；chat/user、pinned、retry/feedback 保留人工审核
     - logSystemEvent / logAction / generateReply 用 AsyncMock 隔离副作用
 """
 
@@ -22,7 +24,7 @@ from telegram import InlineKeyboardMarkup
 from config import LLM_REVIEW_FEEDBACK_MAX_LENGTH, LLM_MEMORY_MAX_ACTIONS, TG_MESSAGE_MAX_LEN
 
 from utils.core.logger import LogLevel
-from utils.llm.memory.action import MemoryAction
+from utils.llm.memory.action import MemoryAction, MemoryActionContext
 from utils.llm.memory.types import MemoryQuery, MemoryTurn
 from utils.llm.messagePrep import DisplayBlocks
 from utils.llm.review import (
@@ -68,6 +70,15 @@ def _invalidActionBlock() -> str:
     return (
         '<MEMORY_ACTION>'
         '{"action":"frobnicate","scope_type":"global","scope_id":"global","content":"X"}'
+        '</MEMORY_ACTION>'
+    )
+
+
+def _userAddBlock(scopeID: str = "other-user") -> str:
+    """构造一个需要当前请求 user 身份授权的 action。"""
+    return (
+        '<MEMORY_ACTION>'
+        f'{{"action":"add","scope_type":"user","scope_id":"{scopeID}","content":"用户事实"}}'
         '</MEMORY_ACTION>'
     )
 
@@ -148,6 +159,36 @@ class TestExtractValidatedMemoryActions:
         # 校验失败日志的 event 文案应包含 logLabel
         events = [c.args[0] for c in mockLog.await_args_list]
         assert any("feedback retry" in e for e in events)
+
+    @patch("utils.llm.review.logSystemEvent", new_callable=AsyncMock)
+    async def test_privateScopeRequiresTrustedIdentity(self, mockLog):
+        """审核编排在入队前就拒绝模型伪造的 user scope。"""
+        reply = f"回复\n\n{_userAddBlock()}"
+
+        _, validated, failed = await extractValidatedMemoryActions(
+            reply,
+            logLabel="test",
+            chatID="chat-1",
+            userID="user-1",
+        )
+
+        assert validated == []
+        assert failed == 1
+        assert mockLog.await_count >= 1
+
+    async def test_privateScopeWithMatchingIdentityIsAccepted(self):
+        """可信 user ID 匹配时，合法 user action 正常进入后续分流。"""
+        reply = f"回复\n\n{_userAddBlock('user-1')}"
+
+        _, validated, failed = await extractValidatedMemoryActions(
+            reply,
+            logLabel="test",
+            chatID="chat-1",
+            userID="user-1",
+        )
+
+        assert len(validated) == 1
+        assert failed == 0
 
 
 # ===========================================================================
@@ -391,7 +432,10 @@ class TestReviewRetryWithFeedback:
         assert retriedQuery.history == originalQuery.history
         assert retriedQuery.feedbackText == "补充条件"
         assert originalQuery.feedbackText == ""
-        assert result["memoryQuery"] is retriedQuery
+        assert result["memoryQuery"] is not retriedQuery
+        assert result["memoryQuery"].turns == originalQuery.turns
+        assert result["memoryQuery"].history == originalQuery.history
+        assert result["memoryQuery"].feedbackText == ""
 
 
 
@@ -510,7 +554,7 @@ class TestDispatchMemoryActions:
     @patch("utils.llm.review.getMemoryAutoApprove", return_value=True)
     @patch("utils.llm.review.logAction", new_callable=AsyncMock)
     async def test_autoapprove_short_circuits(self, mockLogAction, mockAuto, mockExec):
-        """respectAutoApprove=True + memoryAutoApprove 开启：逐个 executeAction，不走审核"""
+        """普通 global contextual action 可在开启后直接执行，不走审核。"""
         spy = AsyncMock()
         actions = [
             MemoryAction(action="add", scopeType="global", scopeID="global", content="A"),
@@ -522,6 +566,42 @@ class TestDispatchMemoryActions:
         )
         assert mockExec.await_count == 2
         spy.assert_not_called()
+
+    @patch("utils.llm.review.buildMemoryActionReviewPayload", new_callable=AsyncMock)
+    @patch("utils.llm.review.executeAction", new_callable=AsyncMock)
+    @patch("utils.llm.review.getMemoryAutoApprove", return_value=True)
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    async def test_autoapproveKeepsPrivateContextualActionInReview(
+        self, mockLogAction, mockAuto, mockExec, mockBuild,
+    ):
+        """autoapprove 只放行 global contextual，chat/user 仍进入人工审核。"""
+        mockExec.return_value = True
+        mockBuild.return_value = {"action": "add", "scopeType": "chat"}
+        sendReview = AsyncMock()
+        actions = [
+            MemoryAction(
+                action="add", scopeType="global", scopeID="global",
+                content="共享事实", mode="contextual",
+            ),
+            MemoryAction(
+                action="add", scopeType="chat", scopeID="1",
+                content="私有事实", mode="contextual",
+            ),
+        ]
+
+        await dispatchMemoryActions(
+            actions,
+            autoMode="on",
+            opsList=["1"],
+            chatID="1",
+            originalMsg="msg",
+            userID=1,
+            sendTGMemoryReview=sendReview,
+        )
+
+        mockExec.assert_awaited_once()
+        assert mockExec.await_args.args[0] is actions[0]
+        sendReview.assert_awaited_once_with({"action": "add", "scopeType": "chat"})
 
     @patch("utils.llm.review.buildMemoryActionReviewPayload", new_callable=AsyncMock)
     @patch("utils.llm.review.executeAction", new_callable=AsyncMock)
@@ -554,8 +634,42 @@ class TestDispatchMemoryActions:
             sendTGMemoryReview=sendReview,
         )
 
-        mockExec.assert_awaited_once_with(actions[0], humanApproved=False)
+        mockExec.assert_awaited_once()
+        executeKwargs = mockExec.await_args.kwargs
+        assert executeKwargs["humanApproved"] is False
+        assert executeKwargs["actionContext"] == MemoryActionContext(
+            chatID=1,
+            userID=1,
+        )
         sendReview.assert_awaited_once_with({"action": "add", "mode": "pinned"})
+
+    @patch("utils.llm.review.buildMemoryActionReviewPayload", new_callable=AsyncMock)
+    @patch("utils.llm.review.executeAction", new_callable=AsyncMock, return_value=False)
+    @patch("utils.llm.review.getMemoryAutoApprove", return_value=True)
+    @patch("utils.llm.review.logAction", new_callable=AsyncMock)
+    async def test_autoapproveFailureRoutesActionToHuman(
+        self, mockLogAction, mockAuto, mockExec, mockBuild,
+    ):
+        """Global contextual 自动执行失败时，action 仍保留在审核队列。"""
+        mockBuild.return_value = {"action": "add", "content": "待重试"}
+        sendReview = AsyncMock()
+        action = MemoryAction(
+            action="add", scopeType="global", scopeID="global",
+            content="待重试", mode="contextual",
+        )
+
+        await dispatchMemoryActions(
+            [action],
+            autoMode="on",
+            opsList=["1"],
+            chatID=1,
+            originalMsg="msg",
+            userID=1,
+            sendTGMemoryReview=sendReview,
+        )
+
+        mockExec.assert_awaited_once()
+        sendReview.assert_awaited_once_with({"action": "add", "content": "待重试"})
 
     @patch("utils.llm.review.logSystemEvent", new_callable=AsyncMock)
     @patch("utils.llm.review.getMemoryAutoApprove", return_value=False)

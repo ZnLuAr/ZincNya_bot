@@ -28,6 +28,7 @@ from handlers.llmReview import (
     handleReviewCallback,
     sendReviewMessage,
 )
+from utils.llm.memory.action import MemoryActionContext
 from utils.llm.memory.types import MemoryQuery, MemoryTurn
 
 
@@ -92,7 +93,7 @@ def _seedMemoryReviewEntry(bot_data: dict, *, targetState="old-state"):
         "action": {
             "action": "update",
             "scopeType": "user",
-            "scopeID": "42",
+            "scopeID": _OPS_ID,
             "memoryID": 7,
             "content": "拟议事实",
             "targetState": targetState,
@@ -280,7 +281,7 @@ class TestMemoryReviewConflict:
                 "handlers.llmReview.executeAction",
                 new_callable=AsyncMock,
                 return_value=False,
-            ),
+            ) as mockExecute,
             patch(
                 "handlers.llmReview.refreshMemoryReviewItem",
                 new_callable=AsyncMock,
@@ -294,6 +295,11 @@ class TestMemoryReviewConflict:
 
             mockRefresh.side_effect = _refresh
             await handleMemoryReviewCallback(mockUpdate, mockContext)
+
+        assert mockExecute.await_args.kwargs["actionContext"] == MemoryActionContext(
+            chatID=_CHAT_ID,
+            userID=_OPS_ID,
+        )
 
         assert key in mockContext.bot_data
         assert mockContext.bot_data[key]["action"]["targetState"] == "new-state"
@@ -313,10 +319,15 @@ class TestMemoryReviewConflict:
                 "handlers.llmReview.executeAction",
                 new_callable=AsyncMock,
                 return_value=True,
-            ),
+            ) as mockExecute,
             patch("handlers.llmReview.logAction", new_callable=AsyncMock),
         ):
             await handleMemoryReviewCallback(mockUpdate, mockContext)
+
+        assert mockExecute.await_args.kwargs["actionContext"] == MemoryActionContext(
+            chatID=_CHAT_ID,
+            userID=_OPS_ID,
+        )
 
         assert key not in mockContext.bot_data
         assert f"llm_editidx_{_REVIEW_MSG_ID}" not in mockContext.bot_data

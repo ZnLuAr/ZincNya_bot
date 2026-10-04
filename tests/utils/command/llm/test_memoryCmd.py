@@ -200,6 +200,7 @@ class TestRetrievalManagement:
         await _handleMemoryCommand(["retrieval"], _app())
         assert "legacy" in capsys.readouterr().out
 
+    @patch.object(memoryCmd, "loadLLMConfig", return_value={})
     @patch.object(memoryCmd, "getMemoryCounts", new_callable=AsyncMock, return_value={"total": 8, "enabled": 4})
     @patch.object(memoryCmd, "loadCalibratedThresholds", return_value=({
         "semanticCurrent": None,
@@ -209,7 +210,7 @@ class TestRetrievalManagement:
     @patch.object(memoryCmd, "getMemoryRetrievalMode", return_value="hybrid")
     @patch.object(memoryCmd, "getStateManager")
     async def test_status_is_read_only_and_reports_degradation(
-        self, mockState, mockMode, mockCalibration, mockCounts, capsys,
+        self, mockState, mockMode, mockCalibration, mockCounts, mockConfig, capsys,
     ):
         runtime = MagicMock()
         runtime.getStatus.return_value = {
@@ -222,6 +223,7 @@ class TestRetrievalManagement:
             "indexPending": 1,
             "oldestIndexAgeMs": 12.5,
             "lastReason": "queryTimeout",
+            "reconcileCapacitySaturated": True,
         }
         mockState.return_value.getMemoryRuntime.return_value = runtime
 
@@ -229,7 +231,80 @@ class TestRetrievalManagement:
 
         out = capsys.readouterr().out
         assert "启用 4 / 总计 8" in out
-        assert "2/4 (50.0%)" in out
+        assert "2/4 contextual (50.0%)" in out
         assert "calibrationDatasetMissing" in out
+        assert "queryRejected=0" in out
+        assert "workerFailures=0" in out
         assert "queryTimeout" in out
+        assert "对账容量：已饱和" in out
+        assert "reconcileCapacitySaturated=true" in out
+        assert "选择后端：local" in out
+        assert "检索会降级（calibrationDatasetMissing）" in out
         runtime.getStatus.assert_called_once_with()
+
+    @staticmethod
+    async def _runStatus(capsys, config, *, apiKey="selector-key", runtimeStatus=None):
+        """按给定 llmConfig 与凭据跑一次 hybrid status，返回打印内容。"""
+        if runtimeStatus is None:
+            runtimeStatus = {"running": True, "closing": False, "encoderReady": True}
+        runtime = MagicMock()
+        runtime.getStatus.return_value = runtimeStatus
+        with (
+            patch.object(memoryCmd, "loadLLMConfig", return_value=config),
+            patch.object(memoryCmd, "getMemoryRetrievalMode", return_value="hybrid"),
+            patch.object(memoryCmd, "loadCalibratedThresholds", return_value=(
+                dict.fromkeys(("semanticCurrent", "semanticAssisted", "lexical")),
+                "calibrationStatusInvalid",
+            )),
+            patch.object(memoryCmd, "getMemoryCounts", new_callable=AsyncMock,
+                         return_value={"total": 3, "enabled": 3}),
+            patch.object(memoryCmd, "getStateManager") as mockState,
+            patch.object(memoryCmd, "LLM_MEMORY_SELECTOR_BASE_URL", "https://selector.invalid"),
+            patch.object(memoryCmd, "LLM_MEMORY_SELECTOR_API_KEY", apiKey),
+        ):
+            mockState.return_value.getMemoryRuntime.return_value = (
+                None if runtimeStatus is False else runtime
+            )
+            await _handleMemoryCommand(["status"], _app())
+        return capsys.readouterr().out
+
+    async def test_status_llm_backend_ignores_calibration_and_shows_selector(self, capsys):
+        """llm 后端不读校准：不能提示校准降级，要列出选择配置，且不回显凭据值。"""
+        out = await self._runStatus(capsys, {"memoryHybridSelector": "llm"})
+        assert "选择后端：llm（protocol=responses，model=gpt-5.6-terra，effort=high" in out
+        assert "凭据已设置" in out
+        assert "llm 后端不使用" in out
+        assert "检索会降级" not in out
+        assert "当前效果：hybrid（llm 选择）\n" in out
+        assert "selector-key" not in out
+
+    @pytest.mark.parametrize("apiKey, runtimeStatus, expected", [
+        (None, None, "selector 凭据未设置，只保留常驻记忆"),
+        ("selector-key", False, "Runtime 未注册，检索返回空结果"),
+        ("selector-key", {"running": True, "closing": False, "encoderReady": False},
+         "语义编码器尚未就绪，候选只来自词面通道"),
+    ])
+    async def test_status_llm_backend_explains_degraded_effect(self, capsys, apiKey, runtimeStatus, expected):
+        """llm 后端的降级提示要对应它自己的失败路径。"""
+        out = await self._runStatus(
+            capsys, {"memoryHybridSelector": "llm"}, apiKey=apiKey, runtimeStatus=runtimeStatus)
+        assert "凭据未设置" in out if apiKey is None else "凭据已设置" in out
+        assert expected in out
+
+    @pytest.mark.parametrize("config", [
+        {"memoryHybridSelector": "llm", "memorySelectorProtocol": "message"},
+        {"memoryHybridSelector": "typo"},
+    ])
+    async def test_status_invalid_selector_config_reports_empty_result(self, capsys, config):
+        """选择配置无效时检索直接返回空结果，status 要如实说明。"""
+        out = await self._runStatus(capsys, config)
+        assert "配置无效：selectorConfig" in out
+        assert "选择配置无效（selectorConfig），检索返回空结果" in out
+
+    async def test_status_local_backend_ignores_llm_only_fields(self, capsys):
+        """local 后端不读选择字段：其中的错误值不影响检索，不能报成配置无效。"""
+        out = await self._runStatus(
+            capsys, {"memoryHybridSelector": "local", "memorySelectorProtocol": "message"})
+        assert "选择后端：local" in out
+        assert "selectorConfig" not in out
+        assert "检索会降级（calibrationStatusInvalid），只保留常驻记忆" in out

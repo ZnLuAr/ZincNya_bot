@@ -1,0 +1,621 @@
+{
+  "schemaVersion": 1,
+  "description": "用于检索结构冒烟的合成边界场景；不是生产数据，也不是已批准的质量校准集。",
+  "reviewStatus": "synthetic-draft",
+  "clock": "2026-01-01T12:00:00",
+  "calibrationCaseCount": 3,
+  "holdoutCaseCount": 3,
+  "cases": [
+    {
+      "caseID": "pinned-disabled",
+      "groupID": "smoke-pinned-disabled",
+      "split": "calibration",
+      "queryNow": "2026-01-01T12:00:00",
+      "scope": {
+        "chatID": null,
+        "userID": null,
+        "sessionID": null
+      },
+      "memories": [
+        {
+          "id": 5001,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "回复始终使用简体中文",
+          "tags": ["语言"],
+          "enabled": true,
+          "priority": 3,
+          "source": "manual",
+          "mode": "pinned",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5002,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "用户周末常去城南的猫咖休息",
+          "tags": ["周末安排", "猫咖"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": "周末去哪、城南、猫咪咖啡馆、撸猫",
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5003,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "用户周末常去北城的独立书店",
+          "tags": ["周末安排"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5004,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "用户以前喜欢在城南猫咖休息",
+          "tags": ["历史偏好"],
+          "enabled": false,
+          "priority": 3,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": "城南猫咖",
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        }
+      ],
+      "query": {
+        "turns": [
+          {
+            "currentText": "休息日想去南边那家猫咪咖啡馆",
+            "replyText": ""
+          }
+        ],
+        "history": []
+      },
+      "requiredIDs": [5002],
+      "allowedIDs": [],
+      "forbiddenIDs": [5003, 5004],
+      "requiredPinnedIDs": [5001],
+      "allowedPinnedIDs": [],
+      "forbiddenPinnedIDs": [],
+      "allowAbstain": false,
+      "subsets": ["pinned", "disabled"],
+      "metadata": {
+        "purpose": "pinned 与 disabled 不进入 contextual 竞争"
+      }
+    },
+    {
+      "caseID": "scope-history",
+      "groupID": "smoke-scope-history",
+      "split": "calibration",
+      "queryNow": "2026-01-01T12:00:00",
+      "scope": {
+        "chatID": "smoke-chat",
+        "userID": null,
+        "sessionID": null
+      },
+      "memories": [
+        {
+          "id": 5011,
+          "scope_type": "chat",
+          "scope_id": "smoke-chat",
+          "content": "用户在这个聊天里偏好安静的咖啡馆",
+          "tags": ["地点", "偏好"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": "见面地点、安静、不吵",
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5012,
+          "scope_type": "chat",
+          "scope_id": "other-chat",
+          "content": "用户在另一个聊天里偏好热闹的酒吧",
+          "tags": ["地点"],
+          "enabled": true,
+          "priority": 3,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": "见面地点、酒吧",
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5013,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "公司下周安排消防演练",
+          "tags": ["工作"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        }
+      ],
+      "query": {
+        "turns": [
+          {
+            "currentText": "还是之前那个不吵的地方",
+            "replyText": ""
+          }
+        ],
+        "history": [
+          {
+            "direction": "incoming",
+            "sender": "用户",
+            "content": "刚才我们说过见面地点",
+            "timestamp": "2026-01-01T11:55:00"
+          }
+        ]
+      },
+      "requiredIDs": [5011],
+      "allowedIDs": [],
+      "forbiddenIDs": [5012, 5013],
+      "requiredPinnedIDs": [],
+      "allowedPinnedIDs": [],
+      "forbiddenPinnedIDs": [],
+      "allowAbstain": false,
+      "subsets": ["scope", "history"],
+      "metadata": {
+        "purpose": "只从当前 chat scope 读取，并用近期历史补全回指"
+      }
+    },
+    {
+      "caseID": "wide-pool",
+      "groupID": "smoke-wide-pool",
+      "split": "calibration",
+      "queryNow": "2026-01-01T12:00:00",
+      "scope": {
+        "chatID": null,
+        "userID": null,
+        "sessionID": null
+      },
+      "memories": [
+        {
+          "id": 5020,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "用户工作时需要一把能减轻手腕负担的分体键盘",
+          "tags": ["键盘", "手腕"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": "写代码、键盘、护腕、手腕负担",
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5021,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "合成干扰记忆 1：用户准备整理书架",
+          "tags": ["合成干扰"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5022,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "合成干扰记忆 2：用户准备整理书架",
+          "tags": ["合成干扰"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5023,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "合成干扰记忆 3：用户准备整理书架",
+          "tags": ["合成干扰"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5024,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "合成干扰记忆 4：用户准备整理书架",
+          "tags": ["合成干扰"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5025,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "合成干扰记忆 5：用户准备整理书架",
+          "tags": ["合成干扰"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5026,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "合成干扰记忆 6：用户准备整理书架",
+          "tags": ["合成干扰"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5027,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "合成干扰记忆 7：用户准备整理书架",
+          "tags": ["合成干扰"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5028,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "合成干扰记忆 8：用户准备整理书架",
+          "tags": ["合成干扰"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5029,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "合成干扰记忆 9：用户准备整理书架",
+          "tags": ["合成干扰"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5030,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "合成干扰记忆 10：用户准备整理书架",
+          "tags": ["合成干扰"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        }
+      ],
+      "query": {
+        "turns": [
+          {
+            "currentText": "写程序时想换成能保护手腕的键盘",
+            "replyText": ""
+          }
+        ],
+        "history": []
+      },
+      "requiredIDs": [5020],
+      "allowedIDs": [],
+      "forbiddenIDs": [5021, 5022, 5023, 5024, 5025, 5026, 5027, 5028, 5029, 5030],
+      "requiredPinnedIDs": [],
+      "allowedPinnedIDs": [],
+      "forbiddenPinnedIDs": [],
+      "allowAbstain": false,
+      "subsets": ["wideCandidatePool"],
+      "metadata": {
+        "purpose": "目标记忆位于 legacy 十条候选之外"
+      }
+    },
+    {
+      "caseID": "pinned-budget",
+      "groupID": "smoke-pinned-budget",
+      "split": "holdout",
+      "queryNow": "2026-01-01T12:00:00",
+      "scope": {
+        "chatID": null,
+        "userID": null,
+        "sessionID": null
+      },
+      "memories": [
+        {
+          "id": 5041,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "回复使用简体中文，并保持直接、友好的语气",
+          "tags": ["人设"],
+          "enabled": true,
+          "priority": 3,
+          "source": "manual",
+          "mode": "pinned",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5042,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。合成预算压力条目：这段文本只用于验证常驻记忆预算。",
+          "tags": ["预算"],
+          "enabled": true,
+          "priority": 0,
+          "source": "manual",
+          "mode": "pinned",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5043,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "用户下周要提交报销单",
+          "tags": ["工作"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": "报销、下周、提交",
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5044,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "用户周末准备去看展览",
+          "tags": ["周末"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        }
+      ],
+      "query": {
+        "turns": [
+          {
+            "currentText": "帮我写一段简短说明",
+            "replyText": ""
+          }
+        ],
+        "history": []
+      },
+      "requiredIDs": [5043],
+      "allowedIDs": [],
+      "forbiddenIDs": [5044],
+      "requiredPinnedIDs": [5041],
+      "allowedPinnedIDs": [],
+      "forbiddenPinnedIDs": [5042],
+      "allowAbstain": false,
+      "subsets": ["pinned", "budget"],
+      "metadata": {
+        "purpose": "常驻段超预算时保留短条目并继续处理 contextual"
+      }
+    },
+    {
+      "caseID": "empty-disabled",
+      "groupID": "smoke-empty-disabled",
+      "split": "holdout",
+      "queryNow": "2026-01-01T12:00:00",
+      "scope": {
+        "chatID": null,
+        "userID": null,
+        "sessionID": null
+      },
+      "memories": [
+        {
+          "id": 5051,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "回复可以保持简洁，不必重复用户已经说过的内容",
+          "tags": ["回复风格"],
+          "enabled": true,
+          "priority": 3,
+          "source": "manual",
+          "mode": "pinned",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5052,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "用户喜欢在周末去爬山",
+          "tags": ["周末"],
+          "enabled": false,
+          "priority": 3,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": "周末、户外、爬山",
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5053,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "公司本月安排消防演练",
+          "tags": ["工作"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        }
+      ],
+      "query": {
+        "turns": [
+          {
+            "currentText": "",
+            "replyText": ""
+          }
+        ],
+        "history": []
+      },
+      "requiredIDs": [],
+      "allowedIDs": [],
+      "forbiddenIDs": [5052, 5053],
+      "requiredPinnedIDs": [5051],
+      "allowedPinnedIDs": [],
+      "forbiddenPinnedIDs": [],
+      "allowAbstain": true,
+      "subsets": ["emptyQuery", "disabled", "pinned"],
+      "metadata": {
+        "purpose": "空查询不激活 contextual，只保留常驻记忆"
+      }
+    },
+    {
+      "caseID": "scope-isolation",
+      "groupID": "smoke-scope-isolation",
+      "split": "holdout",
+      "queryNow": "2026-01-01T12:00:00",
+      "scope": {
+        "chatID": "smoke-chat-2",
+        "userID": null,
+        "sessionID": null
+      },
+      "memories": [
+        {
+          "id": 5061,
+          "scope_type": "chat",
+          "scope_id": "smoke-chat-2",
+          "content": "这个聊天里用户希望安排安静的见面地点",
+          "tags": ["地点"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": "见面、安静、地点",
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5062,
+          "scope_type": "chat",
+          "scope_id": "smoke-chat-1",
+          "content": "另一个聊天里用户希望去热闹的酒吧",
+          "tags": ["地点"],
+          "enabled": true,
+          "priority": 3,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": "见面、酒吧、热闹",
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5063,
+          "scope_type": "global",
+          "scope_id": "global",
+          "content": "用户下个月要整理服务器备份",
+          "tags": ["工作"],
+          "enabled": true,
+          "priority": 0,
+          "source": "inferred",
+          "mode": "contextual",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        },
+        {
+          "id": 5064,
+          "scope_type": "chat",
+          "scope_id": "smoke-chat-2",
+          "content": "这个聊天的固定语言偏好是简体中文",
+          "tags": ["语言"],
+          "enabled": true,
+          "priority": 3,
+          "source": "manual",
+          "mode": "pinned",
+          "retrievalHint": null,
+          "created_at": "2026-01-01T08:00:00",
+          "updated_at": "2026-01-01T11:00:00"
+        }
+      ],
+      "query": {
+        "turns": [
+          {
+            "currentText": "还是选之前那个不吵的地方",
+            "replyText": ""
+          }
+        ],
+        "history": []
+      },
+      "requiredIDs": [5061],
+      "allowedIDs": [],
+      "forbiddenIDs": [5062, 5063],
+      "requiredPinnedIDs": [5064],
+      "allowedPinnedIDs": [],
+      "forbiddenPinnedIDs": [],
+      "allowAbstain": false,
+      "subsets": ["scope", "pinned"],
+      "metadata": {
+        "purpose": "高 priority 的其他 chat 不能越过 scope 过滤"
+      }
+    }
+  ]
+}

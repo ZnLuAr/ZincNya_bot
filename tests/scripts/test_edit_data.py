@@ -576,14 +576,95 @@ def test_dbeditor_tags_change_without_hint_field_clears_hint(tmp_path, dbeditorK
     assert rawHint is None
 
 
-def test_dbeditor_rejects_plaintext_hint(tmp_path, dbeditorKey):
+def test_dbeditor_encrypts_plaintext_hint(tmp_path, dbeditorKey):
     db = tmp_path / "mem.db"
     _make_memory_hint_db(db, dbeditorKey)
     exported = edit_data.DBEditor.export_to_json(db)
-    exported["records"][0]["retrieval_hint"] = "明文说明"
+    exported["records"][0]["retrieval_hint"] = "plain hint"
 
-    with pytest.raises(ValueError, match="密文封装"):
-        edit_data.DBEditor.import_from_json(db, exported, dry_run=False)
+    edit_data.DBEditor.import_from_json(db, exported, dry_run=False)
+
+    conn = sqlite3.connect(db)
+    rawHint = conn.execute(
+        "SELECT retrieval_hint FROM memory_entries WHERE id = 1"
+    ).fetchone()[0]
+    conn.close()
+    assert rawHint != b"plain hint"
+    assert dbeditorKey.decrypt(rawHint).decode("utf-8") == "plain hint"
+
+
+def test_dbeditor_migrates_old_memory_schema_for_new_fields(tmp_path, dbeditorKey):
+    """旧版数据库也能接收 mode/hint，并且 hint 仍以密文落库。"""
+    db = tmp_path / "mem.db"
+    _make_single_table_db(db)
+    data = {
+        "table": "memory_entries",
+        "records": [{
+            "id": 1,
+            "mode": "pinned",
+            "retrieval_hint": "migration hint",
+        }],
+    }
+
+    edit_data.DBEditor.import_from_json(db, data, dry_run=False)
+
+    conn = sqlite3.connect(db)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(memory_entries)")}
+    mode, rawHint = conn.execute(
+        "SELECT mode, retrieval_hint FROM memory_entries WHERE id = 1"
+    ).fetchone()
+    conn.close()
+    assert {"mode", "retrieval_hint"} <= columns
+    assert mode == "pinned"
+    assert dbeditorKey.decrypt(rawHint).decode("utf-8") == "migration hint"
+
+
+def test_dbeditor_optimization_patch_only_updates_retrieval_metadata(tmp_path, dbeditorKey):
+    """优化文件只改变 mode/hint，不覆盖正文、标签，也不删除缺失记录。"""
+    db = tmp_path / "mem.db"
+    _make_memory_hint_db(db, dbeditorKey)
+
+    conn = sqlite3.connect(db)
+    secondContent = dbeditorKey.encrypt(b"second")
+    secondHint = dbeditorKey.encrypt(b"second hint")
+    conn.execute(
+        "INSERT INTO memory_entries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            2, "global", "global", secondContent, json.dumps(["keep"]),
+            1, 0, "manual", "contextual", secondHint,
+        ),
+    )
+    originalContent = conn.execute(
+        "SELECT content FROM memory_entries WHERE id = 1"
+    ).fetchone()[0]
+    conn.commit()
+    conn.close()
+
+    data = {
+        "table": "memory_entries",
+        "records": [{
+            "id": 1,
+            "content": "must not replace original content",
+            "tags_json": ["must not replace tags"],
+            "mode": "pinned",
+            "retrieval_hint": "updated hint",
+            "_optimization_reason": "metadata-only patch",
+        }],
+    }
+
+    edit_data.DBEditor.import_from_json(db, data, dry_run=False)
+
+    conn = sqlite3.connect(db)
+    row = conn.execute(
+        "SELECT content, tags_json, mode, retrieval_hint FROM memory_entries WHERE id = 1"
+    ).fetchone()
+    count = conn.execute("SELECT COUNT(*) FROM memory_entries").fetchone()[0]
+    conn.close()
+    assert row[0] == originalContent
+    assert json.loads(row[1]) == ["t1"]
+    assert row[2] == "pinned"
+    assert dbeditorKey.decrypt(row[3]).decode("utf-8") == "updated hint"
+    assert count == 2
 
 
 def test_dbeditor_export_empty_db_raises(tmp_path):

@@ -3,6 +3,7 @@
 import json
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -64,16 +65,18 @@ class _FakeSession:
         return [output]
 
 
-def _writeManifest(tmpPath: Path, *, maxTokens=8, dimension=4):
+def _writeManifest(tmpPath: Path, *, maxTokens=8, dimension=4, modelFile=None):
     modelDir = tmpPath / "model"
     modelDir.mkdir()
     artifacts = []
     for fileName, content in (
-        ("model_optimized.onnx", b"model"),
+        (modelFile or "model_optimized.onnx", b"model"),
         ("tokenizer.json", b"tokenizer"),
         ("ort_config.json", b"config"),
     ):
-        (modelDir / fileName).write_bytes(content)
+        filePath = modelDir / fileName
+        filePath.parent.mkdir(parents=True, exist_ok=True)
+        filePath.write_bytes(content)
         artifacts.append({
             "path": fileName,
             "size": len(content),
@@ -93,6 +96,8 @@ def _writeManifest(tmpPath: Path, *, maxTokens=8, dimension=4):
         "specialTokens": {"cls": "[CLS]", "sep": "[SEP]", "pad": "[PAD]"},
         "artifacts": artifacts,
     }
+    if modelFile is not None:
+        manifest["modelFile"] = modelFile
     manifestPath = tmpPath / "manifest.json"
     manifestPath.write_text(json.dumps(manifest), encoding="utf-8")
     return modelDir, manifestPath
@@ -121,6 +126,114 @@ def test_loadModelManifestRejectsMalformedArtifactMetadata(tmp_path):
     manifestPath.write_text(json.dumps(manifest), encoding="utf-8")
 
     with pytest.raises(MemoryEncoderError, match="SHA-256"):
+        loadModelManifest(manifestPath)
+
+
+@pytest.mark.parametrize("modelFile", [None, "", "   ", 1, True, [], {}])
+def test_loadModelManifestRejectsInvalidModelFile(tmp_path, modelFile):
+    """显式声明的 modelFile 必须是非空字符串，不能默默回退默认值。"""
+    _, manifestPath = _writeManifest(tmp_path)
+    manifest = json.loads(manifestPath.read_text(encoding="utf-8"))
+    manifest["modelFile"] = modelFile
+    manifestPath.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(MemoryEncoderError, match="modelFile"):
+        loadModelManifest(manifestPath)
+
+
+@pytest.mark.parametrize("modelFile", ["../outside.onnx", "onnx/../../outside.onnx", "absolute"])
+def test_loadModelManifestRejectsUnsafeModelFile(tmp_path, modelFile):
+    """模型选择与其他产物共用路径检查，拒绝目录穿越和绝对路径。"""
+    _, manifestPath = _writeManifest(tmp_path)
+    manifest = json.loads(manifestPath.read_text(encoding="utf-8"))
+    manifest["modelFile"] = (
+        str(tmp_path / "outside.onnx") if modelFile == "absolute" else modelFile
+    )
+    manifestPath.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(MemoryEncoderError, match="不安全"):
+        loadModelManifest(manifestPath)
+
+
+def test_loadModelManifestRejectsUnlistedModelFile(tmp_path):
+    """即使文件存在，也不能加载未在 artifacts 中声明散列的模型。"""
+    modelDir, manifestPath = _writeManifest(tmp_path)
+    (modelDir / "unlisted.onnx").write_bytes(b"model")
+    manifest = json.loads(manifestPath.read_text(encoding="utf-8"))
+    manifest["modelFile"] = "unlisted.onnx"
+    manifestPath.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(MemoryEncoderError, match="artifacts"):
+        loadModelManifest(manifestPath)
+
+
+@pytest.mark.parametrize("modelFile", [None, "model_optimized.onnx", "onnx/model_quantized.onnx"])
+def test_encoderLoadsDeclaredOrDefaultModelFile(tmp_path, monkeypatch, modelFile):
+    """真实构造路径选择兼容旧清单，并把合法嵌套产物交给 ONNX session。"""
+    modelDir, manifestPath = _writeManifest(tmp_path, modelFile=modelFile)
+    loadedPaths = []
+
+    def createSession(modelPath, *, sess_options, providers):
+        loadedPaths.append(modelPath)
+        assert sess_options.intra_op_num_threads == 1
+        assert providers == ["CPUExecutionProvider"]
+        return _FakeSession(None)
+
+    onnxruntime = SimpleNamespace(
+        SessionOptions=SimpleNamespace,
+        ExecutionMode=SimpleNamespace(ORT_SEQUENTIAL="sequential"),
+        InferenceSession=createSession,
+    )
+
+    def importOptionalDependency(moduleName):
+        assert moduleName == "onnxruntime"
+        return onnxruntime
+
+    monkeypatch.setattr(
+        MemoryEncoder, "_importOptionalDependency", staticmethod(importOptionalDependency)
+    )
+    encoder = MemoryEncoder(
+        modelDir=modelDir,
+        manifestPath=manifestPath,
+        numpyModule=object(),
+        tokenizer=_FakeTokenizer(),
+    )
+
+    expectedPath = (modelDir / (modelFile or "model_optimized.onnx")).resolve()
+    assert loadedPaths == [str(expectedPath)]
+    encoder.close()
+
+
+def test_encoderChecksSelectedModelIntegrityBeforeLoading(tmp_path, monkeypatch):
+    """选择不同模型文件名不应绕过已有的 SHA-256 校验。"""
+    modelDir, manifestPath = _writeManifest(tmp_path, modelFile="onnx/model_quantized.onnx")
+    (modelDir / "onnx/model_quantized.onnx").write_bytes(b"other")
+    monkeypatch.setattr(
+        MemoryEncoder,
+        "_importOptionalDependency",
+        staticmethod(lambda moduleName: pytest.fail("不应加载未通过校验的模型")),
+    )
+
+    with pytest.raises(MemoryEncoderUnavailable, match="校验失败"):
+        MemoryEncoder(modelDir=modelDir, manifestPath=manifestPath)
+
+
+@pytest.mark.parametrize(
+    ("fieldName", "value", "message"),
+    [
+        ("pooling", "mean", "pooling=cls"),
+        ("normalization", "none", "normalization=l2"),
+    ],
+)
+def test_loadModelManifestRejectsUnsupportedEncodingContract(
+    tmp_path, fieldName, value, message,
+):
+    _, manifestPath = _writeManifest(tmp_path)
+    manifest = json.loads(manifestPath.read_text(encoding="utf-8"))
+    manifest[fieldName] = value
+    manifestPath.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(MemoryEncoderError, match=message):
         loadModelManifest(manifestPath)
 
 
@@ -212,6 +325,52 @@ def test_encoderChunksLongMemoryWithOverlap(tmp_path, monkeypatch):
     assert all(len(chunk) <= 8 for chunk in chunks)
     assert chunks[0][-3:-1] == chunks[1][1:3]
     assert vectors.shape[0] == len(chunks)
+
+
+def test_memoryRepresentationsKeepHintOutOfBaseText(tmp_path):
+    numpy = pytest.importorskip("numpy")
+    modelDir, manifestPath = _writeManifest(tmp_path, maxTokens=64)
+    encoder = MemoryEncoder(
+        modelDir=modelDir,
+        manifestPath=manifestPath,
+        numpyModule=numpy,
+        tokenizer=_FakeTokenizer(),
+        session=_FakeSession(numpy),
+    )
+    memory = {
+        "content": "喜欢安静的餐厅",
+        "tags": ["餐厅"],
+        "retrievalHint": "约会地点",
+    }
+
+    baseText = encoder._formatMemoryText(memory, includeHint=False)
+    enhancedText = encoder._formatMemoryText(memory, includeHint=True)
+    representations = encoder.encodeMemoryRepresentations(memory)
+
+    assert "检索说明" not in baseText
+    assert "约会地点" not in baseText
+    assert "检索说明：约会地点" in enhancedText
+    assert representations.base is not representations.enhanced
+
+
+def test_memoryRepresentationsReuseBaseMatrixWithoutHint(tmp_path):
+    numpy = pytest.importorskip("numpy")
+    modelDir, manifestPath = _writeManifest(tmp_path)
+    encoder = MemoryEncoder(
+        modelDir=modelDir,
+        manifestPath=manifestPath,
+        numpyModule=numpy,
+        tokenizer=_FakeTokenizer(),
+        session=_FakeSession(numpy),
+    )
+
+    representations = encoder.encodeMemoryRepresentations({
+        "content": "只包含正文",
+        "tags": [],
+        "retrievalHint": "   ",
+    })
+
+    assert representations.base is representations.enhanced
 
 
 def test_encoderRejectsUnsupportedOnnxInput(tmp_path):

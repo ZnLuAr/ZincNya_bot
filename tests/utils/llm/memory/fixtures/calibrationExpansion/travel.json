@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "reviewStatus": "draft",
+  "domain": "travel",
+  "annotationNotes": "全部素材为虚构行程计划，日期晚于固定评估时钟2026-01-01；不是对未来已发生事件的断言，不应用作真实交通、签证或航空规则。work和leisure背景不回答本域的指定人物行程。保留旧caseID以追踪改标，caseID中的multi或normal不是现行类别依据。a/c同义变体及同组案例不能当作独立主题。",
+  "groups": [
+    {
+      "groupID": "travel-multi-required-2200000",
+      "primaryCategory": "normalRecall",
+      "backgroundDomains": ["work", "leisure"],
+      "memories": [
+        {"id": 2200000, "scope_type": "global", "scope_id": "global", "content": "陈昊在2026年9月18日乘坐上海虹桥机场T2航站楼的早班机；适用条件是航班出发时间早于上午8点。", "tags": ["交通", "机场"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200001, "scope_type": "global", "scope_id": "global", "content": "陈昊在2026年9月18日携带折叠自行车乘坐该航班；适用条件是自行车已装入硬壳箱。", "tags": ["交通", "行李"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200002, "scope_type": "global", "scope_id": "global", "content": "陈昊在2026年9月18日的行程计划是从虹桥火车站乘地铁2号线到虹桥2号航站楼站；这是前往虹桥机场T2的方案，不乘开往浦东机场的机场联络线。", "tags": ["交通", "换乘"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200003, "scope_type": "global", "scope_id": "global", "content": "陈昊在2026年9月18日从虹桥火车站赶早班机的备选方案是沿站内引导步行前往虹桥机场T2；只有出发时地铁尚未运营才启用此备选。", "tags": ["交通", "换乘"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200004, "scope_type": "global", "scope_id": "global", "content": "周宁在2026年9月18日从杭州东站前往上海；适用条件是她乘坐G字头高铁。", "tags": ["交通", "高铁"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200005, "scope_type": "global", "scope_id": "global", "content": "周宁在2026年9月18日把蓝色拉杆箱放在高铁行李架；适用条件是箱体高度不超过55厘米。", "tags": ["行李", "高铁"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200006, "scope_type": "global", "scope_id": "global", "content": "林珂在2026年9月18日到达上海虹桥站后使用网约车；适用条件是接送点设置在P6停车场。", "tags": ["交通", "网约车"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200007, "scope_type": "global", "scope_id": "global", "content": "林珂在2026年9月18日把充电宝放进随身背包；适用条件是充电宝额定能量低于100Wh。", "tags": ["行李", "机场"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"}
+      ],
+      "cases": [
+        {"caseID": "travel-multi-2200000-a", "query": {"currentText": "陈昊早班机那天怎么去机场，折叠自行车要怎么处理？"}, "requiredIDs": [2200001, 2200002], "allowedIDs": [2200000, 2200003], "forbiddenIDs": [2200004, 2200005, 2200006, 2200007], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "保留原问题。2200002才回答去机场的交通路线，2200001提供折叠自行车装硬壳箱的条件，两者必需；2200000只是航班背景，2200003为地铁未运营时的备选。原标注把路线降为allowed而把航站楼设为required，与所问不符。原机场联络线经龙阳路去虹桥的路线本身混淆线路，改为地铁2号线及步行备选的合成行程；不能据自行车记录推断航空公司已批准托运。a/c仍属同一需求的问法变体。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}, "subsets": ["multiRequired"]},
+        {"caseID": "travel-multi-2200000-b", "query": {"currentText": "陈昊去虹桥机场赶八点前的航班，乘机场联络线时需要注意什么？"}, "requiredIDs": [2200002], "allowedIDs": [2200000, 2200003], "forbiddenIDs": [2200001, 2200004, 2200005, 2200006, 2200007], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "保留原问题的机场联络线前提，用2200002纠正：该计划目的地是虹桥T2，应乘地铁2号线，而机场联络线开往浦东。2200000的早班机信息和2200003的地铁未运营备选可补充；未问自行车，无需召回2200001。本题只需一条直接事实，不再被组名强制算作multiRequired。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}},
+        {"caseID": "travel-multi-2200000-c", "query": {"currentText": "陈昊带着装箱自行车去赶早班机，机场交通和携车条件是什么？"}, "requiredIDs": [2200001, 2200002], "allowedIDs": [2200000, 2200003], "forbiddenIDs": [2200004, 2200005, 2200006, 2200007], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "保留原问题。2200002才回答去机场的交通路线，2200001提供折叠自行车装硬壳箱的条件，两者必需；2200000只是航班背景，2200003为地铁未运营时的备选。原标注把路线降为allowed而把航站楼设为required，与所问不符。原机场联络线经龙阳路去虹桥的路线本身混淆线路，改为地铁2号线及步行备选的合成行程；不能据自行车记录推断航空公司已批准托运。a/c仍属同一需求的问法变体。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}, "subsets": ["multiRequired"]}
+      ]
+    },
+    {
+      "groupID": "travel-no-answer-2200010",
+      "primaryCategory": "noAnswer",
+      "backgroundDomains": ["work", "leisure"],
+      "memories": [
+        {"id": 2200010, "scope_type": "global", "scope_id": "global", "content": "赵敏计划在2026年10月2日到上海的签证材料受理中心递交个人旅行签证材料；适用条件是目的地为日本且递交时间已在网上预约。", "tags": ["手续", "签注"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200011, "scope_type": "global", "scope_id": "global", "content": "赵敏在2026年10月2日领取新的护照；适用条件是受理回执标注为窗口领取。", "tags": ["手续", "护照"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200012, "scope_type": "global", "scope_id": "global", "content": "王博在2026年10月3日提交机场快速通关申请；适用条件是他持有当日国际航班登机牌。", "tags": ["手续", "机场"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200013, "scope_type": "global", "scope_id": "global", "content": "王博在2026年10月3日把英文行程单打印成纸质件；适用条件是签证中心要求提交纸质材料。", "tags": ["手续", "材料"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200014, "scope_type": "global", "scope_id": "global", "content": "苏晴在2026年10月4日办理机场退税；适用条件是她从浦东机场国际出发区离境。", "tags": ["手续", "退税"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200015, "scope_type": "global", "scope_id": "global", "content": "苏晴在2026年10月4日将购物小票与护照放在退税柜台；适用条件是商品仍保持未使用状态。", "tags": ["手续", "退税"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200016, "scope_type": "global", "scope_id": "global", "content": "韩梅在2026年10月5日申请机场婴儿车托运；适用条件是婴儿车在值机柜台完成贴签。", "tags": ["手续", "托运"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200017, "scope_type": "global", "scope_id": "global", "content": "韩梅在2026年10月5日准备婴儿车的折叠说明；适用条件是工作人员需要现场确认尺寸。", "tags": ["手续", "行李"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"}
+      ],
+      "cases": [
+        {"caseID": "travel-no-answer-2200010-a", "query": {"currentText": "赵敏在2026年10月2日能不能在北京办理韩国签证？"}, "requiredIDs": [], "allowedIDs": [], "forbiddenIDs": [2200010, 2200011, 2200012, 2200013, 2200014, 2200015, 2200016, 2200017], "allowAbstain": true, "metadata": {"reviewStatus": "draft", "annotationRationale": "问题的国家和办理地点均与事实条件不符，不能用相近的签注或领取信息替代，应明确拒答。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}},
+        {"caseID": "travel-no-answer-2200010-b", "query": {"currentText": "王博下个月去加拿大，哪条记录能说明他已经拿到签证？"}, "requiredIDs": [], "allowedIDs": [], "forbiddenIDs": [2200010, 2200011, 2200012, 2200013, 2200014, 2200015, 2200016, 2200017], "allowAbstain": true, "metadata": {"reviewStatus": "draft", "annotationRationale": "现有事实只描述特定日期的申请或材料，不证明加拿大签证已签发，所有候选都不应召回。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}},
+        {"caseID": "travel-no-answer-2200010-c", "query": {"currentText": "苏晴在2026年10月4日从虹桥国内航站楼出发，退税柜台在哪里？"}, "requiredIDs": [], "allowedIDs": [], "forbiddenIDs": [2200010, 2200011, 2200012, 2200013, 2200014, 2200015, 2200016, 2200017], "allowAbstain": true, "metadata": {"reviewStatus": "draft", "annotationRationale": "事实要求浦东机场国际出发区，而查询指定虹桥国内航站楼，地点和适用条件冲突，应该允许弃权。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}}
+      ]
+    },
+    {
+      "groupID": "travel-normal-recall-2200020",
+      "primaryCategory": "normalRecall",
+      "backgroundDomains": ["work", "leisure"],
+      "memories": [
+        {"id": 2200020, "scope_type": "global", "scope_id": "global", "content": "顾晨在2026年11月12日入住苏州河畔公寓；适用条件是预订姓名与本人证件一致。", "tags": ["住处", "入住"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200021, "scope_type": "global", "scope_id": "global", "content": "顾晨计划在2026年11月12日从苏州站前往河畔公寓；预订附带的路线要求先乘地铁4号线到乐桥，再换1号线到临顿路站。", "tags": ["交通", "住处"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200022, "scope_type": "global", "scope_id": "global", "content": "顾晨在2026年11月12日办理河畔公寓入住；适用条件是前台开放时间为14点至22点。", "tags": ["住处", "入住"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200023, "scope_type": "global", "scope_id": "global", "content": "顾晨在2026年11月13日参观苏州园林博物馆；适用条件是他持有提前预约的上午场门票。", "tags": ["场地", "博物馆"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200024, "scope_type": "global", "scope_id": "global", "content": "许岚在2026年11月13日从河畔公寓前往苏州园林博物馆；适用条件是她在平江路南站乘坐观光接驳车。", "tags": ["交通", "场地"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200025, "scope_type": "global", "scope_id": "global", "content": "许岚在2026年11月13日进入苏州园林博物馆东门；适用条件是预约票显示东门检票口。", "tags": ["场地", "博物馆"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200026, "scope_type": "global", "scope_id": "global", "content": "许岚在2026年11月13日将行李寄存在河畔公寓；适用条件是单件行李重量不超过20公斤。", "tags": ["住处", "行李"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200027, "scope_type": "global", "scope_id": "global", "content": "许岚在2026年11月13日取回寄存行李；适用条件是出示公寓订单号和寄存牌。", "tags": ["住处", "行李"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"}
+      ],
+      "cases": [
+        {"caseID": "travel-normal-2200020-a", "query": {"currentText": "顾晨11月12日住苏州河畔公寓，怎么从苏州站过去？"}, "requiredIDs": [2200021], "allowedIDs": [2200020, 2200022], "forbiddenIDs": [2200023, 2200024, 2200025, 2200026, 2200027], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "保留只问从苏州站到公寓的原问题，2200021的换乘路线是必需；2200020的入住身份和2200022的前台时间可选。原required把已在题目给出的住处再计作必需，予以修正。路线也纠正为4号线乐桥换1号线，避免把临顿路误作4号线站点。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}},
+        {"caseID": "travel-normal-2200020-b", "query": {"currentText": "顾晨预约了园林博物馆上午场，应该从哪个门进？"}, "requiredIDs": [], "allowedIDs": [2200023], "forbiddenIDs": [2200020, 2200021, 2200022, 2200024, 2200025, 2200026, 2200027], "allowAbstain": true, "metadata": {"reviewStatus": "draft", "annotationRationale": "保留顾晨问从哪个门进的原问题。2200023只证明顾晨预约了上午场，可作背景但不回答入口；2200025的东门只属于许岚且依赖其票面，不能移植给顾晨，因此禁止。顾晨检票口没有记录，允许弃权，不伪造required；由于存在可选预约背景，本题不是所有候选均无关的纯noAnswer。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}, "subsets": ["partialEvidence", "personMismatch"]},
+        {"caseID": "travel-normal-2200020-c", "query": {"currentText": "许岚在河畔公寓寄存的大箱子，之后凭什么取回？"}, "requiredIDs": [2200027], "allowedIDs": [2200026], "forbiddenIDs": [2200020, 2200021, 2200022, 2200023, 2200024, 2200025], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "保留只问取回凭证的原问题，2200027直接提供订单号和寄存牌；2200026是同一人的寄存重量条件，仅可选。2200020属于顾晨入住，既不回答许岚的取件凭证，也不能充当许岚身份事实，改为forbidden。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}}
+      ]
+    },
+    {
+      "groupID": "travel-opposite-facts-2200030",
+      "primaryCategory": "oppositeFacts",
+      "backgroundDomains": ["work", "leisure"],
+      "memories": [
+        {"id": 2200030, "scope_type": "global", "scope_id": "global", "content": "林悦在2026年12月6日把银色硬箱交给南京机场托运行李柜台；适用条件是箱内只有衣物和洗漱用品。", "tags": ["行李", "托运"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200031, "scope_type": "global", "scope_id": "global", "content": "林悦在2026年12月6日把银色硬箱带入客舱；适用条件是航空公司现场确认箱体尺寸符合随身行李上限。", "tags": ["行李", "客舱"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200032, "scope_type": "global", "scope_id": "global", "content": "林悦在2026年12月6日将备用锂电池放入随身包；适用条件是每块电池都有独立防短路包装。", "tags": ["行李", "电池"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200033, "scope_type": "global", "scope_id": "global", "content": "林悦的2026年12月6日行前草稿曾写把备用锂电池放进托运行李；这条未经核实的草稿已作废，不能作为此次航班的行李安排。", "tags": ["行李", "电池"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200034, "scope_type": "global", "scope_id": "global", "content": "林悦在2026年12月6日从南京机场前往南京南站；适用条件是她使用机场大巴而不是地铁。", "tags": ["交通", "机场"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200035, "scope_type": "global", "scope_id": "global", "content": "林悦在2026年12月6日从南京机场前往南京南站；适用条件是她使用地铁S1线而不是机场大巴。", "tags": ["交通", "机场"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200036, "scope_type": "global", "scope_id": "global", "content": "林悦在2026年12月6日入住南京南站附近的云杉客栈；适用条件是预订日期为6日当晚。", "tags": ["住处", "入住"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200037, "scope_type": "global", "scope_id": "global", "content": "林悦在2026年12月7日从云杉客栈步行到南京南站；适用条件是她携带的行李总重低于15公斤。", "tags": ["住处", "交通"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"}
+      ],
+      "cases": [
+        {"caseID": "travel-opposite-2200030-a", "query": {"currentText": "林悦12月6日的银色硬箱到底是托运还是带进客舱？"}, "requiredIDs": [2200030, 2200031], "allowedIDs": [], "forbiddenIDs": [2200032, 2200033, 2200034, 2200035, 2200036, 2200037], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "保留未指定处置条件的比较问题。同日同一箱子的托运和入舱记录都存在，且题目没有说明满足哪一个条件，不能无依据把托运设为唯一主答案。两条都需召回以呈现条件冲突并请求澄清，而不是断言已确认的最终安排。该冲突是否应改为纯弃权任务，仍需人工裁决。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}, "subsets": ["multiRequired", "unresolvedConflict"]},
+        {"caseID": "travel-opposite-2200030-b", "query": {"currentText": "备用锂电池在林悦这次航班上应该放随身包还是托运行李？"}, "requiredIDs": [2200032], "allowedIDs": [2200033], "forbiddenIDs": [2200030, 2200031, 2200034, 2200035, 2200036, 2200037], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "2200032是独立防短路后随身携带的有效安排，回答锂电池位置；2200033已明确是作废草稿，可作错误来源对照，不是可执行的托运规则。原素材将备用锂电池可凭书面确认托运写成有效条件，会混入失真的出行常识，改为明确作废的合成旧草稿；全部仍待人审。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}},
+        {"caseID": "travel-opposite-2200030-c", "query": {"currentText": "林悦从南京机场去南京南站时，记录的是机场大巴还是S1线？"}, "requiredIDs": [2200034, 2200035], "allowedIDs": [], "forbiddenIDs": [2200030, 2200031, 2200032, 2200033, 2200036, 2200037], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "保留询问究竟记录大巴还是S1的原问题。库里两种方案都有，题目未给最终选择，不能任意偏好大巴；两条均为必需以如实说明两份条件方案并请求确认。是否把这种冲突任务单列或改为纯弃权，仍待人工裁决。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}, "subsets": ["multiRequired", "unresolvedConflict"]}
+      ]
+    },
+    {
+      "groupID": "travel-topic-switch-2200040",
+      "primaryCategory": "topicSwitch",
+      "backgroundDomains": ["work", "leisure"],
+      "memories": [
+        {"id": 2200040, "scope_type": "global", "scope_id": "global", "content": "周凯在2027年1月8日从广州白云机场出发；适用条件是他乘坐凌晨6点的国内航班。", "tags": ["交通", "机场"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200041, "scope_type": "global", "scope_id": "global", "content": "周凯在2027年1月8日把黑色登机箱交给白云机场托运柜台；适用条件是箱体重量不超过23公斤。", "tags": ["行李", "托运"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200042, "scope_type": "global", "scope_id": "global", "content": "周凯在2027年1月8日使用机场快线前往白云机场；适用条件是他从广州东站出发。", "tags": ["交通", "机场"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200043, "scope_type": "global", "scope_id": "global", "content": "周凯在2027年1月8日将护照放在随身证件袋；适用条件是过安检前需要单独取出证件。", "tags": ["行李", "证件"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200044, "scope_type": "global", "scope_id": "global", "content": "陆珊在2027年1月9日入住广州南站旁的榕树公寓；适用条件是她的入住订单从9日开始。", "tags": ["住处", "入住"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200045, "scope_type": "global", "scope_id": "global", "content": "陆珊在2027年1月9日把大件行李寄存在榕树公寓前台；适用条件是每件行李都系有房号标签。", "tags": ["住处", "行李"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200046, "scope_type": "global", "scope_id": "global", "content": "陆珊在2027年1月10日参观广州海事博物馆；适用条件是她持有提前预约的上午入场码。", "tags": ["场地", "博物馆"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"},
+        {"id": 2200047, "scope_type": "global", "scope_id": "global", "content": "陆珊在2027年1月10日从榕树公寓前往广州海事博物馆；适用条件是她乘坐地铁2号线到南洲站。", "tags": ["交通", "场地"], "enabled": true, "priority": 1, "source": "inferred", "mode": "contextual"}
+      ],
+      "cases": [
+        {"caseID": "travel-topic-switch-2200040-a", "query": {"currentText": "周凯那趟航班如果箱子没跟到，行李追踪网站的网址是什么？", "history": [{"content": "陆珊计划入住榕树公寓，之后去广州海事博物馆，上午入场码和前台行李标签要怎么准备？", "timestamp": "2026-01-01T11:58:00", "direction": "incoming"}]}, "requiredIDs": [], "allowedIDs": [], "forbiddenIDs": [2200040, 2200041, 2200042, 2200043, 2200044, 2200045, 2200046, 2200047], "allowAbstain": true, "metadata": {"reviewStatus": "draft", "annotationRationale": "原问题说昨天已托运，但评估时钟是2026-01-01，而周凯行程在2027年，时间前提不成立。改为询问该行程若发生行李延误时的追踪网站；库中只有托运条件，没有网站或追踪服务，仍为无答案。历史先讨论陆珊住宿和博物馆，补入有效历史后检验切换到周凯行李服务的干扰，不扩增题数。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}},
+        {"caseID": "travel-topic-switch-2200040-b", "query": {"currentText": "陆珊想改签1月10日的火车，改签手续要带什么？", "history": [{"content": "周凯从广州东站搭机场快线去白云机场，凌晨六点航班的黑色登机箱和证件袋怎么安排？", "timestamp": "2026-01-01T11:58:00", "direction": "incoming"}]}, "requiredIDs": [], "allowedIDs": [], "forbiddenIDs": [2200040, 2200041, 2200042, 2200043, 2200044, 2200045, 2200046, 2200047], "allowAbstain": true, "metadata": {"reviewStatus": "draft", "annotationRationale": "问题转向火车票改签手续，现有内容是住宿、场地和机场出行，不能把相近的证件或路线事实当作答案。补入评估时钟前两分钟的另一话题历史，实际检验住宿或机场安排对当前问题的干扰。work的软件工程事实与leisure的兴趣事实不回答本题具体行李服务、改签手续或场館开放情况。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}},
+        {"caseID": "travel-topic-switch-2200040-c", "query": {"currentText": "广州海事博物馆今天几点闭馆，周凯能进去吗？", "history": [{"content": "周凯去白云机场的机场快线、黑色登机箱和护照证件袋刚才说到哪了？", "timestamp": "2026-01-01T11:58:00", "direction": "incoming"}]}, "requiredIDs": [], "allowedIDs": [], "forbiddenIDs": [2200040, 2200041, 2200042, 2200043, 2200044, 2200045, 2200046, 2200047], "allowAbstain": true, "metadata": {"reviewStatus": "draft", "annotationRationale": "查询要求当日闭馆时间和周凯的入场资格，现有博物馆事实属于陆珊的预约条件，主题和人物均不匹配。补入评估时钟前两分钟的另一话题历史，实际检验住宿或机场安排对当前问题的干扰。work的软件工程事实与leisure的兴趣事实不回答本题具体行李服务、改签手续或场館开放情况。", "scenarioTimeSemantics": "synthetic-future-itinerary-as-of-2026-01-01"}}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "reviewStatus": "draft",
+  "domain": "leisure",
+  "annotationNotes": "全部标注仍为draft。逐题检查work与travel背景：它们只记录指定软件项目或个人行程，不回答本域的录混音、摄影、手工、阅读与运动问题。photo组保留历史caseID以便追踪纠错，caseID中的noanswer不代表现行分类。",
+  "groups": [
+    {
+      "groupID": "leisure-music-multi",
+      "primaryCategory": "multiRequired",
+      "backgroundDomains": ["work", "travel"],
+      "memories": [
+        {"id": 2300001, "scope_type": "global", "scope_id": "global", "content": "2025年3月，音乐制作人林澈在Ableton Live中把人声录音的采样率设为48 kHz；只有为短片项目交付同期声时适用。", "enabled": true, "mode": "contextual", "tags": ["音乐制作", "录音"], "priority": 2, "source": "inferred"},
+        {"id": 2300002, "scope_type": "global", "scope_id": "global", "content": "2025年3月，林澈为短片项目的人声轨使用了-12 dBFS的录音峰值目标；只有在48 kHz同期声录制流程中适用。", "enabled": true, "mode": "contextual", "tags": ["音乐制作", "增益"], "priority": 2, "source": "inferred"},
+        {"id": 2300003, "scope_type": "global", "scope_id": "global", "content": "2025年4月，音乐制作人周遥把鼓组总线上压缩器的比率设为4:1；只有为电子摇滚单曲《潮汐灯》做混音时适用。", "enabled": true, "mode": "contextual", "tags": ["音乐制作", "混音"], "priority": 1, "source": "inferred"},
+        {"id": 2300004, "scope_type": "global", "scope_id": "global", "content": "2025年4月，周遥把《潮汐灯》的鼓组总线压缩器攻击时间设为30毫秒；只有该单曲进入混音阶段时适用。", "enabled": true, "mode": "contextual", "tags": ["音乐制作", "鼓组"], "priority": 1, "source": "inferred"},
+        {"id": 2300005, "scope_type": "global", "scope_id": "global", "content": "2025年5月，音乐制作人许棠把播客片头的旁白高通滤波器截止频率设为80 Hz；只有处理人声旁白时适用。", "enabled": true, "mode": "contextual", "tags": ["音乐制作", "播客"], "priority": 1, "source": "inferred"},
+        {"id": 2300006, "scope_type": "global", "scope_id": "global", "content": "2025年5月，许棠把播客片头旁白的去齿音频段中心设在6.5 kHz；只有旁白齿音明显的版本中适用。", "enabled": true, "mode": "contextual", "tags": ["音乐制作", "人声"], "priority": 1, "source": "inferred"},
+        {"id": 2300007, "scope_type": "global", "scope_id": "global", "content": "2025年6月，音乐制作人顾言把合成器铺底声的立体声宽度控制在110%；只有为游戏预告片制作氛围层时适用。", "enabled": true, "mode": "contextual", "tags": ["音乐制作", "合成器"], "priority": 1, "source": "inferred"},
+        {"id": 2300008, "scope_type": "global", "scope_id": "global", "content": "2025年6月，顾言把游戏预告片的合成器铺底声自动化在副歌前两小节降低3 dB；只有预告片最终混音版本中适用。", "enabled": true, "mode": "contextual", "tags": ["音乐制作", "自动化"], "priority": 1, "source": "inferred"}
+      ],
+      "cases": [
+        {"caseID": "leisure-music-multi-01", "query": {"currentText": "林澈给短片同期声录人声时，采样率和峰值目标分别是多少？"}, "requiredIDs": [2300001, 2300002], "allowedIDs": [], "forbiddenIDs": [2300003, 2300004, 2300005, 2300006, 2300007, 2300008], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "问题同时询问同一录音流程的采样率和峰值目标，两条事实都直接决定完整回答。"}},
+        {"caseID": "leisure-music-multi-02", "query": {"currentText": "《潮汐灯》混音时，鼓组总线的压缩比率和攻击时间怎么设？"}, "requiredIDs": [2300003, 2300004], "allowedIDs": [], "forbiddenIDs": [2300001, 2300002, 2300005, 2300006, 2300007, 2300008], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "问题要求两个相互配套的鼓组压缩参数，缺少任一参数都会使回答不完整。"}},
+        {"caseID": "leisure-music-multi-03", "query": {"currentText": "顾言为游戏预告片做最终混音时，铺底声宽度和副歌前自动化分别是什么？"}, "requiredIDs": [2300007, 2300008], "allowedIDs": [], "forbiddenIDs": [2300001, 2300002, 2300003, 2300004, 2300005, 2300006], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "问题明确限定游戏预告片最终混音，并并列索要宽度与自动化两个必要参数。"}}
+      ]
+    },
+    {
+      "groupID": "leisure-photo-noanswer",
+      "primaryCategory": "normalRecall",
+      "backgroundDomains": ["work", "travel"],
+      "memories": [
+        {"id": 2300011, "scope_type": "global", "scope_id": "global", "content": "2025年2月，摄影师沈禾在青岛海边用35毫米定焦镜头拍摄日落人像；只有拍摄逆光半身肖像时适用。", "enabled": true, "mode": "contextual", "tags": ["摄影", "镜头"], "priority": 1, "source": "inferred"},
+        {"id": 2300012, "scope_type": "global", "scope_id": "global", "content": "2025年2月，沈禾为青岛海边的逆光人像把快门速度设为1/500秒；只有模特保持站立姿势时适用。", "enabled": true, "mode": "contextual", "tags": ["摄影", "快门"], "priority": 1, "source": "inferred"},
+        {"id": 2300013, "scope_type": "global", "scope_id": "global", "content": "2025年3月，摄影师唐宁在室内静物拍摄中使用偏振镜；只有玻璃器皿反光需要控制时适用。", "enabled": true, "mode": "contextual", "tags": ["摄影", "静物"], "priority": 1, "source": "inferred"},
+        {"id": 2300014, "scope_type": "global", "scope_id": "global", "content": "2025年3月，唐宁把室内静物照片的白平衡设为4800 K；只有木桌和玻璃器皿同时入画时适用。", "enabled": true, "mode": "contextual", "tags": ["摄影", "白平衡"], "priority": 1, "source": "inferred"},
+        {"id": 2300015, "scope_type": "global", "scope_id": "global", "content": "2025年4月，摄影师陆遥用85毫米镜头拍摄杭州茶园的春季人像；只有需要压缩远景层次时适用。", "enabled": true, "mode": "contextual", "tags": ["摄影", "人像"], "priority": 1, "source": "inferred"},
+        {"id": 2300016, "scope_type": "global", "scope_id": "global", "content": "2025年4月，陆遥在杭州茶园春季人像中把光圈设为f/2.8；只有单人站在茶垄前时适用。", "enabled": true, "mode": "contextual", "tags": ["摄影", "光圈"], "priority": 1, "source": "inferred"},
+        {"id": 2300017, "scope_type": "global", "scope_id": "global", "content": "2025年5月，摄影师顾岚为博物馆陶器拍摄记录照；只有展柜灯光固定且不能移动展品时适用。", "enabled": true, "mode": "contextual", "tags": ["摄影", "文物"], "priority": 1, "source": "inferred"},
+        {"id": 2300018, "scope_type": "global", "scope_id": "global", "content": "2025年5月，顾岚为博物馆陶器记录照使用三脚架并关闭机身防抖；只有相机固定在展柜外时适用。", "enabled": true, "mode": "contextual", "tags": ["摄影", "器材"], "priority": 1, "source": "inferred"}
+      ],
+      "cases": [
+        {"caseID": "leisure-photo-noanswer-01", "query": {"currentText": "沈禾最近用什么镜头拍海边日落人像？"}, "requiredIDs": [2300011], "allowedIDs": [2300012], "forbiddenIDs": [2300013, 2300014, 2300015, 2300016, 2300017, 2300018], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "保留原问题。2300011直接记录沈禾海边日落人像所用35毫米镜头，不能因查询省略日期而禁止召回；2300012是同次拍摄的可选快门背景。召回后只能陈述2025年2月的已知记录，不能保证最近仍用同款。其他人物、场景均无关。原无答案标签缺乏依据，改为有历史答案的召回题；近期有效性仍待人审。"}},
+        {"caseID": "leisure-photo-noanswer-02", "query": {"currentText": "博物馆里拍陶器时，顾岚现在还会关防抖吗？"}, "requiredIDs": [], "allowedIDs": [2300017, 2300018], "forbiddenIDs": [2300011, 2300012, 2300013, 2300014, 2300015, 2300016], "allowAbstain": true, "metadata": {"reviewStatus": "draft", "annotationRationale": "保留询问当前习惯的原问题。2300018的历史防抖行为和2300017的固定展柜条件可以作为带日期的相关背景，不能一律禁止；但没有当前确认，故没有required且允许弃权，不归入所有候选无关的noAnswer。人审需确认任务是否允许只提供历史证据而明确当前未知。"}, "subsets": ["partialEvidence"]},
+        {"caseID": "leisure-photo-noanswer-03", "query": {"currentText": "唐宁拍玻璃器皿时用的是哪一档ISO？"}, "requiredIDs": [], "allowedIDs": [], "forbiddenIDs": [2300011, 2300012, 2300013, 2300014, 2300015, 2300016, 2300017, 2300018], "allowAbstain": true, "metadata": {"reviewStatus": "draft", "annotationRationale": "相关事实只记录偏振镜和白平衡，没有记录ISO，所有候选都不能支持这个具体数值。"}, "subsets": ["noAnswer"]}
+      ]
+    },
+    {
+      "groupID": "leisure-craft-normal",
+      "primaryCategory": "normalRecall",
+      "backgroundDomains": ["work", "travel"],
+      "memories": [
+        {"id": 2300021, "scope_type": "global", "scope_id": "global", "content": "2025年1月，手工艺人叶青为棉麻托特包选择了3号蜡线；只有手缝包带需要承受日常提拉时适用。", "enabled": true, "mode": "contextual", "tags": ["手工", "缝纫"], "priority": 1, "source": "inferred"},
+        {"id": 2300022, "scope_type": "global", "scope_id": "global", "content": "2025年1月，叶青把棉麻托特包的包带缝距设为每厘米4针；只有使用3号蜡线手缝时适用。", "enabled": true, "mode": "contextual", "tags": ["手工", "针距"], "priority": 1, "source": "inferred"},
+        {"id": 2300023, "scope_type": "global", "scope_id": "global", "content": "2025年2月，手工艺人罗真给陶土杯外壁刷了透明釉；只有杯子完成素烧并准备第二次入窑时适用。", "enabled": true, "mode": "contextual", "tags": ["手工", "陶艺"], "priority": 1, "source": "inferred"},
+        {"id": 2300024, "scope_type": "global", "scope_id": "global", "content": "2025年2月，罗真把陶土杯透明釉层控制在约0.5毫米；只有杯口和杯身都已清洁除尘时适用。", "enabled": true, "mode": "contextual", "tags": ["手工", "釉料"], "priority": 1, "source": "inferred"},
+        {"id": 2300025, "scope_type": "global", "scope_id": "global", "content": "2025年3月，手工艺人程野用紫檀木制作折叠书签；只有木料含水率低于10%时适用。", "enabled": true, "mode": "contextual", "tags": ["手工", "木工"], "priority": 1, "source": "inferred"},
+        {"id": 2300026, "scope_type": "global", "scope_id": "global", "content": "2025年3月，程野把紫檀折叠书签的连接轴直径做成2毫米；只有书签需要在书脊处反复折叠时适用。", "enabled": true, "mode": "contextual", "tags": ["手工", "书签"], "priority": 1, "source": "inferred"},
+        {"id": 2300027, "scope_type": "global", "scope_id": "global", "content": "2025年4月，手工艺人苏禾用冷制皂配方制作薰衣草香皂；只有橄榄油比例达到60%时适用。", "enabled": true, "mode": "contextual", "tags": ["手工", "皂艺"], "priority": 1, "source": "inferred"},
+        {"id": 2300028, "scope_type": "global", "scope_id": "global", "content": "2025年4月，苏禾让薰衣草冷制皂在通风架上熟成六周；只有皂体已经完成脱模且表面不粘手时适用。", "enabled": true, "mode": "contextual", "tags": ["手工", "熟成"], "priority": 1, "source": "inferred"}
+      ],
+      "cases": [
+        {"caseID": "leisure-craft-normal-01", "query": {"currentText": "叶青给需要承重的棉麻托特包包带用几号蜡线？"}, "requiredIDs": [2300021], "allowedIDs": [2300022], "forbiddenIDs": [2300023, 2300024, 2300025, 2300026, 2300027, 2300028], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "问题直接命中包带材料事实；同一包带的针距可作为相关补充，但其他手工项目无关。"}},
+        {"caseID": "leisure-craft-normal-02", "query": {"currentText": "罗真那只准备二次入窑的陶土杯，透明釉刷多厚？"}, "requiredIDs": [2300024], "allowedIDs": [2300023], "forbiddenIDs": [2300021, 2300022, 2300025, 2300026, 2300027, 2300028], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "保留原问题中的刷多厚：2300024的约0.5毫米才是直接答案，必须召回；2300023只说明二次入窑前使用透明釉，可作项目背景。原标注把厚度降为可选、把釉种设为必需，与所问属性相反。适用时应保留杯体已清洁除尘的条件。"}},
+        {"caseID": "leisure-craft-normal-03", "query": {"currentText": "苏禾的薰衣草冷制皂要放多久才能熟成？"}, "requiredIDs": [2300028], "allowedIDs": [2300027], "forbiddenIDs": [2300021, 2300022, 2300023, 2300024, 2300025, 2300026], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "问题询问熟成时长，六周事实是直接答案；配方油脂比例能帮助确认项目但不是必要答案。"}}
+      ]
+    },
+    {
+      "groupID": "leisure-reading-opposite",
+      "primaryCategory": "oppositeFacts",
+      "backgroundDomains": ["work", "travel"],
+      "memories": [
+        {"id": 2300031, "scope_type": "global", "scope_id": "global", "content": "2024年11月，读者顾宁在读纸质历史传记时每天睡前阅读30分钟；只有工作日晚上需要控制用眼时间时适用。", "enabled": true, "mode": "contextual", "tags": ["阅读", "纸书"], "priority": 1, "source": "inferred"},
+        {"id": 2300032, "scope_type": "global", "scope_id": "global", "content": "2025年7月，顾宁在读同一套历史传记的电子版时会把字体调大两级；只有通勤时使用手机阅读时适用。", "enabled": true, "mode": "contextual", "tags": ["阅读", "电子书"], "priority": 1, "source": "inferred"},
+        {"id": 2300033, "scope_type": "global", "scope_id": "global", "content": "2024年12月，读者梁澄在阅读悬疑小说时先看目录再开始正文；只有参加读书会并需要提前准备章节讨论时适用。", "enabled": true, "mode": "contextual", "tags": ["阅读", "读书会"], "priority": 1, "source": "inferred"},
+        {"id": 2300034, "scope_type": "global", "scope_id": "global", "content": "2025年8月，梁澄在个人阅读悬疑小说时会跳过目录直接读正文；只有不参加读书会且想保留叙事顺序时适用。", "enabled": true, "mode": "contextual", "tags": ["阅读", "悬疑"], "priority": 1, "source": "inferred"},
+        {"id": 2300035, "scope_type": "global", "scope_id": "global", "content": "2025年1月，读者沈墨在读诗集时用铅笔标记意象；只有书籍属于自己的纸质版本时适用。", "enabled": true, "mode": "contextual", "tags": ["阅读", "诗歌"], "priority": 1, "source": "inferred"},
+        {"id": 2300036, "scope_type": "global", "scope_id": "global", "content": "2025年9月，沈墨在阅读图书馆借来的诗集时使用透明便签记录意象；只有借阅期限内不能在书页上书写时适用。", "enabled": true, "mode": "contextual", "tags": ["阅读", "借阅"], "priority": 1, "source": "inferred"},
+        {"id": 2300037, "scope_type": "global", "scope_id": "global", "content": "2024年10月，读者许闻把科普书按章节顺序阅读；只有准备学校的天文社分享时适用。", "enabled": true, "mode": "contextual", "tags": ["阅读", "科普"], "priority": 1, "source": "inferred"},
+        {"id": 2300038, "scope_type": "global", "scope_id": "global", "content": "2025年6月，许闻先阅读科普书中与分享主题有关的章节；只有分享时间少于十分钟时适用。", "enabled": true, "mode": "contextual", "tags": ["阅读", "天文"], "priority": 1, "source": "inferred"}
+      ],
+      "cases": [
+        {"caseID": "leisure-reading-opposite-01", "query": {"currentText": "顾宁在2025年7月通勤看那套历史传记时，字体怎么处理？"}, "requiredIDs": [2300032], "allowedIDs": [], "forbiddenIDs": [2300031, 2300033, 2300034, 2300035, 2300036, 2300037, 2300038], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "问题限定了2025年7月、通勤和电子版条件，只有电子版调大字体的事实适用，纸书睡前规则不应混入。"}},
+        {"caseID": "leisure-reading-opposite-02", "query": {"currentText": "梁澄在2025年8月自己读悬疑小说时，会先看目录吗？"}, "requiredIDs": [2300034], "allowedIDs": [], "forbiddenIDs": [2300031, 2300032, 2300033, 2300035, 2300036, 2300037, 2300038], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "问题明确落在2025年8月的个人阅读场景，直接选择跳过目录的事实；读书会条件下的相反做法被排除。"}},
+        {"caseID": "leisure-reading-opposite-03", "query": {"currentText": "许闻准备天文社分享且只有不到十分钟时，应该按什么顺序读科普书？"}, "requiredIDs": [2300038], "allowedIDs": [2300037], "forbiddenIDs": [2300031, 2300032, 2300033, 2300034, 2300035, 2300036], "allowAbstain": false, "metadata": {"reviewStatus": "draft", "annotationRationale": "少于十分钟的分享准备条件决定先读相关章节；按章节顺序是同一人物的不同条件，可作为对照但不是当前答案。"}}
+      ]
+    },
+    {
+      "groupID": "leisure-board-sport-switch",
+      "primaryCategory": "topicSwitch",
+      "backgroundDomains": ["work", "travel"],
+      "memories": [
+        {"id": 2300041, "scope_type": "global", "scope_id": "global", "content": "2025年2月，桌游玩家赵衡在《卡坦岛》四人局中优先交易木材；只有自己控制两座森林且准备建造道路时适用。", "enabled": true, "mode": "contextual", "tags": ["桌游", "卡坦岛"], "priority": 1, "source": "inferred"},
+        {"id": 2300042, "scope_type": "global", "scope_id": "global", "content": "2025年2月，赵衡在《卡坦岛》四人局把最长道路目标留到第三轮后再判断；只有另外三名玩家都已完成首次扩张时适用。", "enabled": true, "mode": "contextual", "tags": ["桌游", "策略"], "priority": 1, "source": "inferred"},
+        {"id": 2300043, "scope_type": "global", "scope_id": "global", "content": "2025年3月，桌游玩家林嘉在《阿瓦隆》七人局担任梅林时把关键提示留到第二轮；只有首轮投票未暴露忠诚阵营时适用。", "enabled": true, "mode": "contextual", "tags": ["桌游", "阿瓦隆"], "priority": 1, "source": "inferred"},
+        {"id": 2300044, "scope_type": "global", "scope_id": "global", "content": "2025年3月，林嘉在《阿瓦隆》七人局记录每轮发言顺序；只有自己不是梅林且需要比较两轮投票时适用。", "enabled": true, "mode": "contextual", "tags": ["桌游", "社交推理"], "priority": 1, "source": "inferred"},
+        {"id": 2300045, "scope_type": "global", "scope_id": "global", "content": "2025年4月，羽毛球爱好者周宁练习反手高远球时先做十分钟空挥；只有场地后区有足够安全距离时适用。", "enabled": true, "mode": "contextual", "tags": ["具体运动", "羽毛球"], "priority": 1, "source": "inferred"},
+        {"id": 2300046, "scope_type": "global", "scope_id": "global", "content": "2025年4月，周宁进行羽毛球反手高远球多球训练时每组发球12个；只有教练站在对角半场供球时适用。", "enabled": true, "mode": "contextual", "tags": ["具体运动", "训练"], "priority": 1, "source": "inferred"},
+        {"id": 2300047, "scope_type": "global", "scope_id": "global", "content": "2025年5月，攀岩爱好者陈放在抱石馆完成V3线路后记录落脚点；只有线路高度低于四米且落地区铺有保护垫时适用。", "enabled": true, "mode": "contextual", "tags": ["具体运动", "攀岩"], "priority": 1, "source": "inferred"},
+        {"id": 2300048, "scope_type": "global", "scope_id": "global", "content": "2025年5月，陈放在抱石训练前做八分钟肩腕热身；只有当天计划尝试三条以上新线路时适用。", "enabled": true, "mode": "contextual", "tags": ["具体运动", "热身"], "priority": 1, "source": "inferred"}
+      ],
+      "cases": [
+        {"caseID": "leisure-board-sport-switch-01", "query": {"currentText": "我想知道今晚新买的降噪耳机该怎么设置，能帮我推荐吗？", "history": [{"content": "刚才在聊赵衡的卡坦岛四人局：控制两座森林，准备建道路，怎样交易木材？", "timestamp": "2026-01-01T11:58:00", "direction": "incoming"}]}, "requiredIDs": [], "allowedIDs": [], "forbiddenIDs": [2300041, 2300042, 2300043, 2300044, 2300045, 2300046, 2300047, 2300048], "allowAbstain": true, "metadata": {"reviewStatus": "draft", "annotationRationale": "问题转向耳机设置，与桌游、羽毛球和攀岩事实没有主题或人物条件的交集，应允许弃答。补入评估时钟前两分钟的真实历史输入，上一话题明确命中组内桌游或运动事实；当前请求改谈另一个主题，历史候选仍全部禁入。work仅记录指定软件项目、travel仅记录行程条件，均不提供本题耳机、滤镜或面包知识。"}},
+        {"caseID": "leisure-board-sport-switch-02", "query": {"currentText": "下周去植物园拍花，逆光时该带哪种滤镜？", "history": [{"content": "周宁练羽毛球反手高远球，多球训练每组多少个，开始前空挥多久？", "timestamp": "2026-01-01T11:58:00", "direction": "incoming"}]}, "requiredIDs": [], "allowedIDs": [], "forbiddenIDs": [2300041, 2300042, 2300043, 2300044, 2300045, 2300046, 2300047, 2300048], "allowAbstain": true, "metadata": {"reviewStatus": "draft", "annotationRationale": "问题切换到摄影器材，当前组只记录桌游和具体运动，不能把其他领域经验当作答案。补入评估时钟前两分钟的真实历史输入，上一话题明确命中组内桌游或运动事实；当前请求改谈另一个主题，历史候选仍全部禁入。work仅记录指定软件项目、travel仅记录行程条件，均不提供本题耳机、滤镜或面包知识。"}},
+        {"caseID": "leisure-board-sport-switch-03", "query": {"currentText": "最近想学做酸面包，第一次发酵通常看什么状态？", "history": [{"content": "陈放在抱石馆练V3线路，肩腕热身做多久，完成后记录哪些落脚点？", "timestamp": "2026-01-01T11:58:00", "direction": "incoming"}]}, "requiredIDs": [], "allowedIDs": [], "forbiddenIDs": [2300041, 2300042, 2300043, 2300044, 2300045, 2300046, 2300047, 2300048], "allowAbstain": true, "metadata": {"reviewStatus": "draft", "annotationRationale": "问题切换到烘焙手作，组内事实既没有面包制作人物，也没有发酵时间或判断条件，必须保持无答案。补入评估时钟前两分钟的真实历史输入，上一话题明确命中组内桌游或运动事实；当前请求改谈另一个主题，历史候选仍全部禁入。work仅记录指定软件项目、travel仅记录行程条件，均不提供本题耳机、滤镜或面包知识。"}}
+      ]
+    }
+  ]
+}
