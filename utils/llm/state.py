@@ -9,7 +9,7 @@ LLM 运行时状态管理：
       text / includeContext / images / urlIntentText / urlCandidateText /
       replyLine / currentText / memoryTurn；
       collectDebouncedBatch 聚合为 DebouncedBatch）
-    - 全局 one-shot context 标记（memory -once）
+    - 全局 one-shot context 标记（memory -once；下一批同时启用 memory/history）
 """
 
 import time
@@ -33,7 +33,7 @@ _lastCallTime: dict[str, float] = {}
 _pendingMessages: dict[str, list[dict]] = {}   # debounceKey -> [{"text": str, "includeContext": bool, "images": list, "urlIntentText": str, "urlCandidateText": str, "replyLine": str, "currentText": str, "memoryTurn": MemoryTurn | None}]
 _pendingTasks: dict[str, asyncio.Task] = {}   # debounceKey -> 当前防抖 Task
 
-# 全局 one-shot context 标记：下一次 LLM 调用强制带记忆，触发后自动清除
+# 全局 one-shot context 标记：下一批 LLM 调用强制带 memory/history，触发后自动清除
 _contextOnce: bool = False
 
 
@@ -64,7 +64,7 @@ def isRateLimited(userID: str | int) -> bool:
 
 
 def setContextOnce():
-    """设置全局 one-shot context 标记"""
+    """让下一次防抖批次同时加载 memory 与 history context。"""
     global _contextOnce
     _contextOnce = True
 
@@ -102,7 +102,7 @@ class DebouncedBatch:
         combinedText:     prompt 主文本。各消息 pureText（已含引用标记、
                           图片 notes）换行拼接，直接作为 generateReply 的 userMessage
         includeContext:   批次内任一消息 True 或 one-shot 标记（consumeContextOnce）
-                          取或——一条开上下文，整批生效
+                          取或——一条开启，整批同时加载 memory 与 history
         images:           各消息图片列表串联，元素 {"data": b64, "mimeType": str}
         urlIntentText:    各消息 urlIntentText 换行拼接（意图判定，reply 不参与）
         urlCandidateText: 各消息 urlCandidateText 换行拼接（URL 提取候选）
@@ -178,7 +178,8 @@ def collectDebouncedBatch(debounceKey: str) -> DebouncedBatch | None:
     """
     收集防抖批次消息，空缓冲返回 None
 
-    includeContext 在「任一消息为 True」和「one-shot context 标记（consumeContextOnce）」之间取或。
+    includeContext 在「任一消息为 True」和 one-shot 标记之间取或；为 True
+    时下游会同时加载 memory 与 history，而不是两个可独立开关。
     """
     parts = popPendingMessages(debounceKey)
     if not parts:

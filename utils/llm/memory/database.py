@@ -433,12 +433,15 @@ async def getMemoryCounts() -> dict[str, int]:
         def _query(conn):
             row = conn.execute(
                 "SELECT COUNT(*) AS total, "
-                "SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) AS enabled "
-                "FROM memory_entries"
+                "SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) AS enabled, "
+                "SUM(CASE WHEN enabled = 1 AND mode = ? THEN 1 ELSE 0 END) "
+                "AS contextual_enabled FROM memory_entries",
+                (MEMORY_MODE_CONTEXTUAL,),
             ).fetchone()
             return {
                 "total": int(row["total"] or 0),
                 "enabled": int(row["enabled"] or 0),
+                "contextualEnabled": int(row["contextual_enabled"] or 0),
             }
 
         return await memoryDB.run(_query)
@@ -449,7 +452,7 @@ async def getMemoryCounts() -> dict[str, int]:
             LogLevel.ERROR,
             exception=exc,
         )
-        return {"total": 0, "enabled": 0}
+        return {"total": 0, "enabled": 0, "contextualEnabled": 0}
 
 
 async def updateMemory(
@@ -712,18 +715,23 @@ async def getMemorySnapshots(memoryIDs) -> list[dict[str, Any]]:
         return []
 
 
-async def getEnabledMemoryPage(
+async def getEnabledContextualMemoryPage(
     afterID: int = 0,
     pageSize: int = 128,
-) -> list[dict[str, Any]]:
-    """按 ID 分页读取全库 enabled 记忆，供后台索引对账。"""
+) -> Optional[list[dict[str, Any]]]:
+    """按 ID 分页读取 enabled contextual 记忆，失败时返回 None。
+
+    空列表只表示正常到达扫描末尾。后台对账必须能区分 EOF 和读取失败，
+    否则数据库瞬时故障会被误判为全库条目已删除并清空向量缓存。
+    """
     pageSize = max(1, min(int(pageSize), 1000))
     try:
         def _query(conn):
             cursor = conn.execute(
                 "SELECT * FROM memory_entries "
-                "WHERE enabled = 1 AND id > ? ORDER BY id ASC LIMIT ?",
-                (int(afterID), pageSize),
+                "WHERE enabled = 1 AND mode = ? AND id > ? "
+                "ORDER BY id ASC LIMIT ?",
+                (MEMORY_MODE_CONTEXTUAL, int(afterID), pageSize),
             )
             return [_rowToMemoryDict(row) for row in cursor.fetchall()]
 
@@ -735,19 +743,21 @@ async def getEnabledMemoryPage(
             LogLevel.ERROR,
             exception=exc,
         )
-        return []
+        return None
 
 
 async def retrieveMemories(
     chatID: str | int | None = None,
     userID: str | int | None = None,
     sessionID: str | int | None = None,
-    perScopeLimit: int = 20,   # 单 scope 候选上限（防止过多地召回某 scope），非硬性名额
+    perScopeLimit: int = 20,   # 单 scope SQL 硬上限，之后还会进行跨 scope 总量截断
     totalLimit: int = 10,
 ) -> list[dict[str, Any]]:
     """legacy 路径：按 scope 上限汇集，再按 priority 排序取 totalLimit。
 
-    hybrid 不调用这个截断入口，避免旧的硬候选池重新成为语义检索的瓶颈。
+    这是保留给旧调用方的兼容接口；统一线上入口使用
+    ``retrieveMemoryContext()``，在那里 pinned 与 contextual 已明确分流，
+    不会让旧候选池成为 hybrid 的瓶颈。
     """
     try:
         scopes = [(MEMORY_SCOPE_GLOBAL, "global")]
@@ -783,22 +793,54 @@ async def retrieveMemories(
 def selectLegacyMemoryCandidates(
     memories: list[dict[str, Any]],
     *,
+    perScopeLimit: int | None = None,
     totalLimit: int = 10,
 ) -> list[dict[str, Any]]:
-    """按 legacy 的稳定排序选取已形成的候选池。
+    """按 legacy 的稳定排序选取候选池。
 
-    per-scope 截断由 ``getMemories`` 完成；这个纯函数只负责汇池后的
-    排序和总量截断，因此离线评测可以复用线上 legacy 选择规则，而不
-    需要连接数据库或复制排序键。
+    ``perScopeLimit`` 非空时先复现旧 SQL 的逐 scope 截断，再进行跨
+    scope 汇池和总量截断。把这一步做成纯函数后，hybrid 入口已经读取
+    完整候选时可以直接复用 legacy 兼容规则，避免为 pinned 再读一遍
+    同一份数据库记录；离线评测也能复用同一套排序键。调用方若要保留
+    pinned 的独立预算，应只把 contextual 传入本函数，再单独收集 pinned。
     """
     try:
         totalLimit = max(int(totalLimit), 0)
     except (TypeError, ValueError):
         totalLimit = 0
 
+    if perScopeLimit is not None:
+        try:
+            perScopeLimit = max(int(perScopeLimit), 0)
+        except (TypeError, ValueError):
+            perScopeLimit = 0
+
+        # ``getMemories(limit=0)`` 的约定是“不设上限”，所以 0 不能
+        # 误解释为清空候选。按 scope 排序后切片，保持旧 SQL 的行为。
+        if perScopeLimit > 0:
+            byScope: dict[tuple[Any, Any], list[dict[str, Any]]] = {}
+            for memory in memories:
+                scopeKey = (
+                    memory.get("scope_type"),
+                    memory.get("scope_id"),
+                )
+                byScope.setdefault(scopeKey, []).append(memory)
+            scopedMemories = []
+            for scopeMemories in byScope.values():
+                scopedMemories.extend(
+                    _sortLegacyMemories(scopeMemories)[:perScopeLimit]
+                )
+            memories = scopedMemories
+
+    ordered = _sortLegacyMemories(memories)
+    return ordered[:totalLimit]
+
+
+def _sortLegacyMemories(memories: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """返回 legacy 的稳定排序；独立出来供逐 scope 与总量排序复用。"""
     # 排序键（全部 DESC）：priority > scope 专属度 > updated_at > id。
     # 每个字段都带默认，脏数据不能把整次检索放大成异常。
-    ordered = sorted(
+    return sorted(
         memories,
         key=lambda memory: (
             memory.get("priority", 0),
@@ -808,7 +850,6 @@ def selectLegacyMemoryCandidates(
         ),
         reverse=True,
     )
-    return ordered[:totalLimit]
 
 
 

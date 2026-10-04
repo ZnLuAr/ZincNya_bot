@@ -40,13 +40,14 @@ class MemoryQuery:
     一次「该召回哪些记忆」提问的完整内容，构造后不可变。
 
     由 messagePrep 从本轮防抖消息组装，随请求传到 contextBuilder 的
-    检索入口；retry / :fb 重试时原样复用同一个对象，保证重试语境与
-    首次生成一致。三个字段的分工：
+    检索入口；retry 会复用其中的 turns，contextBuilder 则用本次共享的
+    history 快照替换 history；:fb 会创建只在该次生成使用的副本。三个
+    字段的分工：
 
     - turns 是当前请求（含引用的消息）；
     - history：本次请求一并加载的近期聊天记录——只作为语义通道的
       背景参考，不参与词面匹配（避免历史中的旧词让记忆凭字面命中）；
-    - feedbackText：ops 用 :fb 补充的修改意见，重试时并入查询。
+    - feedbackText：ops 用 :fb 补充的修改意见，仅在该次反馈重试并入查询。
     """
 
     turns: tuple[MemoryTurn, ...] = ()

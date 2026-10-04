@@ -16,6 +16,7 @@ MemoryEncoderUnavailable，不影响 bot 其他功能。
 import json
 import hashlib
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -39,11 +40,27 @@ class MemoryEncoderUnavailable(MemoryEncoderError):
 
 
 
+@dataclass(frozen=True)
+class MemoryVectorRepresentations:
+    """一条记忆的两种 chunk 向量表示。
+
+    base 只来自正文与标签，是语义通道唯一允许用于准入的表示；enhanced
+    额外包含 retrievalHint，只能给已经通过 base 阈值的记忆调整名次。
+    没有有效 hint 时两个字段会引用同一矩阵，避免重复编码和缓存占用。
+    """
+
+    base: object
+    enhanced: object
+
+
+
+
 def loadModelManifest(manifestPath: str | Path = LLM_MEMORY_MODEL_MANIFEST_PATH) -> dict:
     """读取并完整校验固定模型清单，不接受不安全的产物路径。
 
     模块内多处调用（runtime、脚本、calibration 绑定），是模型身份的
     唯一权威来源；清单问题在此处拦截，不遗留到加载 ONNX 时才暴露。
+    可选 modelFile 只能指向清单内的安全相对路径；省略时沿用旧文件名。
     """
     path = Path(manifestPath)
     with path.open("r", encoding="utf-8") as manifestFile:
@@ -60,6 +77,8 @@ def loadModelManifest(manifestPath: str | Path = LLM_MEMORY_MODEL_MANIFEST_PATH)
         "queryPrefix",
         "maxTokens",
         "embeddingDimension",
+        "pooling",
+        "normalization",
         "specialTokens",
         "artifacts",
     }
@@ -79,6 +98,11 @@ def loadModelManifest(manifestPath: str | Path = LLM_MEMORY_MODEL_MANIFEST_PATH)
         value = manifest[key]
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise MemoryEncoderError(f"模型清单字段无效: {key}")
+
+    if manifest["pooling"] != "cls":
+        raise MemoryEncoderError("当前编码器只支持 pooling=cls")
+    if manifest["normalization"] != "l2":
+        raise MemoryEncoderError("当前编码器只支持 normalization=l2")
 
     specialTokens = manifest["specialTokens"]
     if not isinstance(specialTokens, dict):
@@ -112,6 +136,15 @@ def loadModelManifest(manifestPath: str | Path = LLM_MEMORY_MODEL_MANIFEST_PATH)
         digest = artifact.get("sha256")
         if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise MemoryEncoderError(f"模型清单产物 SHA-256 无效: {artifactPath}")
+
+    if "modelFile" in manifest:
+        modelFile = manifest["modelFile"]
+        if not isinstance(modelFile, str) or not modelFile.strip():
+            raise MemoryEncoderError("模型清单字段无效: modelFile")
+        # 允许选择嵌套的模型产物，但不能绕过清单既有的大小和散列校验。
+        modelPath = resolveModelArtifactPath(".", modelFile).as_posix()
+        if modelPath not in seenPaths:
+            raise MemoryEncoderError("modelFile 必须属于模型清单 artifacts")
     return manifest
 
 
@@ -198,7 +231,7 @@ class MemoryEncoder:
         tokenizer=None,
         session=None,
     ):
-        """校验模型身份并创建受单线程约束的 tokenizer/ONNX session。"""
+        """校验模型产物，按可选 modelFile 或旧默认路径创建单线程 session。"""
         self._modelDir = Path(modelDir)
         self._manifestPath = Path(manifestPath)
         self._manifest = loadModelManifest(self._manifestPath)
@@ -222,7 +255,10 @@ class MemoryEncoder:
             sessionOptions.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
             sessionOptions.enable_cpu_mem_arena = False
             sessionOptions.enable_mem_pattern = False
-            modelPath = resolveModelArtifactPath(self._modelDir, "model_optimized.onnx")
+            modelPath = resolveModelArtifactPath(
+                self._modelDir,
+                self._manifest.get("modelFile", "model_optimized.onnx"),
+            )
             session = onnxruntime.InferenceSession(
                 str(modelPath),
                 sess_options=sessionOptions,
@@ -387,16 +423,18 @@ class MemoryEncoder:
         return self._withSpecialTokens([*prefixIDs, *contentIDs])
 
 
-    def _formatMemoryText(self, memory: dict) -> str:
-        """把一条记忆拼成喂给模型的文本，形如：
+    def _formatMemoryText(self, memory: dict, *, includeHint: bool) -> str:
+        """把一条记忆拼成 base 或 enhanced 编码文本。
+
+        enhanced 文本形如：
 
             事实：用户在备考研究生
             标签：学业，考试
             检索说明：研究生备考、复习安排、学习压力
 
-        这段文本只用于计算向量，绝不进入最终 prompt——尤其「检索说明」，
-        它是写记忆时同步生成的扩展词，仅供向量匹配；若模型可见，
-        扩展词可能被当成已记录的事实复述。
+        base 永远排除「检索说明」，防止 hint 独自把无关记忆送过准入阈值；
+        enhanced 才按 includeHint 加入它。这些文本都只用于计算向量，绝不
+        进入最终 prompt，否则扩展词可能被模型当成已记录的事实复述。
         """
         content = str(memory.get("content", "")).strip()
         if not content:
@@ -407,14 +445,21 @@ class MemoryEncoder:
         if tags:
             sections.append(f"标签：{'，'.join(tags)}")
         retrievalHint = memory.get("retrievalHint")
-        if retrievalHint and str(retrievalHint).strip():
+        if includeHint and retrievalHint and str(retrievalHint).strip():
             sections.append(f"检索说明：{str(retrievalHint).strip()}")
         return "\n".join(sections)
 
 
-    def _prepareMemoryChunks(self, memory: dict) -> list[list[int]]:
-        """将长 memory 切成有重叠的编码窗口，并为每块加特殊 token。"""
-        documentIDs = self._tokenize(self._formatMemoryText(memory))
+    def _prepareMemoryChunks(
+        self,
+        memory: dict,
+        *,
+        includeHint: bool = False,
+    ) -> list[list[int]]:
+        """将指定表示切成有重叠的编码窗口，并为每块加特殊 token。"""
+        documentIDs = self._tokenize(
+            self._formatMemoryText(memory, includeHint=includeHint)
+        )
         contentBudget = self._maxTokens - 2
         if not documentIDs:
             raise MemoryEncoderError("memory 文本未产生可编码 token")
@@ -442,8 +487,11 @@ class MemoryEncoder:
         raise MemoryEncoderError(f"ONNX 输入类型不受支持: {inputType}")
 
 
+
+
     def _runSequences(self, sequences: list[list[int]]):
-        """跑一次 ONNX 推理：一批 token 序列进，一批单位向量出。
+        """
+        跑一次 ONNX 推理：一批 token 序列进，一批单位向量出。
 
         向量取自每个序列开头 CLS token 的输出（BERT 类模型的惯例），
         再除以自身长度归一——归一化后两个向量点积就是余弦相似度，
@@ -506,8 +554,11 @@ class MemoryEncoder:
         return vectors / norms
 
 
+
+
     def encodeQueries(self, queryTexts: Sequence[str]):
-        """编码非空查询列表，每个查询产出一个归一化向量。
+        """
+        编码非空查询列表，每个查询产出一个归一化向量。
 
         走 `_prepareQuery`：加 BGE 专用的检索 query prefix（manifest
         声明），辅助视图按 当前 > 引用 > 历史 的优先级瓜分预算。
@@ -519,9 +570,41 @@ class MemoryEncoder:
         return self._runSequences(sequences)
 
 
-    def encodeMemory(self, memory: dict):
-        """编码一条 memory 的全部 chunks，返回供最大相似度聚合的矩阵。"""
-        return self._runSequences(self._prepareMemoryChunks(memory))
+    def encodeMemory(self, memory: dict, *, includeHint: bool = False):
+        """编码一种 memory 表示；默认返回不含 hint 的安全 base 矩阵。"""
+        return self._runSequences(
+            self._prepareMemoryChunks(memory, includeHint=includeHint)
+        )
+
+
+
+
+    def encodeMemoryRepresentations(self, memory: dict) -> MemoryVectorRepresentations:
+        """
+        一次构造准入用 base 与排序用 enhanced 表示。
+
+        有 hint 时把两组 chunks 合成一个 ONNX batch，减少 native 调用次数；
+        分割后的矩阵仍分别对应各自的 chunk 集。无 hint 时只编码 base，并
+        让 enhanced 复用同一对象，运行时据此避免第二次比较和重复计费。
+        """
+        baseSequences = self._prepareMemoryChunks(memory, includeHint=False)
+        retrievalHint = str(memory.get("retrievalHint") or "").strip()
+        if not retrievalHint:
+            baseMatrix = self._runSequences(baseSequences)
+            return MemoryVectorRepresentations(
+                base=baseMatrix,
+                enhanced=baseMatrix,
+            )
+
+        enhancedSequences = self._prepareMemoryChunks(memory, includeHint=True)
+        baseCount = len(baseSequences)
+        vectors = self._runSequences([*baseSequences, *enhancedSequences])
+        return MemoryVectorRepresentations(
+            base=vectors[:baseCount],
+            enhanced=vectors[baseCount:],
+        )
+
+
 
 
     def close(self):

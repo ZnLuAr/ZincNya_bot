@@ -198,7 +198,7 @@ async def buildConversationContext(
     if includeContext:
         # memory 检索与最终 history 块复用同一次读取，避免两次异步读盘之间有
         # 新消息写入，导致“用于召回的历史”和“模型实际看到的历史”不一致。
-        # 完整候选还是需要全部读取并解密真是抱歉捏😋💦
+        # 共享的只是 history 快照；memory 候选仍由检索层按 scope 独立读取。
         history = await loadHistory(chatID, limit=LLM_MAX_CONTEXT_MESSAGES)
         # memoryQuery 保存的是防抖批次的原始 current/reply 配对；retry 也复用
         # 这份结构，而不是从已拼接、可能截断的展示文本反向恢复查询。

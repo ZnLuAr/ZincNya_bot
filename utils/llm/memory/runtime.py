@@ -7,7 +7,8 @@ hybrid 检索语义通道的后台运行时：维护记忆向量缓存并响应�
 由 backgroundTasks 驱动 run() 循环。核心职责：
 
 - 增量索引：记忆写入/修改/删除后重新编码其向量（由 database 发通知，
-  每 30 秒的全库巡检兜底，通知丢失不影响最终一致）；
+  每 30 秒的全库巡检兜底；容量允许时补齐，容量饱和时对冷条目采用
+  best-effort 跳过，因此不宣称无条件最终一致）；
 - 查询评分：用缓存向量计算候选记忆与查询的语义相似度；
 - 缓存治理：向量缓存不超过 32MB，超出按最久未使用淘汰。
 
@@ -28,7 +29,9 @@ from config import (
     LLM_MEMORY_QUERY_BURST_LIMIT,
     LLM_MEMORY_QUERY_QUEUE_LIMIT,
     LLM_MEMORY_RECONCILE_SECONDS,
+    LLM_MEMORY_SELECTOR_SHUTDOWN_SECONDS,
     LLM_MEMORY_VECTOR_CACHE_BYTES,
+    LLM_MEMORY_WORKER_ERROR_BACKOFF_SECONDS,
 )
 
 from utils.core.logger import LogLevel, logSystemEvent
@@ -36,7 +39,11 @@ from utils.core.resourceManager import getResourceManager
 from utils.core.stateManager import getStateManager
 from utils.llm.config import getMemoryRetrievalMode
 
-from .database import getEnabledMemoryPage, getMemoryByID
+from .database import (
+    MEMORY_MODE_CONTEXTUAL,
+    getEnabledContextualMemoryPage,
+    getMemoryByID,
+)
 from .encoder import MemoryEncoder, loadModelManifest
 from .types import buildMemoryContentFingerprint
 
@@ -46,14 +53,18 @@ from .types import buildMemoryContentFingerprint
 @dataclass
 class _CacheEntry:
     """
-    一条记忆的向量缓存项。
+    一条记忆的双表示向量缓存项。
 
     fingerprint 是操作的向量记忆内容的指纹；下次检索重算一次，
     若两次指纹不相等（记忆/模型更改）就作废重编码。
+
+    baseMatrix 只编码正文与标签，用于准入；enhancedMatrix 可额外编码
+    hint，只给已准入条目排序。无 hint 时二者允许引用同一对象。
     """
 
     fingerprint: str
-    matrix: object
+    baseMatrix: object
+    enhancedMatrix: object
     sizeBytes: int
 
 
@@ -62,13 +73,13 @@ class _QueryJob:
     """
     排队等待评分的查询任务。
 
-    cacheSnapshot 在入队时定格本次使用的向量集合：排队期间后台
-    重编码某条记忆，本次评分仍用入队时的旧矩阵——评分输入与结果
-    保持自洽，不受中途替换影响。
+    cacheSnapshot 在入队时同时定格本次使用的 base/enhanced 向量集合：
+    排队期间后台重编码某条记忆，本次评分仍用入队时的旧矩阵——
+    准入分和排序分保持来自同一个记忆版本。
     """
 
     queryTexts: tuple[str, ...]
-    cacheSnapshot: tuple[tuple[int, object], ...]
+    cacheSnapshot: tuple[tuple[int, object, object], ...]
     deadline: float
     future: asyncio.Future
 
@@ -87,6 +98,16 @@ class _IndexJob:
     allowEviction: bool
 
 
+@dataclass
+class _SelectorRetrieval:
+    """同次检索的调用方与HTTP任务；直到lease完成才移除所有权记录。"""
+
+    callerTask: asyncio.Task | None
+    requestTask: asyncio.Task | None = None
+    cleanupTask: asyncio.Task | None = None
+    receipt: dict | None = None
+
+
 
 
 class MemoryRuntime:
@@ -95,7 +116,8 @@ class MemoryRuntime:
 
     查询评分和重新编码共用一个工作线程（模型只加载一份，也不并发
     抢 CPU）；记忆的增删改经 notifyMemoryChanged 进待编码队列，
-    30 秒一次的库内巡检负责补上漏掉的通知。
+    30 秒一次的库内巡检负责补上漏掉的通知。巡检不驱逐热缓存，故在
+    字节预算饱和时只能尽力补齐，并由状态字段暴露未覆盖情况。
     """
 
     def __init__(self, *, encoderFactory=MemoryEncoder):
@@ -131,14 +153,129 @@ class MemoryRuntime:
         self._activeQueryJob = None
         self._workerTask = None
         self._closedEvent = asyncio.Event()
+        self._selectorRetrievals = {}
+        self._selectorStopping = False
+        self._selectorCloseDeadline = None
+        self._selectorShutdownReported = False
+        self._selectorShutdownPending = 0
+        self._selectorCleanupFailures = 0
         self._stats = {
             "queryRejected": 0,
             "queryTimedOut": 0,
             "indexDropped": 0,
             "staleResults": 0,
             "encodeFailures": 0,
+            "workerFailures": 0,
             "lastReason": None,
         }
+
+
+    def selectorAccepting(self) -> bool:
+        """实例与全局关停任一开始即停接，覆盖资源回调尚未轮到本实例的窗口。"""
+        return (not self._selectorStopping and not self._closing
+                and not getStateManager().getShutdownEvent().is_set())
+
+
+    def registerSelectorRetrieval(self, lease) -> bool:
+        """在第一次等待前持有完整检索；停机之后拒绝增加新任务。"""
+        if not self.selectorAccepting() or lease.completion.done():
+            return False
+        if lease in self._selectorRetrievals:
+            return False
+        self._selectorRetrievals[lease] = _SelectorRetrieval(asyncio.current_task())
+
+        def completed(future):
+            """容量归还才移除记录，检索方返回不代表HTTP清理完成。"""
+            self._finishSelectorLease(lease)
+
+        lease.completion.add_done_callback(completed)
+        return True
+
+
+    def finishSelectorRetrieval(self, lease) -> None:
+        """检索返回时解除调用方引用，防止停机误取消同任务中的主回答。"""
+        record = self._selectorRetrievals.get(lease)
+        if record is not None:
+            record.callerTask = None
+
+
+    def trackSelectorTask(self, lease, task, *, cleanup=False, receipt=None) -> None:
+        """同步持有已由client登记lease的HTTP任务，不在此创建或等待任务。"""
+        record = self._selectorRetrievals.get(lease)
+        if record is None:
+            raise ValueError("selectorRetrievalMissing")
+        if cleanup:
+            record.cleanupTask = task
+        else:
+            record.requestTask = task
+        if receipt is not None:
+            record.receipt = receipt
+        # 已登记的检索可能在取消后继续到发送准备；关停只取消请求，清理仍须完成。
+        if self._selectorStopping and not cleanup:
+            self._cancelSelectorTask(task)
+
+
+    @staticmethod
+    def _selectorCleanupFailed(record: _SelectorRetrieval) -> bool:
+        """只检查固定状态字段；不将异常消息或响应正文加入日志。"""
+        receipt = record.receipt or {}
+        return bool(
+            any(receipt.get(name) for name in (
+                "responseCloseError", "clientCloseError", "transportCloseError",
+                "cleanupError", "cleanupCancelled",
+            ))
+            or (record.cleanupTask is not None and record.cleanupTask.cancelled())
+        )
+
+
+    def _finishSelectorLease(self, lease) -> None:
+        """完成记录只计数一次；任务结束后的关闭错误不能被当作成功释放。"""
+        record = self._selectorRetrievals.pop(lease, None)
+        if record is not None and self._selectorCleanupFailed(record):
+            self._selectorCleanupFailures += 1
+
+
+    @staticmethod
+    def _cancelSelectorTask(task: asyncio.Task | None) -> None:
+        """仅发出首次取消，避免重复close再次打断请求内部正在进行的收尾。"""
+        if task is not None and not task.done() and not task.cancelling():
+            task.cancel()
+
+
+    async def closeSelectors(self) -> None:
+        """停接并在同一个固定宽限内等待lease；不取消清理或伪报全部释放。"""
+        self._selectorStopping = True
+        if self._selectorCloseDeadline is None:
+            self._selectorCloseDeadline = time.monotonic() + LLM_MEMORY_SELECTOR_SHUTDOWN_SECONDS
+        currentTask = asyncio.current_task()
+        for record in list(self._selectorRetrievals.values()):
+            if record.callerTask is not currentTask:
+                self._cancelSelectorTask(record.callerTask)
+            self._cancelSelectorTask(record.requestTask)
+
+        # completion同时覆盖调用方和后台任务；wait到期不会取消Future或cleanup。
+        completions = {lease.completion for lease in self._selectorRetrievals
+                       if not lease.completion.done()}
+        remaining = max(0.0, self._selectorCloseDeadline - time.monotonic())
+        if completions and remaining > 0:
+            await asyncio.wait(completions, timeout=remaining)
+        for lease in list(self._selectorRetrievals):
+            if lease.completion.done():
+                self._finishSelectorLease(lease)
+        self._selectorShutdownPending = len(self._selectorRetrievals)
+        failures = self._selectorCleanupFailures + sum(
+            self._selectorCleanupFailed(record)
+            for record in self._selectorRetrievals.values()
+        )
+        if not self._selectorShutdownReported:
+            self._selectorShutdownReported = True
+            if self._selectorShutdownPending or failures:
+                await logSystemEvent(
+                    "LLM memory selector关停未完整收尾",
+                    f"selectorShutdownIncomplete pendingRetrievals={self._selectorShutdownPending} "
+                    f"cleanupFailures={failures}",
+                    LogLevel.WARNING,
+                )
 
 
     def _fingerprint(self, memory: dict) -> str:
@@ -160,18 +297,35 @@ class MemoryRuntime:
         return False
 
 
+    @staticmethod
+    def _representationBytes(baseMatrix, enhancedMatrix) -> int:
+        """统计双表示实际占用；任一唯一矩阵无有效大小时返回 0。"""
+        matrices = {
+            id(baseMatrix): baseMatrix,
+            id(enhancedMatrix): enhancedMatrix,
+        }
+        sizes = [
+            int(getattr(matrix, "nbytes", 0))
+            for matrix in matrices.values()
+        ]
+        return sum(sizes) if all(size > 0 for size in sizes) else 0
+
+
     def _publish(
         self,
         memoryID: int,
         fingerprint: str,
-        matrix,
+        baseMatrix,
+        enhancedMatrix=None,
         *,
         allowEviction: bool,
     ) -> bool:
-        """将新算好的向量写入缓存；超出字节预算时按 allowEviction 决定是否驱逐旧项。"""
-        sizeBytes = int(getattr(matrix, "nbytes", 0))
-        # 单个矩阵不能超过总预算；reconcile 不允许为了一个条目驱逐已有热缓存，
-        # 而用户刚修改的条目可以驱逐旧项以尽快可用。
+        """发布双表示；超预算时按 allowEviction 决定是否驱逐旧项。"""
+        if enhancedMatrix is None:
+            enhancedMatrix = baseMatrix
+        sizeBytes = self._representationBytes(baseMatrix, enhancedMatrix)
+        # 一条记忆的两种表示合计不能超过总预算；reconcile 不允许为了一个
+        # 冷条目驱逐已有热缓存，而用户刚修改的条目可以驱逐旧项以尽快可用。
         if sizeBytes <= 0 or sizeBytes > LLM_MEMORY_VECTOR_CACHE_BYTES:
             self._stats["lastReason"] = "matrixTooLarge"
             self._blockedFingerprints[int(memoryID)] = fingerprint
@@ -196,7 +350,8 @@ class MemoryRuntime:
 
         self._cache[int(memoryID)] = _CacheEntry(
             fingerprint=fingerprint,
-            matrix=matrix,
+            baseMatrix=baseMatrix,
+            enhancedMatrix=enhancedMatrix,
             sizeBytes=sizeBytes,
         )
         self._cacheBytes += sizeBytes
@@ -213,6 +368,12 @@ class MemoryRuntime:
             if allowEviction:
                 existing.allowEviction = True
             return True
+        if (
+            not allowEviction
+            and self._reconcileCapacitySaturated
+            and memoryID not in self._cache
+        ):
+            return False
         if len(self._pendingIndex) >= LLM_MEMORY_INDEX_QUEUE_LIMIT:
             self._stats["indexDropped"] += 1
             self._stats["lastReason"] = "indexQueueFull"
@@ -225,12 +386,28 @@ class MemoryRuntime:
         return True
 
 
-    def notifyMemoryChanged(self, memoryID: int) -> None:
-        """记忆已变更，排队重新编码；队列满时丢弃，由周期巡检补齐。"""
+    def _requestMemoryIndex(self, memoryID: int, *, allowEviction: bool) -> bool:
+        """按来源排入索引待办，并在成功入队后唤醒 worker。
+
+        数据库写入通知使用 ``allowEviction=True``，让刚变更的事实尽快
+        可查；查询发现和周期对账使用 False，不能仅因被某次查询看到就
+        驱逐已有热缓存。
+        """
         if not self._running:
-            return
-        self._enqueueIndex(memoryID, allowEviction=True)
-        self._wakeEvent.set()
+            return False
+        queued = self._enqueueIndex(memoryID, allowEviction=allowEviction)
+        if queued:
+            self._wakeEvent.set()
+        return queued
+
+
+    def notifyMemoryChanged(self, memoryID: int) -> None:
+        """记忆已变更，排队重新编码；队列满时丢弃。
+
+        周期巡检会在容量允许时补排；容量饱和时为保护热缓存而暂缓冷条目，
+        因而这里的恢复保证是 best-effort，而不是无条件最终一致。
+        """
+        self._requestMemoryIndex(memoryID, allowEviction=True)
 
 
     def notifyModeChanged(self) -> None:
@@ -249,6 +426,10 @@ class MemoryRuntime:
         return {
             "running": self._running,
             "closing": self._closing,
+            "selectorAccepting": self.selectorAccepting(),
+            "selectorRetrievals": len(self._selectorRetrievals),
+            "selectorCleanupFailures": self._selectorCleanupFailures,
+            "selectorShutdownPending": self._selectorShutdownPending,
             "workerStarted": self._workerStarted,
             "encoderReady": self._encoder is not None,
             "queryQueued": len(self._queryJobs),
@@ -265,6 +446,62 @@ class MemoryRuntime:
             "activeNativeJob": self._activeNativeJobs > 0,
             "activeNativeJobs": self._activeNativeJobs,
             **self._stats,
+        }
+
+
+    def getSemanticCacheStatus(self, candidates: list[dict]) -> dict:
+        """返回本次候选的语义缓存覆盖快照，不暴露记忆内容。
+
+        ``scoreSemantic`` 对冷条目只排入后台编码，不会在请求线程同步
+        补向量。因此检索 diagnostics 需要区分 warm、partial 和 cold，
+        否则“语义没有命中”很容易被误判为模型质量问题。这里是进入
+        评分前的瞬时观察，不承诺请求返回时缓存仍完全相同。
+        """
+        contextualCandidates = [
+            memory for memory in candidates
+            if memory.get("mode", MEMORY_MODE_CONTEXTUAL) == MEMORY_MODE_CONTEXTUAL
+        ]
+        readyCount = 0
+        staleCount = 0
+        missingCount = 0
+        pendingCount = 0
+        for memory in contextualCandidates:
+            memoryID = int(memory["id"])
+            entry = self._cache.get(memoryID)
+            if entry is None:
+                missingCount += 1
+            else:
+                try:
+                    isCurrent = entry.fingerprint == self._fingerprint(memory)
+                except Exception:
+                    isCurrent = False
+                if isCurrent:
+                    readyCount += 1
+                else:
+                    staleCount += 1
+            if memoryID in self._pendingIndex:
+                pendingCount += 1
+
+        candidateCount = len(contextualCandidates)
+        if not candidateCount:
+            cacheState = "empty"
+        elif readyCount == candidateCount:
+            cacheState = "warm"
+        elif readyCount == 0:
+            cacheState = "cold"
+        else:
+            cacheState = "partial"
+
+        return {
+            "status": cacheState,
+            "candidateCount": candidateCount,
+            "readyCount": readyCount,
+            "missingCount": missingCount,
+            "staleCount": staleCount,
+            "pendingCount": pendingCount,
+            "cacheEntries": len(self._cache),
+            "cacheBytes": self._cacheBytes,
+            "reconcileCapacitySaturated": self._reconcileCapacitySaturated,
         }
 
 
@@ -338,16 +575,29 @@ class MemoryRuntime:
             return False
 
 
+    @staticmethod
+    def _emptySemanticResults(queryTexts):
+        """构造每个查询对应的空 base/enhanced 分数容器。"""
+        return [{"base": {}, "enhanced": {}} for _ in queryTexts]
+
+
     def _scoreQuerySync(self, queryTexts, cacheSnapshot):
-        """同步计算查询与缓存 chunks 的相似度，并聚合到 memory ID。"""
-        # 一个 memory 可能被切成多个 chunk；对每个查询取 chunk 的最大相似度，
-        # 再返回 memory ID -> score，后续检索层只处理 memory 粒度的分数。
+        """同步计算每个查询的 base 准入分与 enhanced 排序分。"""
+        # 一个 memory 可能被切成多个 chunk；两种表示都取各自 chunk 的最大
+        # 相似度。无 hint 时矩阵对象相同，复用 base 结果避免重复向量乘法。
         queryVectors = self._encoder.encodeQueries(queryTexts)
-        results = [dict() for _ in queryTexts]
-        for memoryID, matrix in cacheSnapshot:
+        results = self._emptySemanticResults(queryTexts)
+        for memoryID, baseMatrix, enhancedMatrix in cacheSnapshot:
             for queryIndex in range(len(queryTexts)):
-                similarities = matrix @ queryVectors[queryIndex]
-                results[queryIndex][memoryID] = float(similarities.max())
+                baseSimilarities = baseMatrix @ queryVectors[queryIndex]
+                baseScore = float(baseSimilarities.max())
+                if enhancedMatrix is baseMatrix:
+                    enhancedScore = baseScore
+                else:
+                    enhancedSimilarities = enhancedMatrix @ queryVectors[queryIndex]
+                    enhancedScore = float(enhancedSimilarities.max())
+                results[queryIndex]["base"][memoryID] = baseScore
+                results[queryIndex]["enhanced"][memoryID] = enhancedScore
         return results
 
 
@@ -357,15 +607,15 @@ class MemoryRuntime:
         candidates: list[dict],
         *,
         deadline: float,
-    ) -> list[dict[int, float]]:
-        """计算候选记忆与各查询文本的语义相似度，返回 [{memoryID: 分数}]。
+    ) -> list[dict[str, dict[int, float]]]:
+        """返回每个查询的 base 准入分和 enhanced 排序分。
 
         只使用缓存中已有的向量：未编码或向量过期的记忆排入后台补编码，
         本次不给语义分——不为单条记忆在请求线程同步编码（首次访问
         延迟因此可控，冷启动阶段由词面通道兜底）。查询队列已满、
-        超时、encoder 未就绪均返回空 dict，由检索层按通道缺席处理。
+        超时、encoder 未就绪时，两组分数均为空，由检索层按通道缺席处理。
         """
-        emptyResult = [dict() for _ in queryTexts]
+        emptyResult = self._emptySemanticResults(queryTexts)
         if not queryTexts or not self._running:
             return emptyResult
         if (
@@ -375,7 +625,8 @@ class MemoryRuntime:
         ):
             self._wakeEvent.set()
             for memory in candidates:
-                self.notifyMemoryChanged(memory["id"])
+                if memory.get("mode", MEMORY_MODE_CONTEXTUAL) == MEMORY_MODE_CONTEXTUAL:
+                    self._requestMemoryIndex(memory["id"], allowEviction=False)
             return emptyResult
 
         # 过期或缺失的缓存只触发有界后台建索引，不在当前请求同步编码；这使
@@ -383,15 +634,22 @@ class MemoryRuntime:
         cacheSnapshot = []
         for memory in candidates:
             memoryID = int(memory["id"])
+            if memory.get("mode", MEMORY_MODE_CONTEXTUAL) != MEMORY_MODE_CONTEXTUAL:
+                self._evict(memoryID)
+                continue
             fingerprint = self._fingerprint(memory)
             entry = self._cache.get(memoryID)
             if entry is None or entry.fingerprint != fingerprint:
                 if entry is not None:
                     self._evict(memoryID)
-                self.notifyMemoryChanged(memoryID)
+                self._requestMemoryIndex(memoryID, allowEviction=False)
                 continue
             self._cache.move_to_end(memoryID)
-            cacheSnapshot.append((memoryID, entry.matrix))
+            cacheSnapshot.append((
+                memoryID,
+                entry.baseMatrix,
+                entry.enhancedMatrix,
+            ))
 
         if not cacheSnapshot:
             return emptyResult
@@ -436,7 +694,9 @@ class MemoryRuntime:
                 return
             if time.monotonic() >= job.deadline:
                 if not job.future.done():
-                    job.future.set_result([dict() for _ in job.queryTexts])
+                    job.future.set_result(
+                        self._emptySemanticResults(job.queryTexts)
+                    )
                 return
 
             try:
@@ -448,9 +708,9 @@ class MemoryRuntime:
             except Exception:
                 self._stats["encodeFailures"] += 1
                 self._stats["lastReason"] = "queryEncodeFailed"
-                result = [dict() for _ in job.queryTexts]
+                result = self._emptySemanticResults(job.queryTexts)
             if not self._running:
-                result = [dict() for _ in job.queryTexts]
+                result = self._emptySemanticResults(job.queryTexts)
             if not job.future.done():
                 job.future.set_result(result)
         finally:
@@ -472,7 +732,11 @@ class MemoryRuntime:
         ):
             return
         memory = await getMemoryByID(memoryID)
-        if not memory or not memory.get("enabled"):
+        if (
+            not memory
+            or not memory.get("enabled")
+            or memory.get("mode", MEMORY_MODE_CONTEXTUAL) != MEMORY_MODE_CONTEXTUAL
+        ):
             self._blockedFingerprints.pop(memoryID, None)
             self._evict(memoryID)
             return
@@ -486,7 +750,10 @@ class MemoryRuntime:
         self._evict(memoryID)
 
         try:
-            matrix = await self._runNative(self._encoder.encodeMemory, memory)
+            representations = await self._runNative(
+                self._encoder.encodeMemoryRepresentations,
+                memory,
+            )
         except Exception:
             self._stats["encodeFailures"] += 1
             self._stats["lastReason"] = "memoryEncodeFailed"
@@ -500,6 +767,7 @@ class MemoryRuntime:
         if (
             not current
             or not current.get("enabled")
+            or current.get("mode", MEMORY_MODE_CONTEXTUAL) != MEMORY_MODE_CONTEXTUAL
             or self._fingerprint(current) != fingerprint
         ):
             self._stats["staleResults"] += 1
@@ -507,7 +775,8 @@ class MemoryRuntime:
         self._publish(
             memoryID,
             fingerprint,
-            matrix,
+            representations.base,
+            representations.enhanced,
             allowEviction=job.allowEviction,
         )
 
@@ -519,10 +788,14 @@ class MemoryRuntime:
         一轮完整扫描结束后，缓存中存在但本轮未出现的记忆即为已
         删除/禁用，从缓存中清除。
         """
-        page = await getEnabledMemoryPage(
+        page = await getEnabledContextualMemoryPage(
             self._reconcileAfterID,
             LLM_MEMORY_INDEX_PAGE_SIZE,
         )
+        if page is None:
+            self._stats["lastReason"] = "reconcileReadFailed"
+            self._nextReconcile = time.monotonic() + LLM_MEMORY_RECONCILE_SECONDS
+            return
         if not page:
             for memoryID in list(self._cache):
                 if memoryID not in self._reconcileSeen:
@@ -531,6 +804,9 @@ class MemoryRuntime:
             self._reconcileAfterID = 0
             self._nextReconcile = time.monotonic() + LLM_MEMORY_RECONCILE_SECONDS
             return
+
+        if self._stats["lastReason"] == "reconcileReadFailed":
+            self._stats["lastReason"] = None
 
         for memory in page:
             memoryID = int(memory["id"])
@@ -576,46 +852,70 @@ class MemoryRuntime:
         self._workerStarted = True
         try:
             while self._running:
-                if getMemoryRetrievalMode() != "hybrid":
-                    await self._waitForWork()
-                    continue
-                if not await self._ensureEncoder():
-                    await self._waitForWork(
-                        self._nextEncoderAttempt - time.monotonic()
+                try:
+                    if getMemoryRetrievalMode() != "hybrid":
+                        await self._waitForWork()
+                        continue
+                    if not await self._ensureEncoder():
+                        await self._waitForWork(
+                            self._nextEncoderAttempt - time.monotonic()
+                        )
+                        continue
+
+                    # 查询优先但受 burst 限制，避免持续聊天流量让后台索引永远饥饿。
+                    if self._queryJobs and (
+                        self._queryBurst < LLM_MEMORY_QUERY_BURST_LIMIT
+                        or not self._pendingIndex
+                    ):
+                        await self._processQuery()
+                        self._queryBurst += 1
+                        continue
+                    if self._pendingIndex:
+                        await self._processIndex()
+                        self._queryBurst = 0
+                        continue
+                    if time.monotonic() >= self._nextReconcile:
+                        await self._reconcileStep()
+                        continue
+
+                    await self._waitForWork(self._nextReconcile - time.monotonic())
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self._stats["workerFailures"] += 1
+                    self._stats["lastReason"] = type(exc).__name__
+                    await logSystemEvent(
+                        "LLM memory 后台任务异常",
+                        type(exc).__name__,
+                        LogLevel.ERROR,
+                        exception=exc,
                     )
-                    continue
-
-                # 查询优先但受 burst 限制，避免持续聊天流量让后台索引永远饥饿。
-                if self._queryJobs and (
-                    self._queryBurst < LLM_MEMORY_QUERY_BURST_LIMIT
-                    or not self._pendingIndex
-                ):
-                    await self._processQuery()
-                    self._queryBurst += 1
-                    continue
-                if self._pendingIndex:
-                    await self._processIndex()
-                    self._queryBurst = 0
-                    continue
-                if time.monotonic() >= self._nextReconcile:
-                    await self._reconcileStep()
-                    continue
-
-                await self._waitForWork(self._nextReconcile - time.monotonic())
+                    if self._running:
+                        await asyncio.sleep(LLM_MEMORY_WORKER_ERROR_BACKOFF_SECONDS)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            self._stats["lastReason"] = type(exc).__name__
-            await logSystemEvent(
-                "LLM memory 后台任务异常",
-                type(exc).__name__,
-                LogLevel.ERROR,
-                exception=exc,
-            )
         finally:
+            if self._running:
+                self._running = False
+                self._finishPendingQueries()
             self._workerStarted = False
             if self._workerTask is currentTask:
                 self._workerTask = None
+
+
+    def _finishPendingQueries(self) -> None:
+        """以空结果完成所有等待中的查询，供 worker 退出和 close 共用。"""
+        activeQuery = self._activeQueryJob
+        if activeQuery is not None and not activeQuery.future.done():
+            activeQuery.future.set_result(
+                self._emptySemanticResults(activeQuery.queryTexts)
+            )
+        while self._queryJobs:
+            job = self._queryJobs.popleft()
+            if not job.future.done():
+                job.future.set_result(
+                    self._emptySemanticResults(job.queryTexts)
+                )
 
 
     async def close(self) -> None:
@@ -633,17 +933,11 @@ class MemoryRuntime:
         self._running = False
         self._wakeEvent.set()
         self._pendingIndex.clear()
-        activeQuery = self._activeQueryJob
-        if activeQuery is not None and not activeQuery.future.done():
-            activeQuery.future.set_result([
-                dict() for _ in activeQuery.queryTexts
-            ])
-        while self._queryJobs:
-            job = self._queryJobs.popleft()
-            if not job.future.done():
-                job.future.set_result([dict() for _ in job.queryTexts])
+        self._finishPendingQueries()
 
         try:
+            # 直接close与ResourceManager回调共用同一停接/宽限，不能重置等待预算。
+            await self.closeSelectors()
             # 先停止接收新工作并完成正在运行的 native 调用，再关闭 encoder 和
             # executor；否则 ONNX 线程可能仍在访问已释放的模型对象。
             workerTask = self._workerTask
@@ -689,6 +983,11 @@ def registerMemoryRuntime() -> None:
         return
     runtime = MemoryRuntime()
     state.setMemoryRuntime(runtime)
+    getResourceManager().register(
+        "LLM memory selectors",
+        runtime.closeSelectors,
+        priority=40,
+    )
     getResourceManager().register(
         "LLM memory runtime",
         runtime.close,
