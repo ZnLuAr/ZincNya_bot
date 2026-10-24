@@ -2,7 +2,15 @@
 
 LLM Memory 语义检索的离线工具：模型安装、评测，以及一组研究脚本。它们都不是 bot 运行时依赖，也不读生产数据库。
 
-依赖与语义检索相同，需先安装 `requirements-memory.txt`。系统说明见 [LLM Memory 文档](../../docs/llm-memory.md)。
+这组脚本有一个统一启动器——上线面板（住在上一级 `scripts/memoryPanel.py`，面板自己是入口、这些脚本是它拉起的子命令）：
+
+```bash
+python scripts/memoryPanel.py
+```
+
+面板顶部呈现 Local Hybrid / LLM Selector 两条线的上线检测结果（依赖、模型、校准、质量报告、资源报告、selector 配置与凭据），底部动作菜单可直接拉起 `memoryModel` / `evaluateMemory` 的子命令，跑完刷新即看新结果。检测逻辑复用线上的 `loadCalibratedThresholds()`、`getMemorySelectorSettings()` 与 `memoryModel.py` 的 `verifyModel()`，不另写一套判断；面板全程只读，不碰 `retrievalCalibration.json`（`status: approved` 永远只能人工改）。质量与资源结论来自 `.cache/llmMemory/reports/` 下最近一次报告（按 mtime 扫描，无论报告是从面板还是命令行产出都能识别）。研究脚本在面板的二级菜单里有说明和示例命令。
+
+依赖与语义检索相同，需先安装 `requirements/memory.txt`。系统说明见 [LLM Memory 文档](../../docs/llm-memory.md)。
 
 ## 常用工具
 
