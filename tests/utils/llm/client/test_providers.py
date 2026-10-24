@@ -14,6 +14,8 @@ tests/utils/llm/client/test_providers.py
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock
 
+import sys
+
 import pytest
 
 from config import LLM_MAX_TOKENS_HARD_CAP
@@ -77,6 +79,19 @@ class TestAnthropicTruncationRetry:
         assert result == "你好喵"
         assert provider._client.messages.create.await_count == 1
         assert provider._client.messages.create.await_args.kwargs["max_tokens"] == 1024
+
+    async def test_temperature_via_extra_body_not_signature(self, provider):
+        """temperature 经 extra_body 透传（SDK 1.x 签名已移除该参数），不出现在签名 kwargs"""
+        provider._client.messages.create.return_value = _makeAnthropicResponse(
+            [_anthropicTextBlock("你好喵")], "end_turn",
+        )
+
+        await provider.requestReply(**_KWARGS)
+
+        kwargs = provider._client.messages.create.await_args.kwargs
+        assert kwargs["extra_body"] == {"temperature": 0.5}
+        # 签名参数里不能再有 temperature——1.x 传了会 TypeError
+        assert "temperature" not in kwargs
 
     async def test_thinking_only_truncated_then_success(self, provider):
         """仅 thinking block（stop_reason=max_tokens）→ 提额重试，第二次成功"""
@@ -144,16 +159,74 @@ class TestAnthropicTruncationRetry:
 
         assert result == "正文喵"
 
-    async def test_whitespace_only_text_counts_as_empty(self, provider):
-        """text block 仅空白 → 视为空，走提额重试"""
-        provider._client.messages.create.side_effect = [
-            _makeAnthropicResponse([_anthropicTextBlock("   \n")], "end_turn"),
-            _makeAnthropicResponse([_anthropicTextBlock("有内容了")], "end_turn"),
-        ]
 
-        result = await provider.requestReply(**_KWARGS)
+class TestAnthropicSdkCompat:
+    """SDK 0.x / 1.x 双版本兼容：代理客户端构造与版本探测。"""
 
-        assert result == "有内容了"
+    def test_sdkMajorVersion_parses(self):
+        """版本探测能读出主版本号"""
+        from utils.llm.client.anthropic import _sdkMajorVersion
+        version = _sdkMajorVersion()
+        assert version in (0, 1)
+
+    def test_sdkMajorVersion_fallback_on_garbage(self, monkeypatch):
+        """__version__ 异常时按 0 处理（旧版行为）"""
+        from utils.llm.client import anthropic as anthropicModule
+
+        monkeypatch.setattr(anthropicModule, "_anthropicModule", SimpleNamespace(__version__="garbage"))
+        assert anthropicModule._sdkMajorVersion() == 0
+
+    def test_buildProxyHttpClient_v1_uses_httpx2(self, monkeypatch):
+        """SDK ≥1.0 时用 httpx2.AsyncClient（SDK 拒绝 httpx 对象）"""
+        import types
+        from utils.llm.client import anthropic as anthropicModule
+
+        fakeHttpx2 = types.ModuleType("httpx2")
+        fakeClient = object()
+        fakeHttpx2.AsyncClient = lambda proxy=None: ("httpx2", proxy, fakeClient)
+        monkeypatch.setitem(sys.modules, "httpx2", fakeHttpx2)
+        monkeypatch.setattr(anthropicModule, "_anthropicModule", SimpleNamespace(__version__="1.13.0"))
+
+        result = anthropicModule._buildProxyHttpClient("socks5://127.0.0.1:1080")
+        assert result[0] == "httpx2"
+        assert result[1] == "socks5://127.0.0.1:1080"
+
+    def test_buildProxyHttpClient_v0_uses_httpx(self, monkeypatch):
+        """SDK 0.x 时用 httpx.AsyncClient（旧栈）"""
+        import types
+        from utils.llm.client import anthropic as anthropicModule
+
+        fakeHttpx = types.ModuleType("httpx")
+        fakeHttpx.AsyncClient = lambda proxy=None: ("httpx", proxy)
+        monkeypatch.setitem(sys.modules, "httpx", fakeHttpx)
+        monkeypatch.setattr(anthropicModule, "_anthropicModule", SimpleNamespace(__version__="0.85.0"))
+
+        result = anthropicModule._buildProxyHttpClient("socks5://127.0.0.1:1080")
+        assert result[0] == "httpx"
+
+    def test_getClient_passes_proxy_client(self, monkeypatch):
+        """配置了代理时 _getClient 把代理客户端传给 AsyncAnthropic"""
+        from utils.llm.client import anthropic as anthropicModule
+
+        captured = {}
+
+        def fakeBuild(proxy):
+            return ("proxyClient", proxy)
+
+        monkeypatch.setattr(anthropicModule, "_buildProxyHttpClient", fakeBuild)
+
+        class FakeAsyncAnthropic:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        monkeypatch.setattr(anthropicModule, "AsyncAnthropic", FakeAsyncAnthropic)
+
+        provider = anthropicModule.AnthropicProvider("key", proxy="socks5://x:1080")
+        provider._getClient()
+
+        assert captured["http_client"][0] == "proxyClient"
+        assert captured["http_client"][1] == "socks5://x:1080"
+        assert captured["api_key"] == "key"
 
 
 

@@ -110,7 +110,10 @@ def getProvider(model: str) -> LLMProvider:
         _providers = _buildProviders()
 
     if not _providers:
-        raise RuntimeError("没有可用的 LLM SDK 喵，需要安装 anthropic、openai 或 google-genai")
+        raise RuntimeError(
+            "没有可用的 LLM SDK 喵，需要安装 anthropic、openai 或 google-genai"
+            "（pip install -r requirements/llm.txt）"
+        )
 
     # 检查常见拼写错误
     corrected = _MODEL_TYPOS.get(model.lower())

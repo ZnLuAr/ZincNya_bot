@@ -397,5 +397,5 @@ def test_encoderReportsMissingOptionalDependency(monkeypatch):
 
     monkeypatch.setattr("builtins.__import__", _missingImport)
 
-    with pytest.raises(MemoryEncoderUnavailable, match="requirements-memory.txt"):
+    with pytest.raises(MemoryEncoderUnavailable, match="requirements/memory.txt"):
         MemoryEncoder._importOptionalDependency("onnxruntime")

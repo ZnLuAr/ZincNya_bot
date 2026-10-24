@@ -3,11 +3,18 @@ utils/llm/client/anthropic.py
 
 Anthropic Claude 提供商实现。
 
+注：temperature 在 1.x 已从 messages.create 签名移除
+（被 output_config.effort 体系取代），因此统一经 extra_body 透传——
+两个版本都支持该参数且语义相同（额外 JSON 进请求体）。代理分支按 SDK
+主版本选 httpx（0.x）或 httpx2（1.x 起换了 HTTP 栈，传入 httpx 对象
+会被 TypeError 拒绝）。
+
 ……你说 httpx.AsyncClient 用完不关会漏？我们的 AsyncAnthropic 会帮我们管理好生命周期的😋
 """
 
 import re
 
+import anthropic as _anthropicModule
 from anthropic import AsyncAnthropic
 
 from config import LLM_MAX_TOKENS_HARD_CAP
@@ -19,6 +26,29 @@ from ._base import LLMProvider
 
 # 截断提额重试轮数（首次 + 重试）
 _TRUNCATION_RETRY_ROUNDS = 2
+
+
+def _sdkMajorVersion() -> int:
+    """读 SDK 主版本号；解析失败按 0 处理（旧版行为）。"""
+    try:
+        return int(str(_anthropicModule.__version__).split(".")[0])
+    except (AttributeError, ValueError):
+        return 0
+
+
+def _buildProxyHttpClient(proxy: str):
+    """按 SDK 版本构造带代理的异步 HTTP 客户端。
+
+    SDK ≥1.0 依赖 httpx2 并拒绝 httpx 对象；0.x 只认 httpx。
+    两个构造器的 proxy 参数语义一致。
+
+    唉 A÷
+    """
+    if _sdkMajorVersion() >= 1:
+        import httpx2
+        return httpx2.AsyncClient(proxy=proxy)
+    import httpx
+    return httpx.AsyncClient(proxy=proxy)
 
 
 
@@ -45,8 +75,7 @@ class AnthropicProvider(LLMProvider):
             if self._baseUrl:
                 kwargs["base_url"] = self._baseUrl
             if self._proxy:
-                import httpx
-                kwargs["http_client"] = httpx.AsyncClient(proxy=self._proxy)
+                kwargs["http_client"] = _buildProxyHttpClient(self._proxy)
             self._client = AsyncAnthropic(**kwargs)
         return self._client
 
@@ -96,11 +125,12 @@ class AnthropicProvider(LLMProvider):
             response = await client.messages.create(
                 model=model,
                 max_tokens=effectiveMaxTokens,
-                temperature=temperature,
                 system=systemText,
                 messages=[
                     {"role": "user", "content": content}
                 ],
+                # temperature 在 SDK 1.x 已从签名移除，新版和旧版统一进入 extra_body 透传
+                extra_body={"temperature": temperature},
             )
 
             textBlock = next((b for b in response.content if b.type == "text"), None)

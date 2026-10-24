@@ -285,7 +285,7 @@ class MemoryEncoder:
             return __import__(moduleName)
         except ImportError as exc:
             raise MemoryEncoderUnavailable(
-                f"缺少可选依赖 {moduleName}，请安装 requirements-memory.txt"
+                f"缺少可选依赖 {moduleName}，请安装 requirements/memory.txt"
             ) from exc
 
 
