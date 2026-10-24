@@ -1,0 +1,41 @@
+# ============================================================
+# 核心依赖：bot 启动与核心功能必需
+# ============================================================
+
+# Telegram Bot API
+python-telegram-bot==21.9
+
+# 环境变量管理
+python-dotenv==1.0.0
+
+# 异步 HTTP 请求（书籍搜索 API）
+aiohttp==3.11.11
+
+# 富文本终端输出
+rich==13.9.4
+
+# 交互式终端 UI
+prompt-toolkit==3.0.48
+
+# 文件类型检测
+python-magic==0.4.27
+python-magic-bin==0.4.14; platform_system == "Windows"
+
+# 加密（聊天记录存储）
+cryptography==44.0.0
+
+# HTTP 错误分类（核心 errorHandler）+ SOCKS 代理
+httpx[socks]
+
+# HTML 解析（新闻抓取 / URL 读取）
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# 进程和系统信息（bot 管理命令）
+psutil==6.1.1
+
+# JSON Schema 验证（离线编辑脚本，未装时脚本自行降级）
+jsonschema==4.23.0
+
+# 大文件分卷压缩（表情包/通用大文件发送）
+py7zr==0.22.0

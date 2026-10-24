@@ -1,0 +1,5 @@
+# 可选的本地 memory 语义检索依赖；普通 bot 安装不强制引入。
+# 这些版本同时提供 CPython 3.11 / 3.13 的 Windows 与 Linux x86_64 wheel。
+numpy==2.2.6
+onnxruntime==1.29.0
+tokenizers==0.23.2

@@ -1,0 +1,5 @@
+# 便利层：全部运行依赖（核心 + LLM + 待办 + 记忆检索），不含 dev
+-r core.txt
+-r llm.txt
+-r todos.txt
+-r memory.txt

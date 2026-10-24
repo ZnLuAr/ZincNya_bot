@@ -22,23 +22,46 @@ formatRemindTime(dt) -> str
     PRIORITY_TEXT   控制台用文本映射（[P0] [P1] ...）
 """
 
-
-
-
 import re
 import sys
 from io import StringIO
 from datetime import datetime, timedelta
 
 
-# jionlp 在 import 时会 print 广告，临时压制
-_stdout = sys.stdout
-try:
-    sys.stdout = StringIO()
-    import jionlp as jio
-finally:
-    sys.stdout = _stdout
-    del _stdout
+# jionlp 可选依赖：三态缓存（None=未探测，True=可用，False=缺失）。
+# jionlp 在 import 时会 print 广告，临时压制；缺失时降级到仅英文简写
+# 时间解析（2h/30m/1d），不阻塞 todos 模块加载。
+_jionlpAvailable = None
+
+
+def _loadJionlp():
+    """延迟导入 jionlp；首次失败打印一次安装提示并缓存失败。"""
+    global _jionlpAvailable, jio
+    if _jionlpAvailable is not None:
+        return _jionlpAvailable
+    stdout = sys.stdout
+    importFailed = False
+    try:
+        sys.stdout = StringIO()
+        import jionlp as jioModule
+        # Windows 上 pip uninstall 可能残留空目录，Python 视之为
+        # namespace package——import 成功但模块不可用，按缺失处理
+        if not hasattr(jioModule, "TimeParser"):
+            raise ImportError("jionlp 安装不完整（缺少 TimeParser）")
+        jio = jioModule
+        _jionlpAvailable = True
+    except ImportError:
+        importFailed = True
+        _jionlpAvailable = False
+    finally:
+        # 先恢复 stdout 再打印提示——提示不能落进压制广告用的 StringIO
+        sys.stdout = stdout
+    if importFailed:
+        print(
+            "[todos] 未安装 jionlp，中文时间解析不可用（英文简写 2h/30m/1d 仍可用）。\n"
+            "        安装：pip install -r requirements/todos.txt"
+        )
+    return _jionlpAvailable
 
 
 
@@ -86,7 +109,10 @@ def parseTime(text: str) -> tuple[datetime | None, str]:
         return (datetime.now() + delta, remaining)
 
     # 再使用 jionlp strict 模式识别自然语言时间表达式。
-    #
+    # jionlp 缺失时此段整体跳过——降级为仅英文简写。
+    if not _loadJionlp():
+        return (None, text)
+
     # strict=True 要求整个输入必须是纯时间表达式，不允许混入非时间内容。
     # 利用这一特性做字符级扫描：
     #   - 外层循环枚举起点（处理 "在明天…" 这类带前缀词的情况）

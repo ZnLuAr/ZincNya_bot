@@ -33,11 +33,25 @@ cd ZincNya_bot
 
 ### 2. 安装依赖
 
-把要用的东西装上：
+依赖按功能分组放在 `requirements/` 目录，按需安装：
 
 ```bash
-pip install -r requirements.txt
+# 推荐：一次装齐全部运行依赖（核心 + LLM + 待办 + 记忆检索）
+pip install -r requirements/all.txt
+
+# 最小安装：只装核心，bot 能启动、基础功能可用
+pip install -r requirements/core.txt
 ```
+
+最小安装之外，按要用的功能补装：
+
+| 分组 | 命令 | 解锁的功能 | 缺装时的表现 |
+|------|------|-----------|-------------|
+| `llm.txt` | `pip install -r requirements/llm.txt` | LLM 回复与知识库 | LLM 功能不可用，调用时报错并提示安装；其余功能正常 |
+| `todos.txt` | `pip install -r requirements/todos.txt` | 待办事项的中文时间解析（"明天9:00"） | 英文简写（2h/30m/1d）仍可用，中文表达解析降级 |
+| `memory.txt` | `pip install -r requirements/memory.txt` | Hybrid 记忆语义检索 | 检索不可用，memory 相关功能报错并提示安装 |
+
+> **从旧版本升级？** 依赖已从根目录的单个 `requirements.txt` 迁到 `requirements/` 目录。如果部署脚本里写死了旧路径，改成 `requirements/all.txt` 即可。
 
 ### 3. 配置环境变量
 
@@ -103,8 +117,7 @@ ZincNya_bot/
 ├── modulesRegistry.py              # 模块注册表（声明式模块元数据）
 ├── .env                            # 环境变量（不会被提交到 git）
 ├── .env.example                    # 环境变量模板
-├── requirements.txt                # 运行依赖
-├── requirements-dev.txt            # 开发依赖（pytest、覆盖率工具）
+├── requirements/                   # 依赖分组（core / llm / todos / memory / dev / all）
 ├── pytest.ini                      # pytest 配置
 │
 ├── data/                           # 数据文件
@@ -466,8 +479,8 @@ python scripts/module.py scan
 ### 运行测试
 
 ```bash
-# 装上开发依赖
-pip install -r requirements-dev.txt
+# 装上开发依赖（在运行依赖之外）
+pip install -r requirements/dev.txt
 
 # 跑全部测试
 python scripts/test.py

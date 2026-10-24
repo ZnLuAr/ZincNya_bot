@@ -86,6 +86,73 @@ def test_parse_time_dos_protection():
     assert parsed is None or len(remaining) > 0
 
 
+def test_parse_time_jionlp_missing_degrades(monkeypatch):
+    """jionlp 缺失时降级：中文解析跳过、英文简写仍可用（不崩）"""
+    import utils.todos.utils as todosUtils
+
+    monkeypatch.setattr(todosUtils, "_jionlpAvailable", False)
+
+    # 中文自然语言段整体跳过：原文返回
+    parsed, remaining = parseTime("明天 买牛奶")
+    assert parsed is None
+    assert remaining == "明天 买牛奶"
+
+    # 英文简写不受影响
+    parsed, remaining = parseTime("2h 买牛奶")
+    assert parsed is not None
+    assert remaining == "买牛奶"
+
+
+def test_load_jionlp_missing_prints_hint_once(monkeypatch, capsys):
+    """jionlp import 失败时打印一次安装提示并缓存失败状态"""
+    import utils.todos.utils as todosUtils
+
+    def raiseImportError():
+        raise ImportError("No module named 'jionlp'")
+
+    # 重置缓存为未探测；把真正的 import 调用替换为抛 ImportError
+    monkeypatch.setattr(todosUtils, "_jionlpAvailable", None)
+    import builtins
+    realImport = builtins.__import__
+
+    def fakeImport(name, *args, **kwargs):
+        if name == "jionlp":
+            raiseImportError()
+        return realImport(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fakeImport)
+
+    assert todosUtils._loadJionlp() is False
+    out = capsys.readouterr().out
+    assert "requirements/todos.txt" in out
+
+    # 第二次调用不再打印（缓存 False）
+    assert todosUtils._loadJionlp() is False
+    assert capsys.readouterr().out == ""
+
+
+def test_load_jionlp_namespace_residue_treated_as_missing(monkeypatch, capsys):
+    """pip uninstall 残留的空目录（namespace package）按缺失处理，不炸 TimeParser"""
+    import types
+    import utils.todos.utils as todosUtils
+
+    monkeypatch.setattr(todosUtils, "_jionlpAvailable", None)
+
+    import builtins
+    realImport = builtins.__import__
+
+    def fakeImport(name, *args, **kwargs):
+        if name == "jionlp":
+            # 模拟残留空目录：import 成功但没有 TimeParser
+            return types.ModuleType("jionlp")
+        return realImport(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fakeImport)
+
+    assert todosUtils._loadJionlp() is False
+    assert "requirements/todos.txt" in capsys.readouterr().out
+
+
 # ============================================================================
 # parsePriority() 测试
 # ============================================================================

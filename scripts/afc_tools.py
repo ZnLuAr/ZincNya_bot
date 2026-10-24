@@ -452,7 +452,7 @@ def cmdCheck():
             continue
         for dep in missingDeps:
             warnTools += 1
-            printColor(Color.YELLOW, f"[!] {toolName}: 依赖 {dep} 未在 requirements.txt 中找到")
+            printColor(Color.YELLOW, f"[!] {toolName}: 依赖 {dep} 未在 requirements/*.txt 中找到")
 
     # 汇总
     print()
@@ -845,7 +845,7 @@ def _validateManifestPaths(toolId, files, testFile):
 
 
 def _findMissingDeps(dependencies):
-    """比对 dependencies 与项目 requirements.txt（模糊匹配包名，忽略版本号）。
+    """比对 dependencies 与项目 requirements/*.txt（模糊匹配包名，忽略版本号）。
 
     返回 (missingDeps, error)：dependencies 不是列表时 error 非 None。
     纯计算，不打印不询问——怎么交互由调用方决定。
@@ -854,11 +854,16 @@ def _findMissingDeps(dependencies):
         return None, "afcTool.json 的 dependencies 必须是字符串列表"
     if not dependencies:
         return [], None
-    reqPath = os.path.join(PROJECT_ROOT, "requirements.txt")
+    reqDir = os.path.join(PROJECT_ROOT, "requirements")
     reqText = ""
-    if os.path.exists(reqPath):
-        with open(reqPath, "r", encoding="utf-8") as f:
-            reqText = f.read().lower()
+    if os.path.isdir(reqDir):
+        # 文件名排序保证多文件拼接顺序确定（比对是文本包含，顺序本身
+        # 不影响结果，确定性只为可复现的输出）
+        for fileName in sorted(os.listdir(reqDir)):
+            if fileName.endswith(".txt"):
+                reqPath = os.path.join(reqDir, fileName)
+                with open(reqPath, "r", encoding="utf-8") as f:
+                    reqText += f.read().lower() + "\n"
     missingDeps = []
     for dep in dependencies:
         pkgName = re.split(r"[<>=!~\[]", str(dep))[0].strip().lower()
@@ -999,12 +1004,12 @@ def cmdInstall(githubUrl, branch, force):
             printColor(Color.YELLOW, f"[!] 工具 {toolId} 已存在，将覆盖安装")
             _log("AFC 工具覆盖安装", f"{toolId} ← {githubUrl}", LogLevel.WARNING)
 
-        # ── 依赖检查（模糊比对 requirements.txt，缺失需人工确认）──
+        # ── 依赖检查（模糊比对 requirements/*.txt，缺失需人工确认）──
         missingDeps, err = _findMissingDeps(manifest.get("dependencies") or [])
         if err:
             return _fail(err)
         if missingDeps:
-            printColor(Color.YELLOW, "[!] 以下依赖未在 requirements.txt 中找到：")
+            printColor(Color.YELLOW, "[!] 以下依赖未在 requirements/*.txt 中找到：")
             for dep in missingDeps:
                 print(f"  - {dep}")
             _log("AFC 工具依赖缺失", f"{toolId}: {', '.join(missingDeps)}", LogLevel.WARNING)
@@ -1434,7 +1439,7 @@ def cmdUpdate(toolName, checkOnly=False, assumeYes=False):
     if err:
         return _fail(err)
     if missingDeps:
-        printColor(Color.YELLOW, "[!] 以下依赖未在 requirements.txt 中找到：")
+        printColor(Color.YELLOW, "[!] 以下依赖未在 requirements/*.txt 中找到：")
         for dep in missingDeps:
             print(f"  - {dep}")
         _log("AFC 工具依赖缺失", f"{toolName}: {', '.join(missingDeps)}", LogLevel.WARNING)

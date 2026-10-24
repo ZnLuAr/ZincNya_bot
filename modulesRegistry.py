@@ -94,7 +94,7 @@ MODULES = {
             "scripts/llmMemory/studyMemoryPairPipeline.py",
             "scripts/llmMemory/studyMemoryAdmission.py",
             "scripts/llmMemory/buildMemoryCalibration.py",
-            "requirements-memory.txt",
+            "requirements/memory.txt",
         ],
         "testFiles": [
             "tests/utils/llm/test_config.py",
@@ -241,6 +241,7 @@ MODULES = {
             "utils/todos/cliRender.py",
             "utils/todos/utils.py",
             "utils/command/todos.py",
+            "requirements/todos.txt",
         ],
         "testFiles": [
             "tests/utils/todos/test_database.py",

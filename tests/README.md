@@ -8,7 +8,7 @@ ZincNya Bot 的单元测试目录，使用 pytest + pytest-asyncio。
 
 ```bash
 # 安装依赖
-pip install -r requirements-dev.txt
+pip install -r requirements/dev.txt
 
 # 运行所有测试
 python scripts/test.py

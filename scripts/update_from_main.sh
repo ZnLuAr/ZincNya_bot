@@ -163,11 +163,11 @@ echo -e "${GREEN}✓ 数据文件恢复完成${NC}"
 # 10. 安装/更新依赖
 echo ""
 echo -e "${YELLOW}📦 检查 Python 依赖...${NC}"
-if [ -f requirements.txt ]; then
+if [ -f requirements/all.txt ]; then
     read -p "   是否更新 Python 依赖？(y/n): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        pip3 install -r requirements.txt --upgrade
+        pip3 install -r requirements/all.txt --upgrade
         echo -e "${GREEN}✓ 依赖更新完成${NC}"
     fi
 fi

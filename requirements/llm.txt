@@ -1,0 +1,15 @@
+# ============================================================
+# LLM 生成与知识库依赖
+# 缺装时 LLM 回复功能不可用（bot 其余功能正常）
+# ============================================================
+
+# LLM 提供商 SDK（按所用端点装，全装亦可）
+# anthropic 0.x / 1.x 双版本兼容：1.x 移除了 temperature 签名参数（走
+# extra_body 透传）且换用 httpx2（代理分支按 SDK 版本选栈），见
+# utils/llm/client/anthropic.py 头部说明
+anthropic>=0.18.0        # Claude API
+openai>=1.30.0           # OpenAI / DeepSeek / 豆包等兼容端点
+google-genai>=1.0.0      # Google Gemini API
+
+# LLM 知识库（YAML frontmatter 解析）
+PyYAML==6.0.2

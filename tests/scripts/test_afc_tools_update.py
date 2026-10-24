@@ -435,6 +435,34 @@ class TestDependencies:
         assert any("依赖缺失" in e[0] for e in updateEnv["logs"])
 
 
+class TestFindMissingDeps:
+    """_findMissingDeps 读 requirements/*.txt 目录的纯计算行为。"""
+
+    def test_matches_deps_across_group_files(self, updateEnv):
+        (updateEnv["tmpPath"] / "requirements").mkdir()
+        (updateEnv["tmpPath"] / "requirements" / "core.txt").write_text(
+            "python-telegram-bot==21.9\nrich==13.9.4\n", encoding="utf-8"
+        )
+        (updateEnv["tmpPath"] / "requirements" / "todos.txt").write_text(
+            "jionlp==1.5.27\n", encoding="utf-8"
+        )
+
+        missing, err = afc_tools._findMissingDeps(["rich", "jionlp==1.0.0", "no-such-pkg"])
+        assert err is None
+        assert missing == ["no-such-pkg"]
+
+    def test_missing_dir_reports_all_missing(self, updateEnv):
+        # tmp_path 下没有 requirements/ 目录：全部报 missing（与旧版文件不存在的行为一致）
+        missing, err = afc_tools._findMissingDeps(["rich"])
+        assert err is None
+        assert missing == ["rich"]
+
+    def test_non_list_dependencies_returns_error(self, updateEnv):
+        missing, err = afc_tools._findMissingDeps("not-a-list")
+        assert missing is None
+        assert "字符串列表" in err
+
+
 class TestNetworkFailures:
     @pytest.mark.parametrize("fetchResult,keyword", [
         ((None, None, "afcTool.json 超过 1MB 上限（分支 main）"), "超过 1MB 上限"),

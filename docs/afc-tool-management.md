@@ -175,7 +175,7 @@ local-draft，可以理解为是一种「合法但未完成」的状态：bot �
 - `author`：作者
 - `description`：描述
 - `testFile`：测试文件路径，扁平的 `tests/utils/afc/tools/test_<id>.py`（注意不在 `<id>/` 子目录里）
-- `dependencies`：pip 依赖列表。install 和 check 时会拿它跟 `requirements.txt` 做模糊比对，找不到的包报出来提醒
+- `dependencies`：pip 依赖列表。install 和 check 时会拿它跟 `requirements/*.txt`（依赖分组目录的全部文件）做模糊比对，找不到的包报出来提醒
 
 ### 为什么缺了这四个就拒装
 
@@ -338,7 +338,7 @@ python scripts/afc_tools.py check
 - 测试文件缺失（查 manifest 的 `testFile`，没登记则按惯例查 `tests/utils/afc/tools/test_<id>.py`）
 - 正则含嵌套量词（ReDoS 启发式，详见安全边界）
 - local-draft 未登记到 builtin/custom manifest
-- custom 工具 manifest 里的 `dependencies` 在 `requirements.txt` 中找不到（仅 custom 工具参与这项检测）
+- custom 工具 manifest 里的 `dependencies` 在 `requirements/*.txt` 中找不到（仅 custom 工具参与这项检测）
 
 来看一份带 Warning 的真实输出（临时造了个 draft 工具演示，正则里故意埋了个嵌套量词）：
 
@@ -442,7 +442,7 @@ python scripts/afc_tools.py install <url> -f      # 覆盖已存在的同名工�
 
 - **内置工具禁止覆盖**：`id` 撞上 `afcToolsBuiltin.json` 里的条目直接中止。想魔改内置工具应该走别的路子，install 是不会帮你顶包的……
 - **目标已存在要加 `-f`**：不加会提示「确认要覆盖请加 -f/--force」。
-- **依赖缺失会问一句**：manifest 的 `dependencies` 里有 `requirements.txt` 找不到的包时，会列出来并询问「是否继续安装？(y/n)」。
+- **依赖缺失会问一句**：manifest 的 `dependencies` 里有 `requirements/*.txt` 找不到的包时，会列出来并询问「是否继续安装？(y/n)」。
 - 测试文件（`testFile`）是可选的：下载失败只警告不中断，工具本体照样装好。
 
 下载与校验的层层限额留到「安全边界」一起讲。
