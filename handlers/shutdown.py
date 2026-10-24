@@ -111,7 +111,7 @@ async def status(update: Update, _: ContextTypes.DEFAULT_TYPE):
     cpuPercent = await asyncio.to_thread(process.cpu_percent, 0.1)
 
     statusText = (
-        f"锌酱的目前啊、\n"
+        f"锌酱的客户端目前啊、\n"
         f"已经运行了 {uptimeStr}喵\n"
         f"\n"
         f"当前有：\n"

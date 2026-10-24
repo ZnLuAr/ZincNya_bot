@@ -53,6 +53,7 @@ CLAUDE.md
 log/
 *.log
 *.log.*
+.cache/
 docs/archive
 docs/internal
 
