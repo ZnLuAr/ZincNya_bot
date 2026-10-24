@@ -1014,9 +1014,10 @@ async def retrieveMemoryContext(
 
     按配置走两条路径：legacy（重构前的原行为——每 scope 限量取池、
     按 priority 排序截前 10 条）或 hybrid（local 阈值选择 / llm 远程选 ID）。
+
     legacy/local 总预算 2 秒；llm 为本地 2 秒、远程最多 30 秒、收尾 0.1 秒。
-    同时最多 4 个检索，无排队。选择失败仅保留可复核的 pinned，数据库
-    故障返回空；外部取消正常传播，不将其伪装成成功降级。
+    同时最多 4 个检索，无排队。选择失败仅保留可复核的 pinned，数据库故障返回空；
+    外部取消正常传播，不将其伪装成成功降级。
 
     收尾分两遍渲染：先按候选快照渲染一遍确定入选集合，再回数据库
     复核剔除窗口期变更的条目，最后用幸存集合重新渲染——保证
@@ -1064,6 +1065,7 @@ async def retrieveMemoryContext(
         LLM_MEMORY_RETRIEVAL_TIMEOUT_SECONDS / 2,
     )
     selectionDeadline = deadline - finalizeReserve
+    
     try:
         # 模式判定用请求开始时的快照（llmConfig 由调用方传入或此处现读），
         # 一次检索中途切模式不会导致半程混用两套逻辑。

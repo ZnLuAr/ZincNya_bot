@@ -13,7 +13,7 @@
 
 LLM Memory 是 Bot 的长期记忆系统，负责存放对话里值得留下的事实——用户偏好、约定、需要跨对话复用的信息，比如「用户很讨厌香菜」「这个群每周五晚上一起打游戏」这些……
 
-LLM 本身是无状态的，每次调用都从零开始。如果把所有东西都塞进聊天历史，很快会超出上下文长度，无关的信息也会拖累回复质量。所以应该把值得记住的事实单独存放，需要时再取出来给 LLM——这就是 Memory 子系统的职责。
+大模型本身是无状态的，每次调用都从零开始。如果把所有东西都塞进聊天历史，很快会超出上下文长度，无关的信息也会拖累回复质量。所以应该把值得记住的事实单独存放，需要时再取出来给 LLM——这就是 Memory 子系统的职责。
 
 LLM Memory 有别于聊天历史、知识库：
 
@@ -67,7 +67,7 @@ LLM Memory 在重构之后已经变成了比较复杂的系统，文档略长。
 
 ## 架构总览
 
-Memory 并不是一个独立的服务，它由一个 SQLite 正本和一套「本轮选哪些记忆进 prompt」的逻辑组成，挂在原有的回复链路上。legacy 和 hybrid local 都不产生额外的 LLM 调用；只有在 hybrid 模式中显式启用 llm 选择后端，才会多一次远程请求。
+Memory 由一个 SQLite 正本和一套「本轮选哪些记忆进 prompt」的逻辑组成，挂在原有的回复链路上，而非一个独立的服务。legacy 和 hybrid local 都不产生额外的 LLM 调用；只有在 hybrid 模式中显式启用 llm 选择后端，才会多一次远程请求。
 
 下图按「谁能调用谁」分成五层，另有两条旁路。图中的 `memory/`、`client/` 指 `utils/llm/` 下的子目录。
 
@@ -106,7 +106,7 @@ flowchart TB
 - **管理**：控制台命令和管理界面直接调用数据库 CRUD，不经审核。新增时默认写成 `source=manual`，模型不能修改或删除 manual 记忆；CLI 的 `add` / `edit` 也可以用 `-source` 显式写成 `inferred`，之后模型就能改删它。
 - **离线工具**：`scripts/llmMemory/` 的评测脚本复用线上的查询构造、打分和预算代码，输入换成人工标注的 fixture，不读生产数据库。
 
-两条规则贯穿全层：
+其中有两条规则贯穿所有的层：
 
 1. **SQLite 是唯一正本。** 向量缓存是派生数据，丢了可以从数据库重建——重启后清空，hybrid 模式下 runtime 会在后台按容量尽力补回。审核队列只在进程内存里，内容来自模型输出，重启后连同旧审核卡一起丢失——而数据库不受影响。
 2. **选择只发生在检索入口。** 哪些记忆进 prompt，只由 `retrieveMemoryContext()` 决定，阈值、融合、预算和注入前复核都在 `retrieval.py`（legacy 的配额排序是 `database.py` 里的纯函数，生产代码只从这个入口调用）。上层只构造输入，原样放入返回的 `contextBlock`；下层只打分或读写。`database.py` 还保留着旧接口 `retrieveMemories()` 和 `buildMemoryContextBlock()`，经 `utils.llm` 导出，目前只有测试在用；新代码应调用 `retrieveMemoryContext()`。
@@ -214,9 +214,9 @@ priority 在不同路径里的作用不一样：
 
 hint 跟着正文走（`database.py:updateMemory`）：
 
-- 正文或标签变了、又没给新 hint 时，旧 hint 自动清除；
+- 当正文或标签有变化，同时又没给新 hint 时，旧 hint 会自动清除；
 - 显式传空字符串表示清除，不传表示保留；
-- 模型提交的 hint 有换行或超长时，解析阶段只丢弃 hint 并记一条警告，操作的其余部分照常校验（`action.py:_parseActionDict`）；如果这是一条只改 hint 的 update，丢弃后没有可改的字段，整条会被拒绝。
+- 模型提交的 hint 有换行或超长时，程序在解析阶段只丢弃 hint 并记一条警告，操作的其余部分照常校验（`action.py:_parseActionDict`）；如果这是一条只改 hint 的 update，丢弃后没有可改的字段，整条会被拒绝。
 
 ---
 
