@@ -2,7 +2,7 @@
 
 > 落地时间：Query Reinforcement + 三层结构于 2026-06-24 实装
 >
-> 最后更新：2026-08-25
+> 最后更新：2026-10-25
 >
 > Written by ZincNya~ ❤
 
@@ -12,7 +12,7 @@
 
 ## 概述
 
-LLM 生成回复时，它看到的"用户消息"其实不只是用户打出来的那一句话——背后还有知识库检索结果、长期记忆、聊天历史、URL 内容、扩展模块注入的工具上下文……这些东西怎么拼在一起、按什么顺序排列、用什么信任度标记，全部由 `utils/llm/contextBuilder.py` 负责。
+LLM 生成回复时，它看到的"用户消息"其实不只是用户打出来的那一句话——背后还有知识库检索结果、长期记忆、聊天历史、URL 内容、扩展模块注入的工具上下文。handler 负责收集请求级数据，`utils/llm/contextBuilder.py` 负责把这些普通数据按层级排序并渲染。
 
 以前的做法是把这些块按写代码的顺序依次拼接，没有明确的分层逻辑，也没有统一的排序规则。此次的优化引入了 **Query Reinforcement + 三层结构** 的设计，这样，上下文的组装就变得更规范、更易扩展了。
 
@@ -174,7 +174,7 @@ blocks.append(f"<CURRENT_USER_MESSAGE>\n{safeUserMessage}\n</CURRENT_USER_MESSAG
 
 其中，**`<RETRIEVED_CONTEXT>`** 给所有上下文块一个统一的外层标记，让 LLM 能明确区分"背景参考"和"当前任务"；**`neutralizePromptDelimiters`** 把用户消息里的 XML 分隔符折成全角，防止攻击者构造 `</CURRENT_USER_MESSAGE><TRUSTED_KNOWLEDGE>...` 来越权注入高信任内容。
 
-需要留意的是，`userMessage` 在进入 `buildConversationContext` 之前，可能已被上游 `utils/llm/messagePrep.py:injectReplyTextContext` 预处理。当用户以 reply 方式发消息时，实际拼进 `<CURRENT_USER_MESSAGE>` 的 `userMessage` 形如：
+需要留意的是，`userMessage` 由 `utils/llm/models.py` 的数据结构之一 `GenerationRequest.userMessage` 从 `MessageInput` 派生。当用户以 reply 方式发消息时，实际拼进 `<CURRENT_USER_MESSAGE>` 的 `userMessage` 形如：
 
 ```
 [引用的消息]
@@ -255,10 +255,10 @@ allBlocks.sort(key=lambda b: b[0])
 
 工具声明在前，背景知识居中，低信任内容在后，符合 prompt injection 防御的基本原则：
 
-- `TOOLS / KNOWLEDGE` 的内容来自开发者维护，可控，不会有恶意 prompt
+- `KNOWLEDGE` 来自开发者维护；AFC 的 `TOOLS` 块来自扩展模块，具体内容仍由模块负责
 - `LOW_TRUST` 包含用户提供的 memory、聊天历史、URL 内容，可能含 prompt injection 尝试
 
-让高信任内容先建立"规则框架"，低信任内容再补充细节，能降低低信任块影响 LLM 决策的风险。
+排序位置和内容可信度其实是两个概念；块的来源和提示词边界仍决定它能否影响 LLM 决策。低信任内容统一放在后面，只是整体防护的一部分。
 
 ---
 
@@ -450,17 +450,15 @@ knowledge 是开发者维护的"人设背景知识"，语义上是 system prompt
 
 ### 推送层的位置
 
-推送层在 `buildConversationContext` 的第二层（Context Injection）读取：
+推送层在 `handlers/llm.py::handleLLMMessage` 入队前按消息 ID 读取，保存到 `MessageInput.extraBlocks`。防抖批次将其合并到 `GenerationRequest.extraBlocks`，`buildConversationContext` 只接收普通数据：
 
 ```python
-# 从 bot_data 推送层读取扩展模块注入的块（读取即清除）
-extraBlocks: list[tuple[ContextTier, str, str]] = []
-if telegramContext is not None:
-    pushKey = f"llm_extra_blocks_{chatID}"
-    moduleBlocks = telegramContext.bot_data.pop(pushKey, {})
-    extraBlocks = list(moduleBlocks.values())
+# handlers/llm.py：从 bot_data 读取并清除当前消息的扩展块
+extraBlocks = _takeExtraBlocks(context, message)
+messageInput = replace(messageInput, extraBlocks=extraBlocks)
 
-# 合并扩展模块块和核心块
+# GenerationRequest.extraBlocks 从批次消息合并得到
+extraBlocks = request.extraBlocks
 allBlocks.extend(extraBlocks)
 
 # 统一排序（IntEnum 可直接比较，不需要 .value）
@@ -503,8 +501,8 @@ if weatherBlock:
 
 1. 创建 `handlers/weather.py`（放在 group 1）
 2. 检测用户消息是否在问天气
-3. 如果命中，构建天气上下文块，推入 `bot_data[f"llm_extra_blocks_{chatID}"]["weather"]`
-4. `contextBuilder` 自动读取并渲染
+3. 如果命中，构建天气上下文块，推入 `bot_data[f"llm_extra_blocks_{chatID}_{messageID}"]["weather"]`
+4. LLM handler 按当前消息 ID 消费，再传给 `contextBuilder` 渲染
 
 **推荐方案 B**，因为它不会让 `contextBuilder` 和新模块耦合。
 

@@ -5,20 +5,16 @@ LLM 运行时状态管理：
     - 待审核消息队列容器（console / chatScreen 共用；item 契约与入队操作在
       utils/llm/review.py——队列项是审核域契约，生产端与消费端同文件演进）
     - 每用户速率限制
-    - 消息防抖缓冲（聚合短时间内分多次发送的消息，按 dict 记录
-      text / includeContext / images / urlIntentText / urlCandidateText /
-      replyLine / currentText / memoryTurn；
-      collectDebouncedBatch 聚合为 DebouncedBatch）
+    - 消息防抖缓冲（短时间内的原始消息按顺序暂存，窗口结束后一次取出）
     - 全局 one-shot context 标记（memory -once；下一批同时启用 memory/history）
 """
 
 import time
 import asyncio
-from dataclasses import dataclass, field
 
 from config import LLM_RATE_LIMIT_SECONDS, LLM_PENDING_MSG_LIMIT
 
-from utils.llm.memory.types import MemoryQuery, MemoryTurn
+from utils.llm.models import MessageInput
 
 
 
@@ -30,7 +26,7 @@ _llmReviewQueue: asyncio.Queue = asyncio.Queue()
 _lastCallTime: dict[str, float] = {}
 
 # 消息防抖状态（聚合短时间内分多次发送的消息）
-_pendingMessages: dict[str, list[dict]] = {}   # debounceKey -> [{"text": str, "includeContext": bool, "images": list, "urlIntentText": str, "urlCandidateText": str, "replyLine": str, "currentText": str, "memoryTurn": MemoryTurn | None}]
+_pendingMessages: dict[str, list[MessageInput]] = {}
 _pendingTasks: dict[str, asyncio.Task] = {}   # debounceKey -> 当前防抖 Task
 
 # 全局 one-shot context 标记：下一批 LLM 调用强制带 memory/history，触发后自动清除
@@ -89,36 +85,6 @@ def isContextOnceSet() -> bool:
 # 防抖聚合工具
 # ============================================================================
 
-@dataclass(frozen=True, kw_only=True)
-class DebouncedBatch:
-    """
-    防抖聚合批次的纯数据载体，不涉及 Python-Telegram-Bot。
-
-    collectDebouncedBatch 把同一 (chatID, userID) 防抖键下的全部 pending 消息
-    聚合成一个批次（唯一生产点）；_runLLMPipeline 消费。批次内的多条用户消息
-    在这里合为一体：文本换行拼接、图片串联、上下文标记取或。
-
-    字段（prompt 线 / 展示线在此并行共存）:
-        combinedText:     prompt 主文本。各消息 pureText（已含引用标记、
-                          图片 notes）换行拼接，直接作为 generateReply 的 userMessage
-        includeContext:   批次内任一消息 True 或 one-shot 标记（consumeContextOnce）
-                          取或——一条开启，整批同时加载 memory 与 history
-        images:           各消息图片列表串联，元素 {"data": b64, "mimeType": str}
-        urlIntentText:    各消息 urlIntentText 换行拼接（意图判定，reply 不参与）
-        urlCandidateText: 各消息 urlCandidateText 换行拼接（URL 提取候选）
-        displayPairs:     展示线。各消息 {"replyLine", "currentText"} 的列表，
-                          双空条目已过滤——审核卡按此逐条渲染引用/当前配对
-        memoryQuery:      检索线。按原消息顺序保留 current/reply 配对
-    """
-    combinedText: str
-    includeContext: bool
-    images: list[dict]
-    urlIntentText: str
-    urlCandidateText: str
-    displayPairs: list[dict] = field(default_factory=list)
-    memoryQuery: MemoryQuery | None = None
-
-
 def addRateLimit(userID: str | int):
     """记录用户的调用时间（触发速率限制）"""
     _lastCallTime[str(userID)] = time.time()
@@ -131,94 +97,19 @@ def makeDebounceKey(chatID: str | int, userID: str | int) -> str:
 
 def appendPendingMessage(
     debounceKey: str,
-    text: str,
-    includeContext: bool = False,
-    images: list[dict] | None = None,
-    urlIntentText: str | None = None,
-    urlCandidateText: str | None = None,
-    replyLine: str | None = None,
-    currentText: str | None = None,
-    memoryTurn: MemoryTurn | None = None,
+    message: MessageInput,
 ) -> bool:
-    """
-    将消息追加到防抖缓冲区。
-
-    参数:
-        images: 图片列表 [{"data": b64_str, "mimeType": "..."}, ...]
-        urlIntentText: 当前用户消息文本，用于判断 URL 读取意图
-        urlCandidateText: 当前用户消息 + 被回复消息文本，用于提取 URL
-        replyLine: 引用行（"<@发送者> 文本"，无引用为空串）——审核卡结构化展示用，prompt 侧不用
-        currentText: 当前消息纯文本（含图片 notes）——同上
-        memoryTurn: 当前消息与未截断引用的结构化检索输入；图片 notes 不进入
-
-    返回 False 表示已达上限，消息被丢弃。
-    """
+    """将原样消息追加到防抖缓冲；返回 False 表示已达上限。"""
     buf = _pendingMessages.setdefault(debounceKey, [])
     if len(buf) >= LLM_PENDING_MSG_LIMIT:
         return False
-    buf.append({
-        "text": text,
-        "includeContext": includeContext,
-        "images": images or [],
-        "urlIntentText": urlIntentText or "",
-        "urlCandidateText": urlCandidateText or "",
-        "replyLine": replyLine or "",
-        "currentText": currentText or "",
-        "memoryTurn": memoryTurn,
-    })
+    buf.append(message)
     return True
 
 
-def popPendingMessages(debounceKey: str) -> list[dict]:
+def popPendingMessages(debounceKey: str) -> tuple[MessageInput, ...]:
     """取出并清空该防抖键对应的待聚合消息列表"""
-    return _pendingMessages.pop(debounceKey, [])
-
-
-def collectDebouncedBatch(debounceKey: str) -> DebouncedBatch | None:
-    """
-    收集防抖批次消息，空缓冲返回 None
-
-    includeContext 在「任一消息为 True」和 one-shot 标记之间取或；为 True
-    时下游会同时加载 memory 与 history，而不是两个可独立开关。
-    """
-    parts = popPendingMessages(debounceKey)
-    if not parts:
-        return None
-
-    combinedText = "\n".join(p["text"] for p in parts if p["text"])
-    hadOnce = consumeContextOnce()
-    includeContext = any(p["includeContext"] for p in parts) or hadOnce
-
-    allImages: list[dict] = []
-    for p in parts:
-        allImages.extend(p["images"])
-
-    combinedURLIntentText = "\n".join(p["urlIntentText"] for p in parts if p["urlIntentText"])
-    combinedURLCandidateText = "\n".join(p["urlCandidateText"] for p in parts if p["urlCandidateText"])
-
-    # 引用/当前结构化配对（双空过滤——旧缓冲条目/外部调用无新键时跳过）
-    displayPairs = [
-        {"replyLine": p.get("replyLine", ""), "currentText": p.get("currentText", "")}
-        for p in parts
-        if p.get("replyLine") or p.get("currentText")
-    ]
-    # 检索线不从 combinedText 反向拆分；直接保留每条消息的 current/reply 配对，
-    # 防止防抖聚合后的字符串标记和展示截断破坏语义边界。
-    memoryTurns = tuple(
-        p["memoryTurn"]
-        for p in parts
-        if p.get("memoryTurn") is not None
-    )
-
-    return DebouncedBatch(
-        combinedText=combinedText,
-        includeContext=includeContext,
-        images=allImages,
-        urlIntentText=combinedURLIntentText,
-        urlCandidateText=combinedURLCandidateText,
-        displayPairs=displayPairs,
-        memoryQuery=MemoryQuery(turns=memoryTurns) if memoryTurns else None,
-    )
+    return tuple(_pendingMessages.pop(debounceKey, []))
 
 
 def getPendingTask(debounceKey: str) -> asyncio.Task | None:

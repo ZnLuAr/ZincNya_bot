@@ -98,7 +98,10 @@ def extractReplyImageRefs(message) -> list[ImageRef]:
 
 
 def extractImageRefsForPrompt(message) -> list[ImageRef]:
-    """提取供 LLM prompt 使用的图片引用：当前消息优先，无图回退 reply_to_message。"""
+    """提取供 LLM prompt 使用的图片引用。
+
+    当前消息优先。若当前消息没有附带图片，则回退提取 reply_to 的消息的图片引用。
+    """
     refs = extractImageRefs(message)
     if not refs:
         refs = extractReplyImageRefs(message)

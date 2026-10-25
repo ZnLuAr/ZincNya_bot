@@ -10,8 +10,8 @@ utils/llm/client/
     - anthropic / gemini / openaiCompat: 各 provider 实现
 """
 
-from ._request import requestReply
+from ._request import isRetryableError, requestReply
 from ._generate import generateReply
 
 
-__all__ = ["generateReply", "requestReply"]
+__all__ = ["generateReply", "requestReply", "isRetryableError"]

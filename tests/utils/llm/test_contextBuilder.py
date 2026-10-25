@@ -259,7 +259,6 @@ async def test_build_conversation_context_minimal():
             userMessage="Hello",
             chatID="test_chat",
             includeContext=False,
-            telegramContext=None,
         )
 
         assert "<CURRENT_USER_MESSAGE>" in result
@@ -278,7 +277,6 @@ async def test_build_conversation_context_with_knowledge():
             userMessage="Hello",
             chatID="test_chat",
             includeContext=False,
-            telegramContext=None,
         )
 
         assert "<TRUSTED_KNOWLEDGE>" in result
@@ -329,7 +327,6 @@ async def test_build_conversation_context_include_context():
             includeContext=True,
             llmConfig=llmConfig,
             memoryQuery=memoryQuery,
-            telegramContext=None,
         )
 
     assert "<UNTRUSTED_MEMORY>" in result
@@ -373,7 +370,6 @@ async def test_build_conversation_context_missing_query_uses_plain_user_message(
             userMessage=userMessage,
             chatID="test_chat",
             includeContext=True,
-            telegramContext=None,
         )
 
     retrievalQuery = mockMemory.await_args.kwargs["query"]
@@ -403,7 +399,6 @@ async def test_build_conversation_context_exclude_context():
             userMessage="Hello",
             chatID="test_chat",
             includeContext=False,
-            telegramContext=None,
         )
 
     assert "<UNTRUSTED_MEMORY>" not in result
@@ -428,11 +423,21 @@ async def test_build_conversation_context_with_url_contexts():
                 chatID="test_chat",
                 includeContext=False,
                 urlContexts=url_contexts,
-                telegramContext=None,
             )
 
             assert "<UNTRUSTED_URL_CONTENT>" in result
             assert "URL content" in result
+
+
+async def test_extra_blocks_are_sorted_with_core_blocks_without_mutating_input():
+    """普通扩展块和知识库按层级统一排序，相同层级保持原顺序。"""
+    extraBlocks = [(400, "补充", "补充内容"), (200, "工具一", "工具一内容"), (200, "工具二", "工具二内容")]
+    with patch("utils.llm.contextBuilder.buildKnowledgeContext", new_callable=AsyncMock, return_value="知识库内容"):
+        result = await buildConversationContext(
+            userMessage="问题", chatID="100", includeContext=False, extraBlocks=extraBlocks,
+        )
+    assert result.index("工具一内容") < result.index("工具二内容") < result.index("知识库内容") < result.index("补充内容")
+    assert extraBlocks[0] == (400, "补充", "补充内容")
 
 
 @pytest.mark.asyncio
@@ -450,7 +455,6 @@ async def test_build_conversation_context_neutralizes_injection():
             userMessage=payload,
             chatID="test_chat",
             includeContext=False,
-            telegramContext=None,
         )
 
         # <CURRENT_USER_MESSAGE>，作为说明，
@@ -495,7 +499,6 @@ async def test_build_conversation_context_block_order():
                         chatID="test_chat",
                         includeContext=True,
                         urlContexts=[{}],
-                        telegramContext=None,
                     )
 
                     # ContextTier 排序：KNOWLEDGE (300) < LOW_TRUST (500)

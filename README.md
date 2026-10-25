@@ -208,10 +208,12 @@ ZincNya_bot/
 │   │
 │   ├── llm/                        # LLM 集成模块
 │   │   ├── config.py               # 配置管理
-│   │   ├── state.py                # 运行时状态容器（审核队列容器、速率限制、防抖缓冲与批次聚合）
+│   │   ├── state.py                # 运行时状态容器（审核队列、速率限制、防抖消息缓冲）
+│   │   ├── models.py               # 消息、生成请求、结果和审核展示的数据对象
+│   │   ├── generation.py           # 首次生成与审核重试共用的生成入口
 │   │   ├── review.py               # 审核域（首生成分发三分流 + 审核队列 item 契约 + 三入口共用原语 + TG 审核卡片渲染）
-│   │   ├── contextBuilder.py       # 上下文组装（背景侧：memory / history / URL）
-│   │   ├── messagePrep.py          # 消息文本准备（当下侧：prompt 清洗 / reply 注入 / URL 意图切分）
+│   │   ├── contextBuilder.py       # 上下文组装（memory / history / URL / 扩展块）
+│   │   ├── messagePrep.py          # Telegram 消息正文、引用和身份提取
 │   │   ├── trigger.py              # 群聊触发判断（私聊 / @entity / 关键词）
 │   │   ├── promptSafety.py         # 提示注入防护（统一中和结构分隔符）
 │   │   ├── vision.py               # 图片提取（含 prompt 回退）与下载编码

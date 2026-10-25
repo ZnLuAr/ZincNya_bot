@@ -103,8 +103,8 @@ async def handleAFCInLLMResponse(
             f"{userMessage}"
         )
 
-        # 内部导入，避免循环依赖（afcApi 在 utils/llm/afcApi/，generateReply 在 utils/llm/__init__.py）
-        from utils.llm import generateReply
+        # 工具执行后再次生成回复；延迟导入避免与生成流程形成导入环。
+        from utils.llm.client import generateReply
 
         currentResponse = await generateReply(
             userMessage=followUpMessage,

@@ -17,6 +17,7 @@ from config import (
     LLM_MEMORY_PRIORITY_CAP,
     LLM_MEMORY_MAX_CONTENT_LEN,
     LLM_MEMORY_MAX_TAGS,
+    LLM_MEMORY_MAX_ACTIONS,
 )
 
 from utils.core.logger import logSystemEvent, logAction, LogLevel, LogChildType
@@ -675,3 +676,41 @@ async def buildMemoryActionReviewPayload(act: MemoryAction) -> dict:
             actDict["originalMode"] = target.get("mode", MEMORY_MODE_CONTEXTUAL)
             actDict["targetState"] = buildMemoryStateFingerprint(target)
     return actDict
+
+
+async def extractValidatedMemoryActions(
+    reply: str,
+    *,
+    logLabel: str,
+    chatID=None,
+    userID=None,
+) -> tuple[str, list[MemoryAction], int]:
+    """剥离记忆操作块、限制数量，并按请求的可信身份校验；返回正文、合法操作和失败数。"""
+    cleanedReply, actions = parseMemoryActions(reply)
+    actionContext = MemoryActionContext(chatID=chatID, userID=userID)
+
+    # 截断超限操作
+    if len(actions) > LLM_MEMORY_MAX_ACTIONS:
+        await logSystemEvent(
+            f"LLM 记忆操作数量超限（{logLabel}）",
+            f"请求 {len(actions)} 个，上限 {LLM_MEMORY_MAX_ACTIONS}，截断",
+            LogLevel.WARNING,
+        )
+        actions = actions[:LLM_MEMORY_MAX_ACTIONS]
+
+    # 逐个校验，失败项丢弃并计数
+    validated = []
+    failed = 0
+    for act in actions:
+        err = await validateAction(act, actionContext=actionContext)
+        if err:
+            failed += 1
+            await logSystemEvent(
+                f"LLM 记忆操作校验失败（{logLabel}）",
+                f"{act.action} | {err}",
+                LogLevel.WARNING,
+            )
+        else:
+            validated.append(act)
+
+    return cleanedReply, validated, failed

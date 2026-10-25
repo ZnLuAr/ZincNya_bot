@@ -13,22 +13,23 @@ isRateLimited=False 变恒限速、写入用例全假红；handleEditReply / han
 downloadImages / _enqueueLLMDebounce 是 async def，用 AsyncMock。
 """
 
+import asyncio
 from contextlib import ExitStack
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
 from handlers.llm import (
-    _downloadImagesAndAnnotatePrompt,
+    _takeExtraBlocks,
+    _downloadMessageImages,
     _enqueueLLMDebounce,
     _generateReplyOrNotify,
     _runLLMPipeline,
     handleLLMMessage,
 )
 from utils.llm.memory.types import MemoryQuery, MemoryTurn
-from utils.llm.messagePrep import PromptPayload
-from utils.llm.review import DispatchTarget
-from utils.llm.state import DebouncedBatch
+from utils.llm.models import GenerationRequest, GenerationResult, MessageInput, MessageOrigin
 
 
 # 同步门禁（def）——MagicMock(return_value=)
@@ -78,6 +79,7 @@ async def _run(mockUpdate, mockContext):
     # conftest 的 mockMessage.photo / .document 是 MagicMock（truthy），会骗过
     # extractImageRefsForPrompt 走进 _pickBestPhoto 遍历 mock 抛 TypeError——
     # 显式清空表示「纯文本消息」，走真实的图片提取（结果为空，无需 patch）
+    mockUpdate.message.chat_id = mockUpdate.effective_chat.id
     mockUpdate.message.photo = ()
     mockUpdate.message.document = None
     await handleLLMMessage(mockUpdate, mockContext)
@@ -117,12 +119,15 @@ class TestIncomingHistoryWrite:
 
     async def test_not_written_llm_disabled(self, mockUpdate, mockContext):
         """LLM 总开关关闭 → 门禁早退，不写"""
+        key = f"llm_extra_blocks_{mockUpdate.effective_chat.id}_{mockUpdate.message.message_id}"
+        mockContext.bot_data[key] = {"afc": (200, "工具", "临时块")}
         with ExitStack() as stack, _savePatch() as mockSave:
             for p in _gatePatches(**{"handlers.llm.getLLMEnabled": False}):
                 stack.enter_context(p)
             await _run(mockUpdate, mockContext)
 
         mockSave.assert_not_awaited()
+        assert key not in mockContext.bot_data
 
     async def test_not_written_unauthorized(self, mockUpdate, mockContext):
         """非白名单用户 → 门禁早退，不写"""
@@ -168,12 +173,12 @@ class TestMemoryQueryWiring:
             currentSender="@alice",
             replySender="@bob",
         )
-        payload = PromptPayload(
-            pureText="看这张图",
+        payload = MessageInput(
+            origin=MessageOrigin(chatID="100", userID=42, messageID=9, sender="alice"),
+            text="看这张图",
+            replyText="引用原文",
+            replySender="bob",
             includeContext=True,
-            urlIntentText="看这张图",
-            urlCandidateText="看这张图",
-            currentText="看这张图",
             memoryTurn=memoryTurn,
         )
         with patch(
@@ -181,92 +186,75 @@ class TestMemoryQueryWiring:
             new_callable=AsyncMock,
             return_value=([{"data": "image", "mimeType": "image/jpeg"}], ["[图片过大]"]),
         ):
-            annotated, images = await _downloadImagesAndAnnotatePrompt(
+            annotated = await _downloadMessageImages(
                 MagicMock(),
                 [MagicMock()],
                 payload,
             )
 
-        assert annotated.pureText == "[图片过大]\n看这张图"
-        assert annotated.currentText == "[图片过大]\n看这张图"
+        assert annotated.text == "看这张图"
+        assert annotated.imageNotes == ("[图片过大]",)
         assert annotated.memoryTurn is memoryTurn
-        assert images == [{"data": "image", "mimeType": "image/jpeg"}]
+        assert annotated.images == ({"data": "image", "mimeType": "image/jpeg"},)
 
     async def test_enqueue_forwards_memory_turn_to_pending_buffer(self):
         memoryTurn = MemoryTurn(currentText="当前", replyText="引用")
-        payload = PromptPayload(
-            pureText="prompt",
+        payload = MessageInput(
+            origin=MessageOrigin(chatID="100", userID=42, messageID=9, sender="alice"),
+            text="当前",
+            replyText="引用",
+            replySender="bob",
             includeContext=True,
-            urlIntentText="当前",
-            urlCandidateText="当前\n引用",
-            replyLine="<@bob> 引用",
-            currentText="当前",
             memoryTurn=memoryTurn,
         )
         message = AsyncMock()
-        target = DispatchTarget(
-            chatID="100",
-            userID=42,
-            username="alice",
-            triggerMsgID=9,
-        )
         with patch("handlers.llm.appendPendingMessage", return_value=False) as mockAppend:
             accepted = await _enqueueLLMDebounce(
                 message=message,
                 context=MagicMock(),
-                target=target,
-                payload=payload,
-                images=[],
+                messageInput=payload,
             )
 
         assert accepted is False
-        assert mockAppend.call_args.kwargs["memoryTurn"] is memoryTurn
+        assert mockAppend.call_args.args == ("100:42",)
+        assert mockAppend.call_args.kwargs["message"] is payload
 
     async def test_generate_helper_forwards_memory_query(self):
-        memoryQuery = MemoryQuery(turns=(MemoryTurn(currentText="当前"),))
         context = MagicMock()
         with patch(
-            "handlers.llm.generateReply",
+            "handlers.llm.generateResponse",
             new_callable=AsyncMock,
-            return_value="回复",
+            return_value=GenerationResult(reply="回复"),
         ) as mockGenerate:
             result = await _generateReplyOrNotify(
                 context=context,
-                combinedText="prompt",
-                chatID="100",
-                includeContext=True,
-                userID=42,
-                allImages=[],
-                memoryQuery=memoryQuery,
+                request=GenerationRequest(
+                    messages=(MessageInput(
+                        origin=MessageOrigin(chatID="100", userID=42, messageID=1), text="当前",
+                    ),),
+                    includeContext=True,
+                ),
             )
 
-        assert result == "回复"
-        assert mockGenerate.await_args.kwargs["memoryQuery"] is memoryQuery
+        assert result == GenerationResult(reply="回复")
+        assert isinstance(mockGenerate.await_args.args[0], GenerationRequest)
 
     async def test_pipeline_keeps_memory_query_in_generation_and_dispatch(self):
         memoryQuery = MemoryQuery(
             turns=(MemoryTurn(currentText="当前", replyText="引用"),),
         )
-        batch = DebouncedBatch(
-            combinedText="prompt",
-            includeContext=True,
-            images=[],
-            urlIntentText="当前",
-            urlCandidateText="当前\n引用",
-            memoryQuery=memoryQuery,
-        )
-        target = DispatchTarget(
-            chatID="100",
-            userID=42,
-            username="alice",
-            triggerMsgID=9,
-        )
-        context = MagicMock()
+        messages = (MessageInput(
+            origin=MessageOrigin(chatID="100", userID=42, messageID=9, sender="alice"), text="当前",
+            replyText="引用", replySender="bob", includeContext=True,
+            memoryTurn=memoryQuery.turns[0],
+            extraBlocks=((200, "工具", "工具说明"),),
+        ),)
+        context = SimpleNamespace(bot=AsyncMock(), bot_data={})
         with (
             patch("handlers.llm.asyncio.sleep", new_callable=AsyncMock),
-            patch("handlers.llm.collectDebouncedBatch", return_value=batch),
+            patch("handlers.llm.popPendingMessages", return_value=messages),
             patch(
-                "utils.llm.urlReader.readURLContextsForUserText",
+                "handlers.llm.readURLContextsForUserText",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
@@ -274,13 +262,8 @@ class TestMemoryQueryWiring:
             patch(
                 "handlers.llm._generateReplyOrNotify",
                 new_callable=AsyncMock,
-                return_value="回复",
+                return_value=GenerationResult(reply="回复"),
             ) as mockGenerate,
-            patch(
-                "handlers.llm.extractValidatedMemoryActions",
-                new_callable=AsyncMock,
-                return_value=("回复", [], 0),
-            ) as mockExtract,
             patch("handlers.llm.addRateLimit"),
             patch("handlers.llm.getAutoMode", return_value="on"),
             patch("handlers.llm.getOperatorsWithPermission", return_value=[]),
@@ -291,12 +274,78 @@ class TestMemoryQueryWiring:
         ):
             await _runLLMPipeline(
                 debounceKey="100:42",
-                target=target,
                 context=context,
             )
 
-        assert mockGenerate.await_args.kwargs["memoryQuery"] is memoryQuery
-        assert mockExtract.await_args.kwargs["chatID"] == target.chatID
-        assert mockExtract.await_args.kwargs["userID"] == target.userID
+        request = mockGenerate.await_args.kwargs["request"]
+        assert request.memoryQuery == memoryQuery
+        assert request.chatID == "100"
+        assert request.userID == 42
+        assert request.extraBlocks == ((200, "工具", "工具说明"),)
         generated = mockDispatch.await_args.args[0]
-        assert generated.memoryQuery is memoryQuery
+        assert generated.memoryQuery == memoryQuery
+        assert mockDispatch.await_args.kwargs["origin"] is messages[-1].origin
+
+
+async def test_message_handler_reaches_real_debounce_queue(mockUpdate, mockContext):
+    """入口使用真实入队函数，检查消息身份和后台任务调度。"""
+    from utils.llm.state import getPendingTask, makeDebounceKey, popPendingMessages
+
+    mockContext.bot.username = "ZincNyaBot"
+    with ExitStack() as stack:
+        for p in _gatePatches():
+            if p.attribute != "_enqueueLLMDebounce":
+                stack.enter_context(p)
+        stack.enter_context(_savePatch())
+        stack.enter_context(_stateManagerPatch(None))
+        key = makeDebounceKey(str(mockUpdate.effective_chat.id), mockUpdate.message.from_user.id)
+        try:
+            await _run(mockUpdate, mockContext)
+            task = getPendingTask(key)
+            assert task is not None
+            assert not task.done()
+            messages = popPendingMessages(key)
+            assert len(messages) == 1
+            assert messages[0].text == "test message"
+            assert messages[0].origin.messageID == mockUpdate.message.message_id
+            assert messages[0].origin.chatID == str(mockUpdate.effective_chat.id)
+        finally:
+            task = getPendingTask(key)
+            if task is not None:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                await asyncio.sleep(0)
+            popPendingMessages(key)
+
+
+async def test_pipeline_logs_error_before_target_is_known():
+    with (
+        patch("handlers.llm.asyncio.sleep", new_callable=AsyncMock),
+        patch("handlers.llm.popPendingMessages", side_effect=RuntimeError("缓冲读取失败")),
+        patch("handlers.llm.logAction", new_callable=AsyncMock) as log,
+    ):
+        await _runLLMPipeline(debounceKey="100:42", context=MagicMock())
+    assert "100:42" in log.await_args.args[1]
+    assert log.await_args.args[2] == "缓冲读取失败"
+
+
+async def test_anonymous_message_is_skipped(mockUpdate, mockContext):
+    mockUpdate.message.from_user = None
+    with ExitStack() as stack:
+        for p in _gatePatches():
+            stack.enter_context(p)
+        enqueue = stack.enter_context(patch("handlers.llm._enqueueLLMDebounce", new_callable=AsyncMock))
+        await _run(mockUpdate, mockContext)
+    enqueue.assert_not_awaited()
+
+
+def test_extra_blocks_are_consumed_by_message_id():
+    message = SimpleNamespace(chat_id=100, message_id=9)
+    context = SimpleNamespace(bot_data={
+        "llm_extra_blocks_100_9": {"afc": (200, "工具", "本条消息的工具")},
+        "llm_extra_blocks_100_10": {"afc": (200, "工具", "下一条消息的工具")},
+    })
+    assert _takeExtraBlocks(context, message) == ((200, "工具", "本条消息的工具"),)
+    assert "llm_extra_blocks_100_9" not in context.bot_data
+    assert "llm_extra_blocks_100_10" in context.bot_data

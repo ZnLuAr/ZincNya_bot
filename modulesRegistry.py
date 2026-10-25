@@ -45,6 +45,8 @@ MODULES = {
             "utils/llm/state.py",
             "utils/llm/contextBuilder.py",
             "utils/llm/messagePrep.py",
+            "utils/llm/models.py",
+            "utils/llm/generation.py",
             "utils/llm/promptSafety.py",
             "utils/llm/review.py",
             "utils/llm/trigger.py",
@@ -100,6 +102,7 @@ MODULES = {
         "testFiles": [
             "tests/utils/llm/test_config.py",
             "tests/utils/llm/test_contextBuilder.py",
+            "tests/utils/llm/test_generation.py",
             "tests/utils/llm/test_messagePrep.py",
             "tests/utils/llm/test_promptSafety.py",
             "tests/utils/llm/test_review.py",

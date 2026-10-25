@@ -208,7 +208,7 @@ AFC handler 放在 group 1 的原因：
 
 1. 检测用户消息中是否包含工具调用意图（calc / search / weather / datetime 等）
 2. 如果命中，将工具 API 文档和使用说明构建成上下文块
-3. 推入 `bot_data[f"llm_extra_blocks_{chatID}"]["afc"]`（bot_data 推送层）
+3. 推入 `bot_data[f"llm_extra_blocks_{chatID}_{messageID}"]["afc"]`（bot_data 推送层）
 4. 后续 group 2 的 LLM handler 会读取并消费这个上下文块
 
 `auth=False`，依赖 group 2 的 LLM handler 做权限检查。
@@ -240,19 +240,6 @@ LLM handler 自己负责二次 gate：
   - `mention`：必须 `@bot`。
   - `keyword`：`@bot` 或命中配置关键词。
 - 未触发时尽早返回，不下载图片、不进入 rate limit、不进入 debounce。
-
----
-
-## 当前无需重编排的原因
-
-当前分组已经表达了真实依赖：
-
-1. group `-1` 是纯收集器，不参与业务决策。
-2. group `0` 处理命令、按钮、reaction，以及需要优先于 LLM 的 shutdown mention dispatch。
-3. group `1` 处理 AFC 意图检测，为 LLM 准备工具上下文（可扩展为其他上下文注入模块）。
-4. group `2` 只放 LLM 自动回复，让它天然晚于控制类消息和上下文注入，作为”兜底处理普通消息”的最后一环。
-
-这比把所有 handler 都放到 group `0` 更安全，因为 LLM 是唯一需要”兜底处理普通消息”的模块，应该位于最低优先级。
 
 ---
 
@@ -297,10 +284,10 @@ loader 按注册表声明顺序加载模块，但模块加载顺序不应该作�
 
 **上下文注入模块（group 1）的设计约束**：
 
-- 使用 bot_data 推送层：`bot_data[f"llm_extra_blocks_{chatID}"][模块id] = (tier, label, content)`
+- 使用 bot_data 推送层：`bot_data[f"llm_extra_blocks_{chatID}_{messageID}"][模块id] = (tier, label, content)`
 - 每个模块占用独立槽位（以模块 id 为 key），互不覆盖
-- 消费端（LLM）在 `buildConversationContext` 中读取并整体 `pop` 清除
-- 生产端在写入前先清除自己上一条消息遗留的槽位
+- 消费端（LLM handler）按消息 ID 读取并整体 `pop` 清除，再传给 `buildConversationContext`
+- 消息级 key 防止同一聊天的并发请求串用上下文
 - 详见 `docs/bot-data-push-layer.md`
 
-当前项目暂不需要实际重编排；更重要的是保持这些约束，并在新增 handler 时显式说明它和 LLM 的先后关系。
+新增 handler 时，应该显式说明它和 LLM 的先后关系。

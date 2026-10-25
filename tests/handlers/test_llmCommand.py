@@ -105,6 +105,21 @@ class TestLLMCommand:
 # TestLLMCommandRegister - 注册测试
 # ============================================================================
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("enabled, expected", [(True, "……"), (False, "喵？")])
+    async def test_fade_without_argument_shows_current_state(self, mockUpdate, mockContext, enabled, expected):
+        """fade 不带参数时读取当前的提示词回退状态。"""
+        mockContext.args = ["fade"]
+        with (
+            patch("handlers.llmCommand.hasPermission", return_value=True),
+            patch("handlers.llmCommand.getForceFallbackPrompt", return_value=enabled) as getFlag,
+        ):
+            await handleLLMCommand(mockUpdate, mockContext)
+
+        getFlag.assert_called_once_with()
+        assert mockUpdate.message.reply_text.call_args.args[0] == expected
+
+
 class TestLLMCommandRegister:
     """测试 handler 注册"""
 

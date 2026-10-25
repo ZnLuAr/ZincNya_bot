@@ -1,6 +1,6 @@
 # AFC 架构文档
 
-> 最后更新：2026-07-17
+> 最后更新：2026-10-25
 > 
 > 这份文档记载的是为 LLM 模块设计的 AFC (Autonomous Function Calling) 工具调用系统的细节——包括意图检测怎么做、工具怎么注册、执行流程走哪些阶段，以及为什么要自己实现而不用原生 Function Calling API，和设计时的一些取舍。
 > 
@@ -76,13 +76,13 @@ Anthropic Claude 和 OpenAI GPT 都有原生 Function Calling / Tool Use API，�
 
 最初设想时，AFC 被设计成 LLM 模块的一部分——毕竟工具调用是为 LLM 服务的，放在一起好像挺合理。但这样一来，LLM 模块就会变成一个巨型模块：不光要处理对话、记忆、知识库检索，还要操心意图检测、工具注册、执行编排的事情……每加一个工具，改的都是同一个目录，职责越堆越重。
 
-更关键的是，**模块依赖会是单向的**——要是 AFC 嵌在 LLM 里，就变成了"LLM 依赖 AFC"，那么卸载 AFC 也很难卸得干净；反过来，测试 AFC 也得把整个 LLM 模块都加载进来。而实际上这两者应该是**可以独立装卸的**：AFC 可以整个卸载，LLM 照样跑（只是没工具调用能力）；测试 AFC 的工具注册和执行逻辑时，也不需要启动完整的 LLM 流程。
+于是就又重新设计了依赖方向，即 **AFC 接入 LLM，LLM 不感知 AFC**。只装 LLM 时，阅读它的代码也不应该需要认识 AFC；安装 AFC 后，由 AFC 通过通用扩展契约提供上下文和接入输出处理。工具意图、调用格式、解析与执行都由 AFC 负责，LLM 只处理通用输入与扩展流程。
 
-于是就重新设计成了现在这样：AFC 是独立的一级模块，通过推送层向 LLM 注入工具上下文。两者通过 `bot_data` 解耦，各自可以独立装卸、独立测试，互不强依赖对方的存在。模块拆分之后，职责边界也清晰了——LLM 模块负责"怎么生成回复"，AFC 模块负责"给 LLM 准备哪些工具"，推送层负责"怎么把工具信息递过去"。
+上游推送层已经这样工作：AFC 写入自己的模块槽位，LLM 取所有槽位的普通上下文块，不读取 `"afc"`，也不根据提供者分支。不过~~因为 ZincPhos 的设计能力比较烂~~，当前下游仍未完全达到这个目标：`utils/llm/client/_generate.py` 直接导入并调用 `handleAFCInLLMResponse`，所以还不能承诺卸载 AFC 后 LLM 无感运行。总之，当前需要守住的是整条调用链的边界，输入通道解耦只是其中一部分。（交接细节见 [bot_data 推送层](bot-data-push-layer.md)。）
 
 ### 为什么 handler 放在 group=1
 
-`handlers/afc.py` 独占 group=1，早于 LLM handler (group=2)。这样 AFC 意图检测在 LLM 处理前完成，工具上下文块提前推入 `bot_data["llm_extra_blocks_{chatID}"]["afc"]`，LLM handler 消费时，工具 schema 就已经就位，只欠声明调用了。
+`handlers/afc.py` 独占 group=1，早于 LLM handler (group=2)。这样 AFC 意图检测在 LLM 处理前完成，工具上下文块提前推入按消息隔离的 `bot_data["llm_extra_blocks_{chatID}_{messageID}"]["afc"]`，LLM handler 消费时，工具 schema 就已经就位，只欠声明调用了。
 
 ——若放在 group=2 与 LLM 同组，则两者并发执行，bot_data 写入时序不确定，可能工具上下文块注入晚于 LLM 读取。且在 [Telegram Handler 文档](./telegram-handlers-group.md) 中也告示过：
 
@@ -170,7 +170,8 @@ utils/afc/afcIntent.py                  ← 四级召回
 utils/afc/registry.py                   ← 扫描 tools/*/，生成 schema
     ↓ getToolsSchema(toolNames)
 utils/llm/afcApi/contextBlock.py        ← 构建 <TOOLS> 块
-    ↓ 推入 bot_data["llm_extra_blocks_{chatID}"]["afc"]
+    | 推入 bot_data
+    ↓ ["llm_extra_blocks_{chatID}_{messageID}"]["afc"]
 handlers/llm.py (group=2)               ← 读取推送层
     ↓ LLM 生成 <AFC_ACTION>{...}</AFC_ACTION>
 utils/llm/afcApi/responseHandler.py     ← 解析调用
@@ -218,12 +219,12 @@ context.bot_data.setdefault(key, {})["afc"] = (ContextTier.TOOLS, "工具", bloc
 
 ### 2. LLM 上下文组装 (handlers/llm.py)
 
-LLM handler (group=2) 读取推送层：
+LLM handler (group=2) 在消息入队前读取并消费推送层：
 
 ```python
-extraBlocks = context.bot_data.pop(f"llm_extra_blocks_{chatID}", {})
-for tier, label, content in extraBlocks.values():
-    # 注入工具 schema 到 messages
+extraBlocks = _takeExtraBlocks(context, message)
+messageInput = prepareMessageInput(message, rawText, context.bot.username)
+messageInput = replace(messageInput, extraBlocks=extraBlocks)
 ```
 
 ### 3. LLM 生成与工具调用迭代
@@ -348,17 +349,21 @@ def buildAFCContextBlock(toolNames: set[str]) -> str:
 
 不过麻烦在于，AFC handler 和 LLM handler 本是两个独立的 handler，PTB (Python Telegram bot) 并不会帮我们直接把数据从一个中传到另一个。好在 PTB 给每个 bot 备了一个全局共享的 `bot_data` 字典，两个 handler 都够得着——那就把它当块中转用的告示牌：AFC 在上面写下工具 schema，LLM 过一会儿来把它取走。
 
-**扁平 key + 模块槽位**：`bot_data[f"llm_extra_blocks_{chatID}"]["afc"]`
+**扁平的消息级 key + 模块槽位**：
 
-- 扁平 key：每个 chatID 一个 dict，避免嵌套层级
+> `bot_data[f"llm_extra_blocks_{chatID}_{messageID}"]["afc"]`
+
+- 扁平 key：每个 `(chatID, messageID)` 一个 dict，避免并发消息互相覆盖与过于复杂的嵌套层级
 - 模块槽位：`afc` 是本模块在推送层的槽位名，其它扩展模块用自己的 key（如 `search`），互不冲突
 
-之所以要分出「每个 chatID 一格、每个模块又各占一个槽」，是因为这块告示牌是全体共用的——不同聊天、不同扩展模块的东西全堆在这一个 `bot_data` 里，得靠一套规范良好的 key 结构把它们隔开，不应让它们互相影响。
+之所以要每条消息一格、每个模块又各占一个槽地分，是因为这块告示牌是全体共用的。不同聊天、不同消息、不同扩展模块的东西全堆在这一个 `bot_data` 里，需要有一套规范良好的 key 结构把它们隔开，不应让它们互相影响。
 
-**三层清理：** 既然是块公共告示牌，写完就得擦干净，不然上一条消息的残留会串味到下一条：
+**清理规则**
 
-1. 生产端清理：handler 写入前 `slots.pop("afc", None)` 清除上一条消息遗留
-2. 消费端清理：LLM handler 读完后 `pop(f"llm_extra_blocks_{chatID}")`
+正常路径由 LLM handler 消费后删除整条消息的槽位；生产端只在重复处理同一消息时清理自己的槽位：
+
+1. 生产端清理：handler 写入前 `slots.pop("afc", None)` 清除当前消息的旧值
+2. 消费端清理：LLM handler 读完后 `pop(f"llm_extra_blocks_{chatID}_{messageID}")`
 3. 槽位隔离：各模块只动自己的槽，不影响其它扩展
 
 > 推送层的完整设计（数据结构、清理时机、为什么这样分层）单独成文，见 [docs/bot-data-push-layer.md](bot-data-push-layer.md)。

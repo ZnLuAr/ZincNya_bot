@@ -44,7 +44,7 @@ async def requestWithRetry(
         except Exception as e:
             lastErr = e
             # 判断是否为可重试的瞬时错误
-            if not _isRetryable(e):
+            if not isRetryableError(e):
                 raise
             if attempt < LLM_REQUEST_MAX_RETRIES:
                 await logSystemEvent(
@@ -57,7 +57,7 @@ async def requestWithRetry(
     raise lastErr  # type: ignore[misc]
 
 
-def _isRetryable(e: Exception) -> bool:
+def isRetryableError(e: Exception) -> bool:
     """判断异常是否为可重试的瞬时错误（超时、连接断开等）。"""
     errName = type(e).__name__
     errStr = str(e).lower()

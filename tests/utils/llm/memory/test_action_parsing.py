@@ -9,10 +9,12 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch
 
+from config import LLM_MEMORY_MAX_ACTIONS
 from utils.llm.memory.action import (
     MemoryAction,
     MemoryActionContext,
     executeAction,
+    extractValidatedMemoryActions,
     parseMemoryActions,
     validateAction,
 )
@@ -539,3 +541,143 @@ def test_fallback_inline_json_only_with_action_verbs():
 
     # action 值为 click，不是记忆动词，行内 JSON 保留
     assert '"action": "click"' in cleaned
+
+
+def _addBlock(content: str = "测试内容") -> str:
+    """构造一个语法合法、校验通过的 add 记忆块。"""
+    return (
+        '<MEMORY_ACTION>'
+        f'{{"action":"add","scope_type":"global","scope_id":"global","content":"{content}"}}'
+        '</MEMORY_ACTION>'
+    )
+
+
+def _invalidActionBlock() -> str:
+    """构造一个 JSON 合法、但 action 类型非法（校验失败）的块。
+
+    parseMemoryActions 不校验 action 合法性，会成功解析；
+    validateAction 才返回 "不支持的 action"。
+    """
+    return (
+        '<MEMORY_ACTION>'
+        '{"action":"frobnicate","scope_type":"global","scope_id":"global","content":"X"}'
+        '</MEMORY_ACTION>'
+    )
+
+
+def _userAddBlock(scopeID: str = "other-user") -> str:
+    """构造一个需要当前请求 user 身份授权的 action。"""
+    return (
+        '<MEMORY_ACTION>'
+        f'{{"action":"add","scope_type":"user","scope_id":"{scopeID}","content":"用户事实"}}'
+        '</MEMORY_ACTION>'
+    )
+
+
+# ===========================================================================
+
+class TestExtractValidatedMemoryActions:
+    """extractValidatedMemoryActions：解析 + 截断 + 校验编排"""
+
+    @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
+    async def test_no_memory_block(self, mockLog):
+        """无记忆块：返回原文本、空列表、0 失败，不记日志"""
+        reply = "这是一条没有任何记忆操作的普通回复"
+        cleaned, validated, failed = await extractValidatedMemoryActions(reply, logLabel="test")
+
+        assert cleaned == reply
+        assert validated == []
+        assert failed == 0
+        mockLog.assert_not_called()
+
+    @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
+    async def test_single_valid_action(self, mockLog):
+        """单个合法 add：块被剥离、validated 含 1 项、0 失败"""
+        reply = f"回复正文\n\n{_addBlock('记住这件事')}"
+        cleaned, validated, failed = await extractValidatedMemoryActions(reply, logLabel="test")
+
+        assert "<MEMORY_ACTION>" not in cleaned
+        assert cleaned.strip() == "回复正文"
+        assert len(validated) == 1
+        assert validated[0].action == "add"
+        assert validated[0].content == "记住这件事"
+        assert failed == 0
+
+    @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
+    async def test_validation_failure_counted(self, mockLog):
+        """校验失败：failed=1、validated 不含该项、记录失败日志"""
+        reply = f"回复\n\n{_invalidActionBlock()}"
+        cleaned, validated, failed = await extractValidatedMemoryActions(reply, logLabel="test")
+
+        assert "<MEMORY_ACTION>" not in cleaned
+        assert validated == []
+        assert failed == 1
+        # 至少有一次校验失败日志
+        assert mockLog.await_count >= 1
+
+    @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
+    async def test_valid_and_invalid_mixed(self, mockLog):
+        """合法 + 非法混合：validated 只留合法项，failed 计数正确"""
+        reply = f"回复\n\n{_addBlock('好的记忆')}\n\n{_invalidActionBlock()}"
+        cleaned, validated, failed = await extractValidatedMemoryActions(reply, logLabel="test")
+
+        assert len(validated) == 1
+        assert validated[0].content == "好的记忆"
+        assert failed == 1
+
+    @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
+    async def test_truncation_over_limit(self, mockLog):
+        """超过 LLM_MEMORY_MAX_ACTIONS：截断到上限，并记录超限日志"""
+        # 构造 上限+2 个合法块
+        blocks = "\n\n".join(_addBlock(f"内容{i}") for i in range(LLM_MEMORY_MAX_ACTIONS + 2))
+        reply = f"回复\n\n{blocks}"
+        cleaned, validated, failed = await extractValidatedMemoryActions(reply, logLabel="test")
+
+        assert len(validated) == LLM_MEMORY_MAX_ACTIONS
+        # 截断日志被触发（首条 await 即为超限告警）
+        assert mockLog.await_count >= 1
+        firstCallEvent = mockLog.await_args_list[0].args[0]
+        assert "超限" in firstCallEvent
+
+    @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
+    async def test_loglabel_propagated(self, mockLog):
+        """logLabel 透传到日志事件文案"""
+        reply = f"回复\n\n{_invalidActionBlock()}"
+        await extractValidatedMemoryActions(reply, logLabel="feedback retry")
+
+        # 校验失败日志的 event 文案应包含 logLabel
+        events = [c.args[0] for c in mockLog.await_args_list]
+        assert any("feedback retry" in e for e in events)
+
+    @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
+    async def test_privateScopeRequiresTrustedIdentity(self, mockLog):
+        """审核编排在入队前就拒绝模型伪造的 user scope。"""
+        reply = f"回复\n\n{_userAddBlock()}"
+
+        _, validated, failed = await extractValidatedMemoryActions(
+            reply,
+            logLabel="test",
+            chatID="chat-1",
+            userID="user-1",
+        )
+
+        assert validated == []
+        assert failed == 1
+        assert mockLog.await_count >= 1
+
+    async def test_privateScopeWithMatchingIdentityIsAccepted(self):
+        """可信 user ID 匹配时，合法 user action 正常进入后续分流。"""
+        reply = f"回复\n\n{_userAddBlock('user-1')}"
+
+        _, validated, failed = await extractValidatedMemoryActions(
+            reply,
+            logLabel="test",
+            chatID="chat-1",
+            userID="user-1",
+        )
+
+        assert len(validated) == 1
+        assert failed == 0
+
+
+# ===========================================================================

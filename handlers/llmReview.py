@@ -23,6 +23,7 @@ from telegram.ext import ContextTypes, CallbackQueryHandler
 from config import Permission, LLM_REVIEW_TTL_SECONDS, TG_MESSAGE_MAX_LEN
 
 from utils.core.errorDecorators import handleTelegramErrors
+from utils.llm.models import DisplayBlocks, GeneratedOutput, GenerationRequest, MessageOrigin
 from utils.llm.memory.action import MemoryAction, MemoryActionContext, executeAction
 from utils.llm.review import (
     MEMORY_FAILED_WARNING,
@@ -80,8 +81,9 @@ def _putReplyReview(
     includeContext,
     urlContexts=None,
     autoMode=None,
-    displayBlocks=None,
+    displayBlocks: DisplayBlocks | None = None,
     memoryQuery=None,
+    generationRequest: GenerationRequest | None = None,
 ) -> str:
     """保存 Telegram 回复审核项及 message ID 反向索引。"""
     # bot_data 只保存审核期间的短生命周期状态：key 指向 reply 审核项，
@@ -99,13 +101,14 @@ def _putReplyReview(
         "autoMode": autoMode,
         "displayBlocks": displayBlocks,
         "memoryQuery": memoryQuery,
+        "generationRequest": generationRequest,
         "createdAt": time.time(),
     }
     bot_data[_editIndexKey(reviewMsgID)] = key
     return key
 
 
-def _putMemoryReview(bot_data: dict, *, chatID, reviewMsgID, action, originalMsg, opsID, userID, displayBlocks=None) -> str:
+def _putMemoryReview(bot_data: dict, *, chatID, reviewMsgID, action, originalMsg, opsID, userID, displayBlocks: DisplayBlocks | None = None) -> str:
     """保存 Telegram memory 审核项及其独立的反向索引。"""
     # memory 审核与 reply 审核使用独立 key 前缀，避免同一聊天中两个审核卡片
     # 的编辑/批准回调互相覆盖；action 内含 targetState 供批准时做乐观锁校验。
@@ -137,7 +140,7 @@ async def handleEditReply(message, context: ContextTypes.DEFAULT_TYPE) -> bool:
     返回 True 表示消息已处理，调用方应 return
 
     安全约束：
-        - 只有拥有 Permission.LLM 的 ops 本人才能编辑自己的审核消息
+        - 只有拥有 Permission.LLM 的 ops 本人才能编辑审核消息
         - 无权用户或点错消息时静默忽略，不打断正常群聊/审核流程
     """
     if not (message.reply_to_message and message.text and message.text.startswith(":edit ")):
@@ -193,46 +196,43 @@ async def handleEditReply(message, context: ContextTypes.DEFAULT_TYPE) -> bool:
 
 
 async def sendReviewMessage(
+    *,
     bot,
     opsID: int,
-    originalMsg: str,
-    reply: str,
-    chatID: int,
+    generated: GeneratedOutput,
+    origin: MessageOrigin,
     context: ContextTypes.DEFAULT_TYPE,
-    triggerMsgID: int | None = None,
-    userID: int | None = None,
-    includeContext: bool = False,
-    urlContexts: list[dict] | None = None,
     autoMode: str | None = None,
-    displayBlocks=None,
-    memoryQuery=None,
 ):
     """
     发送 Telegram 审核消息（带 inline keyboard），并存储审核状态到 bot_data
 
-    displayBlocks: 审核卡结构化展示块（None 走退化路径）
-    memoryQuery: 首生成的结构化检索轮次，随审核项保存供 retry 复用
+    generated 保存回复、展示快照和重试输入；origin 保存触发消息来源。
     """
     # 一次发送带 keyboard（callback_data 不含 msgID，无需先发再改）
-    text, markup = renderReviewCard(originalMsg, reply, chatID, displayBlocks=displayBlocks)
+    text, markup = renderReviewCard(
+        generated.displayOriginalMsg, generated.reply, origin.chatID,
+        displayBlocks=generated.displayBlocks,
+    )
     sent = await bot.send_message(chat_id=opsID, text=text, reply_markup=markup, parse_mode="HTML")
     reviewMsgID = sent.message_id
 
     # 存储审核状态（重启后失效可接受）
     _putReplyReview(
         context.bot_data,
-        chatID=chatID,
+        chatID=origin.chatID,
         reviewMsgID=reviewMsgID,
-        reply=reply,
-        originalMsg=originalMsg,
+        reply=generated.reply,
+        originalMsg=generated.displayOriginalMsg,
         opsID=opsID,
-        triggerMsgID=triggerMsgID,
-        userID=userID,
-        includeContext=includeContext,
-        urlContexts=urlContexts,
+        triggerMsgID=origin.messageID,
+        userID=origin.userID,
+        includeContext=generated.includeContext,
+        urlContexts=generated.urlContexts,
         autoMode=autoMode,
-        displayBlocks=displayBlocks,
-        memoryQuery=memoryQuery,
+        displayBlocks=generated.displayBlocks,
+        memoryQuery=generated.memoryQuery,
+        generationRequest=generated.generationRequest,
     )
 
 
@@ -246,7 +246,7 @@ async def sendMemoryReviewMessage(
     chatID: int | str,
     context: ContextTypes.DEFAULT_TYPE,
     userID: int | str | None = None,
-    displayBlocks=None,
+    displayBlocks: DisplayBlocks | None = None,
 ):
     """
     发送 Telegram 记忆操作审核消息（带 inline keyboard），并存储审核状态到 bot_data
@@ -289,7 +289,7 @@ def _cleanupExpiredReviews(bot_data: dict):
 
 
 
-def _makeTelegramDispatcher(context, *, autoMode: str, displayBlocks=None):
+def _makeTelegramDispatcher(context, *, autoMode: str, displayBlocks: DisplayBlocks | None = None):
     """
     构造 Telegram 端 memoryDispatcher 闭包，把 review.py 期望的 dispatcher 契约
     (actions, *, chatID, originalMsg, opsID, userID, logLabel) 适配到

@@ -89,7 +89,7 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         case "fade":
             if len(args) == 1:
-                await update.message.reply_text("……" if getForceFallbackPrompt else "喵？")
+                await update.message.reply_text("……" if getForceFallbackPrompt() else "喵？")
             elif len(args) == 2:
                 flag = args[1].lower()
                 if flag in ("-on", "on"):

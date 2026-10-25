@@ -303,6 +303,8 @@ def test_buildTable_memory_renders_rows_status_scope_help(capsys):
     assert "hello" in out and "world" in out    # preview
     assert "global" in out and "chat:123" in out  # scope 渲染（global 直显，非 global 拼 type:id）
     assert "ON" in out and "OFF" in out         # enabled 状态标记
-    assert "pinned" in out and "称呼" in out
+    assert "pinned" in out and "contextual" in out
+    # 列表不展示检索说明，查看和修改在编辑器中进行。
+    assert "Hint" not in out and "称呼" not in out
     # memory 恒显示帮助行
     assert "Enter 编辑" in out and "Esc 退出" in out

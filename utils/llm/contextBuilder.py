@@ -156,7 +156,7 @@ async def buildConversationContext(
     urlContexts: list[dict] | None = None,
     llmConfig: dict | None = None,
     memoryQuery: MemoryQuery | None = None,
-    telegramContext = None,
+    extraBlocks: list[tuple[ContextTier, str, str]] | None = None,
 ) -> str:
     """
     以 Query Reinforcement + 三层结构组装最终 user content
@@ -166,10 +166,7 @@ async def buildConversationContext(
             复用同一次读盘结果。为 None 时下游回退到独立 getter。
         memoryQuery: handler 在防抖前后保存的结构化当前轮次。为 None 时用
             userMessage 构造兼容查询；近期 history 在本函数内按请求重新附加。
-        telegramContext: PTB context（ContextTypes.DEFAULT_TYPE | None）。由
-            handlers/llm.py 经 generateReply 透传而来，用于读取 bot_data 推送层
-            中扩展模块（如 AFC）注入的上下文块。为 None 时（console / 单测）跳过。
-            为避免与 PTB 的循环 import，类型暂不标注。
+        extraBlocks: Telegram handler 提取的普通扩展上下文数据（如 AFC 工具块）。
     """
     # ========== 层 1: 任务说明（Query Reinforcement 开头）==========
     blocks = [
@@ -178,15 +175,7 @@ async def buildConversationContext(
         "该消息将在下方出现。",
     ]
 
-    # 从 bot_data 推送层读取扩展模块注入的块（读取即清除，防止泄漏到下一条消息）。
-    # 推送层结构：bot_data[f"llm_extra_blocks_{chatID}"] = {模块id: (tier, label, content)}
-    # 每个扩展模块占用自己的槽位（以模块 id 为内层 key），互不覆盖。
-    # 详见 docs/bot-data-push-layer.md。
-    extraBlocks: list[tuple[ContextTier, str, str]] = []
-    if telegramContext is not None:
-        pushKey = f"llm_extra_blocks_{chatID}"
-        moduleBlocks = telegramContext.bot_data.pop(pushKey, {})
-        extraBlocks = list(moduleBlocks.values())
+    extraBlocks = list(extraBlocks or [])
 
     # 知识库是开发者编辑的高信任背景知识，可以无条件检索，与 includeContext 解耦。
     # 设计依据：knowledge 语义上是 prompt 的延伸（人设的话题相关部分），不属于"用户上下文"。

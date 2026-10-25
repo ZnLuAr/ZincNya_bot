@@ -30,6 +30,7 @@ from handlers.llmReview import (
 )
 from utils.llm.memory.action import MemoryActionContext
 from utils.llm.memory.types import MemoryQuery, MemoryTurn
+from utils.llm.models import GeneratedOutput, GenerationRequest, MessageInput, MessageOrigin
 
 
 _OPS_ID = "123456789"
@@ -247,20 +248,31 @@ class TestInitialReviewMemoryQuery:
         bot = AsyncMock()
         bot.send_message.return_value = SimpleNamespace(message_id=321)
         context = SimpleNamespace(bot_data={})
+        request = GenerationRequest(messages=(MessageInput(
+            origin=MessageOrigin(chatID="456", userID=42, messageID=9),
+            text="当前", memoryTurn=memoryQuery.turns[0],
+        ),), includeContext=True)
+        origin = request.origin
+        generated = GeneratedOutput(
+            reply="回复",
+            memoryActions=[],
+            displayOriginalMsg="原文",
+            includeContext=True,
+            memoryQuery=memoryQuery,
+            generationRequest=request,
+        )
 
         await sendReviewMessage(
             bot=bot,
             opsID=123,
-            originalMsg="原文",
-            reply="回复",
-            chatID=456,
+            generated=generated,
+            origin=origin,
             context=context,
-            includeContext=True,
-            memoryQuery=memoryQuery,
         )
 
         key = "llm_review_456_321"
         assert context.bot_data[key]["memoryQuery"] is memoryQuery
+        assert context.bot_data[key]["generationRequest"] is request
 
 
 class TestMemoryReviewConflict:

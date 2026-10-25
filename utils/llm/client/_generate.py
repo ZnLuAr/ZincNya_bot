@@ -11,7 +11,7 @@ import config
 
 from utils.core.logger import logSystemEvent, LogLevel, LogChildType
 
-from ..config import getForceFallbackPrompt, loadPrompts, loadLLMConfig, _FALLBACK_PROMPTS
+from ..config import ContextTier, getForceFallbackPrompt, loadPrompts, loadLLMConfig, _FALLBACK_PROMPTS
 from ..contextBuilder import buildConversationContext
 from ..memory.types import MemoryQuery
 from ..promptSafety import neutralizePromptDelimiters
@@ -143,7 +143,7 @@ async def _describeImages(
 
 _IMAGE_FAILED_BLOCK = (
     "<IMAGE_DESCRIPTION>\n"
-    "[用户发了图片，但图片读取失败了请告诉用户图片没能看到，建议再发一次试试语气自然，不必提技术原因]\n"
+    "[用户发了图片，但图片读取失败了。请告诉用户图片没能看到，建议再发一次试试。语气自然，不必提技术原因]\n"
     "</IMAGE_DESCRIPTION>"
 )
 
@@ -157,7 +157,7 @@ async def generateReply(
     images: list[dict] | None = None,
     urlContexts: list[dict] | None = None,
     memoryQuery: MemoryQuery | None = None,
-    telegramContext = None,
+    extraBlocks: list[tuple[ContextTier, str, str]] | None = None,
 ) -> str:
     """
     调用 LLM 生成回复
@@ -166,6 +166,7 @@ async def generateReply(
         images: 图片列表 [{"data": b64_str, "mimeType": "image/jpeg"}, ...]
                 为 None 或空列表时表示纯文本
         urlContexts: URL 抓取结果列表
+        extraBlocks: 入口提取的扩展上下文块，格式为 (层级, 来源, 内容)
         memoryQuery: 防抖阶段捕获的结构化当前轮次，供 memory 检索及审核重试复用；
                      None 时由 contextBuilder 从 userMessage 构造兼容查询
 
@@ -208,7 +209,7 @@ async def generateReply(
         urlContexts=urlContexts,
         llmConfig=cfg,
         memoryQuery=memoryQuery,
-        telegramContext=telegramContext,
+        extraBlocks=extraBlocks,
     )
 
     # ── 构建 userContent ──
@@ -253,7 +254,7 @@ async def generateReply(
     # ========== AFC 执行循环 ==========
     # AFC 调用链透传：
     # handlers/llm.py → utils/llm/client/_generate.py (此处) → utils/llm/contextBuilder.py
-    # 目的：将 PTB context 透传到 buildConversationContext，用于读取 bot_data 推送层
+    # 目的：把 handler 消费后的普通扩展块传给 buildConversationContext。
     #
     # 从 LLM 回复中提取 <AFC_ACTION>，执行工具，携带结果二次调用 LLM，
     # 直到无工具调用或达到迭代上限。
@@ -261,7 +262,7 @@ async def generateReply(
     # 插入点选择：在 LLM client 层处理，对所有调用方（Telegram / console / 未来 API）生效。
     # 调用链：此处 → utils/llm/afcApi/responseHandler.py:handleAFCInLLMResponse
     #       → utils/afc/executor.py:execute (工具执行)
-    #       → 二次调用 utils/llm/__init__.py:generateReply (携带工具结果)
+    #       → 二次调用 utils/llm/client/_generate.py:generateReply（携带工具结果）
     from utils.llm.afcApi import handleAFCInLLMResponse
 
     llmResponse = await handleAFCInLLMResponse(

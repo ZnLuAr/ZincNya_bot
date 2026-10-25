@@ -1,6 +1,6 @@
 # LLM Handler 架构文档
 
-> 最后更新：2026-09-09
+> 最后更新：2026-10-26
 >
 > Written by ZincNya~ ❤
 
@@ -8,9 +8,9 @@
 
 ## 概述
 
-`handlers/llm.py` 是 LLM 功能的 Telegram 入口，整条从接收用户消息到产出回复、分发审核的协调流程都由它串联起来。随着功能在演进过程中，陆续叠上图片解析、消息防抖、群聊触发规则、长期记忆读写、多模式审核、网页抓取一堆能力，这个 handler 早就不再是简单的「收到消息就调用模型」单一线程，现在，不如说 LLM 就是一个分多阶段协同调度的协调器……
+`handlers/llm.py` 是 LLM 消息处理的入口和流程协调者：它负责门禁、消息入队、后台生成和结果分发。消息提取、批次状态、生成和审核分别由 `utils/llm/` 中的模块负责。本文按数据流说明这些边界，便于定位行为和维护入口。
 
-这份文档的目的是让未来维护者可以不必逐行翻代码，就能快速理解：
+本文说明：
 
 - 一条消息从进入 handler 到最终回复/被审核/被丢弃，经过了哪些阶段；
 - 每个 helper 函数为什么存在，以及它解决了什么问题；
@@ -48,25 +48,21 @@
 
 ## 设计决策
 
-当初搭建这套管线时每一处拆分、限制都反复权衡过，记录下来，避免之后修改时忘记取舍缘由。
+以下记录会影响调用顺序和安全边界的设计约束。实现细节以代码为准。
 
-### 为什么拆成大量小 helper
+### 函数与模块边界
 
-最早期 `handleLLMMessage` 是两百行以上的巨型函数，权限校验、图片下载、模型调用、审核入队所有逻辑全部堆在一起，读起来一团乱。
-
-那么，就需要对这个函数进行拆分了……拆分的标准十分清晰：单个辅助函数只负责一类判断 / 数据转换，函数名直接体现功能；顶层主逻辑只做流程调度，像指挥流水线的协调者，这样就不用塞满细碎判断。
-
-要是不拆分，后续新增功能会不断膨胀主函数，同一段代码里混杂网络请求、权限、上下文构造、记忆解析，排查问题会格外费劲。哪怕现在多了一堆小工具，可维护性都要好很多。
+入口保留门禁和阶段顺序；有明确独立职责、可复用行为或独立测试价值的逻辑放在 helper 或领域模块。流程较长时可以保留为顺序清晰的单函数，避免为拆分而拆分。
 
 ### 为什么 `_runLLMPipeline` 要做成后台任务
 
-用户连续刷屏发送多条消息时，不能每条都立刻发起 LLM 请求，需要短暂窗口做消息聚合合并。所以同步 handler 只负责校验消息、存入缓冲、拉起后台任务，真实的模型调用，则全部延后到防抖窗口结束后一起执行。
+短时间内连续发送的消息会按 `(chatID, userID)` 聚合。同步 handler 完成校验、提取、下载图片、历史写入和入队；后台任务在防抖窗口结束后生成并分发。
 
-不过这也带来了一个副作用：后台任务会因此脱离同步装饰器 `@handleTelegramErrors` 的保护，**所有异常都必须在函数内部手动捕获记录**。
+后台任务不受同步 handler 的 `@handleTelegramErrors` 保护，因此需要在任务内部记录异常，并重新抛出 `CancelledError`。
 
 ### 为什么 URL 读取必须满足触发条件且能读取到存在意图才执行
 
-URL 抓取不能单独作为唤醒客户端的入口，裸发链接不能主动联网，这是出于安全考虑……
+URL 抓取不会单独触发 LLM；裸发链接不会主动联网。
 
 必须同时满足三条限制：
 
@@ -74,26 +70,26 @@ URL 抓取不能单独作为唤醒客户端的入口，裸发链接不能主动�
 2. 当前用户消息表达了明确的读取意图；
 3. `urlReadEnabled` 已开启。
 
-这么设计，是为了避免客户端无差别主动访问外网，减少不必要网络开销与 SSRF 风险。~~文明上网从你我做起喵。~~
+这些条件限制了无意触发的外部请求，并降低 SSRF 风险。
 
 ### 为什么 reply-to 只贡献 URL 候选，不贡献意图
 
 回复一条带 URL 的消息说"帮我看看"是合理场景，所以 reply-to 的文本必须能提供 URL 候选。但不能把回复文本里的读取指令当作有效意图。
 
-这是因为如果放开限制，攻击者就可以提前发送一条包含 “帮我读取链接” 的消息，诱导其他人回复这条消息被动触发抓取了，是很严重的安全隐患。因此做了隔离：
+这样可以避免引用内容中的指令替当前用户表达抓取意图：
 
 - `urlIntentText` 只取自用户本次发送的原文；
 - `urlCandidateText` 才合并当前文本与回复消息，仅用来提取链接。
 
 ### 为什么三种 auto mode 不合并
 
-`autoMode` 分为 `on / off / console` 三类，分别适配完全不同的使用场景，是没办法简单合并成二元开关的——
+`autoMode` 有三种分发路径：
 
 - `on`：直接发送，适合信任环境（私聊调试）；
 - `off`：Telegram 审核，ops 在对话里批准/驳回；
 - `console`：控制台/chatScreen 审核，适合 bot 管理员离线审查。
 
-这些是不同部署阶段的需求，不应该用单一"审核/直接"二值覆盖。
+三者对应直接发送、Telegram 审核和控制台审核，行为与运维入口不同。
 
 ---
 
@@ -114,15 +110,17 @@ utils/
 utils/llm/
 ├── __init__.py         # 统一导出
 ├── config.py           # 配置：开关、模式、模型、触发、记忆、URL
-├── state.py            # 运行时状态容器：审核队列容器、速率限制、防抖缓冲与批次聚合、one-shot
+├── state.py            # 运行时状态：速率限制、防抖缓冲与 one-shot context
 ├── contextBuilder.py   # 上下文组装（背景侧：memory + history + URL）
-├── messagePrep.py      # 消息文本准备（当下侧：prompt 清洗 / reply 注入 / URL 意图切分）
+├── messagePrep.py      # Telegram 消息正文、引用与来源提取
+├── models.py           # 消息、生成请求、结果和分发输出的数据对象
+├── generation.py       # 首次生成与审核重试共用的生成流程
 ├── trigger.py          # 群聊触发判断（私聊 / @entity / 关键词）
 ├── promptSafety.py     # 提示注入防护（分隔符中和）
 ├── urlIntent.py        # URL 读取意图词库（urlReader 依赖）
 ├── urlReader.py        # URL 提取、意图判断、安全抓取、内容提取
-├── review.py           # 审核域：首生成分发三分流 + 审核队列 item 契约 + 三入口共用原语 + TG 审核卡片渲染
-├── vision.py           # 图片提取（含 prompt 回退）与下载
+├── review.py           # 回复分发与审核队列处理
+├── vision.py           # 图片引用提取与下载
 ├── client/
 │   ├── _generate.py    # generateReply：主 LLM 调用
 │   ├── _guardrails.py  # SYSTEM_GUARDRAILS 安全规则
@@ -147,79 +145,51 @@ utils/llm/
 
 ## 处理流水线总览
 
-一条带文字或图片的 Telegram 消息，在进入 `handleLLMMessage` 后，会分成同步预处理、后台生成两大阶段流转：
+一条带文字或图片的 Telegram 消息，先经过 `handleLLMMessage` 的同步门禁与消息提取，再由后台任务完成防抖、生成和分发：
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                  handleLLMMessage (同步)                 │
-│                                                         │
-│  1. LLM 全局开关                                        │
-│  2. message 存在                                        │
-│  3. 获取 raw 文本                                       │
-│  4. 命令排除（/foo）                                    │
-│  5. :edit 反向索引拦截                                  │
-│  6. :fb 补充反馈拦截                                    │
-│  7. raw 文本非空                                        │
-│  8. 白名单授权                                          │
-│  9. 触发判断（私聊 / @ / 关键词）                       │
-│ 10. 速率限制                                            │
-│ 11. 提取图片 refs                                       │
-│ 12. 构造 pureText / urlIntentText / urlCandidateText    │
-│ 13. 下载图片 + 补充 prompt 说明                         │
-│ 14. 组装 DispatchTarget + 写入 incoming 历史            │
-│     （interactiveChatID 守卫，防与 receiver 双写）       │
-│ 15. appendPendingMessage + 起/替换后台任务              │
-│                                                         │
-└──────────────────────────┬──────────────────────────────┘
-                           │ asyncio.create_task
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│                _runLLMPipeline (后台任务)              │
-│                                                         │
-│  1. sleep LLM_DEBOUNCE_SECONDS                          │
-│  2. 聚合 batch（合并多条 pending，生成 memoryQuery）   │
-│  3. URL 读取（按意图和候选文本）                        │
-│  4. 构造 displayOriginalMsg（+ URL 摘要）               │
-│  5. typing action                                       │
-│  6. generateReply（传递 memoryQuery / URL / images）    │
-│  7. addRateLimit（仅成功时）                            │
-│  8. 从 reply 中解析并校验 memory actions                │
-│  9. 分发 output（文字回复 + 记忆操作）                  │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A[Telegram 消息] --> B[按 chat/message ID 消费扩展块]
+    B --> C[handleLLMMessage：开关、命令、授权、触发与限流检查]
+    C --> D[提取 MessageOrigin 与 MessageInput]
+    D --> E[下载图片并附加扩展块]
+    E --> F[按 interactiveChatID 守卫写 incoming 历史]
+    F --> G[写入防抖缓冲并创建或重置后台任务]
+    G --> H[_runLLMPipeline 等待防抖窗口]
+    H --> I[取出 MessageInput 批次并构建 GenerationRequest]
+    I --> J[按正文意图和候选文本读取 URL]
+    J --> K[generateResponse：调用模型并校验记忆操作]
+    K --> L[构建 GenerationResult 与 GeneratedOutput]
+    L --> M[dispatchGeneratedOutput：发送或进入审核]
 ```
 
 ---
 
 ## 数据载体与检索查询
 
-一条消息从入口到分发，全程经由四个阶段 frozen dataclass 传递（PTB-free，定义随域模块）。
-此外，memory 使用独立的 `MemoryTurn` / `MemoryQuery` 检索契约；它们保留检索所需的当前消息、原始引用和审核反馈，不把检索输入混进展示字符串。
+一条消息从入口到分发，主要经由 `MessageInput`、`GenerationRequest`、`GenerationResult` 和 `GeneratedOutput` 几个 frozen dataclass 传递。前两者描述输入和生成所需数据，后两者分别描述生成结果和待分发输出。来源身份统一保存在 `MessageOrigin`，审核展示数据使用 `DisplayBlocks`。这些跨模块数据类集中定义在 `utils/llm/models.py`。
 
-```
-入口（handleLLMMessage）
-  ├─ PromptPayload     ← utils/llm/messagePrep.py
-  │      └─→  _enqueueLLMDebounce 拆字段，进入防抖缓冲
-  │
-  ├─ DispatchTarget    ← utils/llm/review.py
-  │      （全链定位：enqueue → pipeline → dispatch 闭包）
-  │
-  ↓ 防抖窗口结束（collectDebouncedBatch）
-DebouncedBatch         ← utils/llm/state.py
-  ↓ _runLLMPipeline 生成输入
-GeneratedOutput        ← utils/llm/review.py（管线组装）
-  ↓ dispatchGeneratedOutput（文字 / 记忆分流）
+memory 使用独立的 `MemoryTurn` / `MemoryQuery` 检索契约；它们保留检索所需的当前消息、原始引用和审核反馈，不把检索输入混进展示字符串。
 
-检索线（与阶段载体并行）
-  PromptPayload.memoryTurn → 防抖 parts → DebouncedBatch.memoryQuery
-  → generateReply → buildConversationContext → retrieveMemoryContext
+```mermaid
+flowchart LR
+    M[Telegram update] --> P[prepareMessageInput]
+    P --> MI[MessageInput：正文、引用、来源、MemoryTurn]
+    MI --> B[防抖缓冲]
+    B --> R[GenerationRequest：整批消息与派生输入]
+    R --> G[generateResponse]
+    G --> GR[GenerationResult：回复与校验通过的记忆操作]
+    GR --> O[GeneratedOutput：生成结果与审核展示快照]
+    O --> D[dispatchGeneratedOutput]
+    MI -. MemoryTurn .-> MQ[GenerationRequest.memoryQuery]
+    MQ --> C[buildConversationContext / retrieveMemoryContext]
+    C --> G
+    R -. 审核重试复用 .-> G
 ```
 
-为什么拆成四个而不是一个大对象：字段实际上是分阶段出现的——入口阶段只有消息文本（PromptPayload）与定位（DispatchTarget），在防抖窗口结束时聚合出批次（DebouncedBatch），直到生成完成才有产出（GeneratedOutput）。如果把这些都塞进一个大对象里，「哪些字段何时有效」这一点就变成隐性契约了。
+这些共享载体均为 `@dataclass(frozen=True, kw_only=True)`，以防字段顺序调整引发位置构造错位；frozen 则预防 in-flight 改写（需要更新字段时用 `dataclasses.replace`）。`MemoryTurn` 与 `MemoryQuery` 同样是不可变纯数据对象；反馈作为 `generateResponse` 的单次参数使用，不写回原始请求。
 
-四个阶段载体均为 `@dataclass(frozen=True, kw_only=True)`，以防字段顺序调整引发位置构造错位；frozen 则预防 in-flight 改写（需要更新字段时用 `dataclasses.replace`）。`MemoryTurn` 与 `MemoryQuery` 同样是不可变纯数据对象，审核重试通过 `replace()` 追加反馈。
-
-**引用/当前的结构化拆分**（展示侧）：`ReplyContext`（messagePrep）在入口切分引用行/当前文本，`PromptPayload.replyLine/currentText` → 防抖缓冲 → `DebouncedBatch.displayPairs` → `GeneratedOutput.displayBlocks`（DisplayBlocks：prefix 标注行 + pairs 配对）→ 审核卡结构化渲染（渲染函数在 `utils/llm/review.py`：每条消息一个 blockquote，引用与当前消息**合并在同一块内**、以粗体小节「引用消息」「当前消息」区分——分块会在内容长短悬殊时右边缘参差，合块只留一条边缘）。prompt 字符串**不动**（含引用标记的 combinedText——「引用标记」指 `[引用的消息]` / `[当前用户消息]` 这对方括号标签，是 `injectReplyTextContext` 拼接引用文本时加的分隔，告诉 LLM 哪段是被引用的话、哪段是当前用户说的）；displayBlocks 为 None 时渲染层走退化路径（对 originalMsg 按引用标记切分，同样合并为双小节块）。TODO（Design A 预留）：prompt 组装未来改用 ReplyContext 结构化注入（引用可独立进上下文 tier / 针对性指令），见 messagePrep 模块 docstring。
+**引用/当前的结构化拆分**（展示侧）：`prepareMessageInput` 将完整引用文本保存在 `MessageInput.replyText`，并创建对应的 `MemoryTurn`；prompt 由 `GenerationRequest.userMessage` 按消息逐条派生，引用与当前正文分别标记。审核展示则由 `GenerationRequest.displayPairs` 派生，再组合进 `DisplayBlocks`。渲染函数在 `utils/llm/review.py`：每条消息一个 blockquote，引用与当前消息合并在同一块内，以粗体小节区分。审核项同时保存便于阅读的 `displayOriginalMsg` 和供重试复用的 `generationRequest`，两者用途不同。
 
 **字段明细以各模块 docstring 为准，本文档只描述流转**——docstring 是单一事实源，避免双处维护漂移。
 
@@ -227,79 +197,45 @@ GeneratedOutput        ← utils/llm/review.py（管线组装）
 
 ## 变量生命周期（谁在哪一步、叫什么名字）
 
-一条用户消息的文本从 Telegram update 进来到审核卡出去，要换好几手名字。这一节是全链的变量流程图——在这里就可以查到哪个名字是谁在哪个环节的产物。
+一条用户消息从 Telegram update 进入后，会分别形成生成输入、记忆检索输入和审核展示数据。这一节按当前对象说明各份数据从哪里来、在哪里派生。
 
-文本处理有 prompt、展示和 memory 检索三条用途支路。prompt 与展示线在 `preparePurePromptText` 分岔、在 `GeneratedOutput` 汇合；prompt 的 `combinedText` 只在展示退化路径复用。memory 线始终沿 `MemoryTurn` / `MemoryQuery` 传递原始结构，不从前两条字符串支路反解析。
+文本处理有 prompt、展示和 memory 检索三种用途。`prepareMessageInput` 提取清理后的正文、引用和来源；`GenerationRequest` 分别派生 prompt 文本、URL 输入和审核展示配对；memory 线始终沿 `MemoryTurn` / `MemoryQuery` 传递结构化原始数据，不从展示字符串反解析。
 
 ### 全链流程图
 
 **prompt 线**（给 LLM 看的）：
 
-```
-用户的输入，有可能是文字信息（message.text） 或是图片的摘要 （caption）
-  | 由 handleLLMMessage() 接收
-  ↓
-rawText
-  | preparePurePromptText()
-  | 去掉 @bot、剥离 #context；若该消息有引用，则拼接上引用标记
-  | 引用标记形如—— `[引用的消息]` / `[当前用户消息]`
-  ↓
-pureText
-  | preparePurePromptText()
-  |
-  | 在这一过程中，preparePurePromptText() 还会同时产出另三样东西：
-  |   · urlIntentText——判定「用户是否想让模型读网页链接」的依据。
-  |     它必须在引用文本拼进来之前就取好值，只用用户当前这条消息
-  |     的原文（防止被回复消息里伪造的指令带偏，详见安全边界一节）
-  |   · urlCandidateText——要抓取的链接从哪里找。它反而要拼上被回复
-  |     消息的文本（「回复一条带链接的消息说帮我看看」是正当场景）
-  |   · 展示线的起点：extractReplyTextContext() 同场切出 replyLine /
-  |     currentText，交给展示线（见下图）
-  | 之后 _downloadImagesAndAnnotatePrompt() 下载图片，把下载说明
-  | （过大/下载失败提示）同时加到 pureText 和 currentText 的最前面
-  | （因为是不可变的 frozen 载体，用 dataclasses.replace 生成新的 payload）
-  |
-  | preparePurePromptText() 负责将这些产出打包
-  ↓
-PromptPayload.pureText
-  | appendPendingMessage 入防抖缓冲（pureText 在此改名 text，共 8 键）
-  ↓
-缓冲 dict（text 键）
-    | collectDebouncedBatch：多消息换行 join，并生成 memoryQuery
-  ↓
-DebouncedBatch.combinedText
-  | _generateReplyOrNotify → generateReply（作为 userMessage，附上下文/图片/URL）
-  ↓
-reply（含 <MEMORY_ACTION> 块时，由 _runLLMPipeline 调 extractValidatedMemoryActions 剥离）
-  |
-  ↓
-GeneratedOutput.reply
+```mermaid
+flowchart TD
+    A[Telegram message.text 或 caption] --> B[getRawMessageText]
+    B --> C[prepareMessageInput：移除提及与 #context，保留正文和引用]
+    C --> D[MessageInput：text、replyText、origin、memoryTurn]
+    D --> E[下载图片并保存 images / imageNotes]
+    E --> F[消费 bot_data 中本条消息的 extraBlocks]
+    F --> G[防抖缓冲：保留 MessageInput]
+    G --> H[GenerationRequest：聚合消息并确定 includeContext]
+    H --> I[派生 userMessage、urlIntentText、urlCandidateText]
+    I --> J[generateResponse：generateReply]
+    J --> K[GenerationResult.reply]
 ```
 
-**展示线**（给人类管理员看的）——从同一起点岔出：
+**展示线**（给人类管理员看的）——由同一批 `MessageInput` 独立派生：
 
-```
-pureText ─┬─ extractReplyTextContext：replyLine（"<@发送者> " + 300 字截断）/ currentText
-          │    ↓ PromptPayload 同名字段 → 防抖缓冲 → collectDebouncedBatch（双空过滤、逐条配对）
-          │    ↓
-          │  DebouncedBatch.displayPairs
-          │    ↓ _runLLMPipeline 组装 DisplayBlocks(prefix 标注行, pairs)
-          │  GeneratedOutput.displayBlocks
-          │    ↓ renderOriginalMsgBlock：每条消息一个 blockquote，
-          │      引用/当前合并同块、粗体小节区分（截断→转义→拼 铁律）
-          │  审核卡结构化渲染
-          │
-          └─ combinedText（prompt 线复用——这是两条线唯一的交叉点，引用标记是退化解析的原料）
-               ↓ formatDisplayOriginalMsg：拼 @username / 图片标注前缀，可追加 URL 摘要
-             header → displayOriginalMsg
-               ↓
-             GeneratedOutput.displayOriginalMsg
-               ├─ sendReviewMessage（TG 审核）→ bot_data 条目 originalMsg 键
-               ├─ addReviewItem（console/chatScreen）→ 队列 item；重试时直接当 prompt 重生成
-               └─ 三分支日志「原文：…」
+```mermaid
+flowchart TD
+    A[MessageInput.replyText 与 text] --> B[GenerationRequest.displayPairs]
+    A --> C[GenerationRequest.displayOriginalMsg]
+    B --> D[handlers/llm.py 组合 DisplayBlocks]
+    C --> E[追加图片标注与 URL 摘要]
+    D --> F[renderOriginalMsgBlock：按消息呈现引用和正文]
+    E --> G[GeneratedOutput.displayOriginalMsg]
+    F --> H[Telegram 审核卡或 console / chatScreen 审核项]
+    G --> H
+    G --> I[审核日志]
+    H -. 审核重试不使用展示文本 .-> J[GenerationRequest]
 ```
 
-两条注意：缓冲 dict 的键名是 `text` 而不是 `pureText`——不应该在 state.py 里找 pureText，它在那儿被改了名；`GeneratedOutput.displayOriginalMsg` 不是 messagePrep 的产物，是管线里由 `formatDisplayOriginalMsg` 拼出来的。
+`displayOriginalMsg` 是给审核者阅读、日志记录用的展示文本，不作为重试的模型输入。回复审核项另外保存原始 `generationRequest`，后续重试从该请求重新生成。
 
 ### `originalMsg` 的语义随端点变化
 
@@ -311,7 +247,7 @@ pureText ─┬─ extractReplyTextContext：replyLine（"<@发送者> " + 300 �
 | memory 审核项 | **触发该记忆操作的用户消息**（不是 LLM 回复） |
 | `renderReviewCard(originalMsg, reply, ...)` 的参数 | 上面 reply 项的 originalMsg；有 `displayBlocks` 时只当退化兜底用 |
 
-重试的语义跟着第二行走：`_retryReplyReview` 直接拿 item 的 `originalMsg` 当 prompt 重新生成——对重试项，这就是当时的 `displayOriginalMsg`（引用标记还在里面，LLM 读得懂）。
+`_retryReplyReview` 从审核项读取 `generationRequest` 并调用 `generateResponse`。`originalMsg` 仅用于审核展示和日志；它包含的人名前缀、图片/URL 标注不作为模型输入。缺少原始请求时，重试明确报错。
 
 ---
 
@@ -329,68 +265,47 @@ async def handleLLMMessage(update, context):
 
 | 序号 | 调用 | 职责 |
 |------|------|------|
-| 1 | `getLLMEnabled()` | LLM 全局开关；关则直接 return，不经过流程 |
-| 2 | `update.message` | 群入群、系统推送等无实质内容消息，直接忽略 |
-| 3 | `getRawMessageText(message)` | 读取文本，没有文本则读取图片 caption |
-| 4 | `_isCommandLikeMessage(rawText)` | `/` 开头的指令直接交给命令模块，不走 LLM 流程 |
-| 5 | `handleEditReply(message, context)` | 命中编辑索引直接消费，不再往下走 |
-| 6 | `handleFeedbackRetry(message, context)` | 命中 `:fb ` 前缀的补充反馈直接消费（仅回复审核），不再往下走 |
-| 7 | `rawText` 非空 | 只有图片没有文字说明，则跳过触发对话 |
-| 8 | `_getAuthorizedUserID(message)` | 白名单校验，返回 userID 或 None |
-| 9 | `shouldTriggerLLM(message, botUsername, isPrivate)` | 私聊默认触发(`True`)，群聊需要 @或匹配关键词 |
-| 10 | `isRateLimited(userID)` | 处于冷却期给用户提示后返回 |
-| 11 | `extractImageRefsForPrompt(message)` | 提取当前消息图片，以及被回复消息里的图片 |
-| 12 | `preparePurePromptText(...)` | 返回 PromptPayload 具名载体（4 个 prompt 字段 + replyLine/currentText 展示切分） |
-| 13 | `_downloadImagesAndAnnotatePrompt(...)` | 下同步下载图片，失败则在 prompt 中追加说明文字 |
-| 14 | `saveMessage(...)`（interactiveChatID 守卫） | 写入 incoming 历史（消息确实发生，与生成成败无关）；`/send -c` receiver 活跃于该聊天时让位（其记录更全），防双写 |
-| 15 | `_enqueueLLMDebounce(...)` | 消息入缓冲，取消旧任务并拉起新后台协程 |
+| 1 | `_takeExtraBlocks(context, message)` | 按 chat ID 和 message ID 消费本条消息的扩展上下文 |
+| 2 | `getLLMEnabled()`、`update.message` | 检查全局开关和消息对象；无消息或关闭时返回 |
+| 3 | `getRawMessageText(message)`、命令判断 | 读取文本/caption；`/` 开头消息不进入 LLM |
+| 4 | `handleEditReply(...)`、`handleFeedbackRetry(...)` | 消费编辑或反馈重试消息 |
+| 5 | 授权、正文、触发和限流检查 | 检查白名单、正文非空、聊天触发条件及用户冷却 |
+| 6 | `extractImageRefsForPrompt(message)` | 提取当前消息或引用消息中的图片 |
+| 7 | `prepareMessageInput(...)` | 生成包含来源、清理后正文、引用和上下文开关的 `MessageInput` |
+| 8 | 附加扩展块、`_downloadMessageImages(...)` | 把扩展块、图片数据及失败说明写入 `MessageInput` |
+| 9 | `saveMessage(...)`（`interactiveChatID` 守卫） | 写入 incoming 历史；交互式 chatScreen 接管时避免重复写入 |
+| 10 | `_enqueueLLMDebounce(...)` | 将 `MessageInput` 入缓冲，取消旧任务并重新计时 |
 
-### `preparePurePromptText` 的 PromptPayload
-
-位置：`utils/llm/messagePrep.py`（handlers/llm.py 调用）
-
-```python
-payload = preparePurePromptText(message, rawText, botUsername)  # -> PromptPayload（frozen dataclass）
-```
-
-| 字段 | 含义 | 来源 |
-|----------|------|------|
-| `pureText` | 	最终送入模型的对话原文，可能前置 reply-to 引用 | 原始文本清理 @标记、`#context` 标识，附加回复消息正文 |
-| `includeContext` | 是否启用记忆、历史对话上下文 | 入口阶段：`#context` 标记 + `memoryEnabled` 全局开关；`contextOnce` 单次标记在后续防抖聚合时才叠加（见「消息合并规则」） |
-| `urlIntentText` | 仅用来判断网页抓取意图 | 去 mention/`#context` 后的纯 current 文本 |
-| `urlCandidateText` | 用来提取全部待抓取链接 | `pureText`（去 mention）+ reply-to text/caption |
-| `memoryTurn` | memory 检索的结构化当前/引用配对 | 原始 current 文本、未截断 reply 文本及发送者；不含图片下载说明 |
-
-各类文本用途完全隔离，**不能混用**，在安全边界一节会再细说
+`prepareMessageInput` 只负责从 Telegram 消息提取来源、清理正文、引用和上下文标记。它不拼 prompt，也不决定 URL 抓取；`GenerationRequest` 在后台根据完整批次派生模型输入、URL 意图/候选文本和审核展示内容。图片下载之后，结果及失败说明保存在 `MessageInput` 中。
 
 ---
 
 ## 后台阶段：`_runLLMPipeline`
 
 ```python
-async def _runLLMPipeline(*, debounceKey, target: DispatchTarget, context):
+async def _runLLMPipeline(*, debounceKey: str, context):
 ```
 
 ### 关键注意点
 
 - 跑在 `asyncio.create_task` 中，与同步阶段断开
-- **`@handleTelegramErrors` 不生效**（装饰器只覆盖同步阶段），必须自己 `try/except`
+- **`@handleTelegramErrors` 不生效**（装饰器只覆盖同步阶段），后台任务自行捕获并记录异常
 - `CancelledError` 必须重新 raise（让替换后的新任务能接管）
-- 只有 `generateReply` 成功产出回复，才会给用户新增 `addRateLimit(userID)` 限流冷却，请求失败不计入限制
+- 只有 `generateResponse` 成功返回结果，才会新增 `addRateLimit(userID)` 冷却；生成失败不计入限制
 
 ### 步骤细节
 
 | 序号 | 调用 | 备注 |
 |------|------|------|
 | 1 | `asyncio.sleep(LLM_DEBOUNCE_SECONDS)` | 用户连续发消息时会被新任务取消 |
-| 2 | `collectDebouncedBatch(debounceKey)` | 返回 `DebouncedBatch`（combinedText / includeContext / images / URL 字段 / displayPairs / memoryQuery）；空则 return |
-| 3 | `readURLContextsForUserText(intentText, candidateText)` | 前提：`urlReadEnabled` 且命中意图词；否则返回 `[]` |
-| 4 | `formatDisplayOriginalMsg(...)` | 生成 ops 审核用的展示原文；带图/URL 时追加摘要 |
-| 5 | `_sendTypingActionSafely(...)` | 发送 typing，失败静默 |
-| 6 | `_generateReplyOrNotify(...)` | 调用 `generateReply(..., images, urlContexts, memoryQuery)`；失败返回 None 并提示用户 |
-| 7 | `addRateLimit(userID)` | 仅成功生成回复时添加冷却 |
-| 8 | `extractValidatedMemoryActions(reply, logLabel="generate")` | 剥离 `<MEMORY_ACTION>` 块；越界动作直接丢弃。仅 includeContext 为真时调用（否则记忆块保留在 reply 原文） |
-| 9 | `dispatchGeneratedOutput(...)` | 按 autoMode 分发文字回复（经 `sendLLMReply` 发送，尾部写 outgoing 历史）；按 memoryAutoApprove 执行记忆操作 |
+| 2 | `popPendingMessages(debounceKey)` | 取出有序 `MessageInput` 批次；空批次则返回 |
+| 3 | 创建 `GenerationRequest` | 保存消息批次；任一消息启用上下文或 one-shot 标记生效时加载上下文 |
+| 4 | `readURLContextsForUserText(...)` | 从请求派生当前正文意图和正文/引用候选；满足开关、意图和有效 URL 才抓取 |
+| 5 | 派生展示快照 | 从请求生成展示原文和 `DisplayBlocks`，附加图片标注及 URL 摘要 |
+| 6 | `_sendTypingActionSafely(...)` | 尝试发送 typing 状态 |
+| 7 | `_generateReplyOrNotify(request)` | 调用 `generateResponse(request)`；失败时记录并提示用户 |
+| 8 | `addRateLimit(userID)` | 仅生成成功后添加冷却 |
+| 9 | `dispatchGeneratedOutput(...)` | 根据 `autoMode` 分发回复及审核，根据记忆审核配置处理操作 |
 
 ---
 
@@ -416,13 +331,8 @@ async def _runLLMPipeline(*, debounceKey, target: DispatchTarget, context):
 ### 缓存数据结构
 
 ```python
-_pendingMessages: dict[str, list[dict]]
-# debounceKey -> [
-#   {"text", "includeContext", "images", "urlIntentText", "urlCandidateText",
-#    "replyLine", "currentText", "memoryTurn"},
-#   ...
-# ]
-# 实际上就是一个包含了单条消息数据的字典……
+_pendingMessages: dict[str, list[MessageInput]]
+# 每条消息保留来源、正文、引用、图片和 memory turn
 _pendingTasks: dict[str, asyncio.Task]
 # 再以 debounceKey 绑定当前运行中的后台协程
 ```
@@ -431,18 +341,17 @@ _pendingTasks: dict[str, asyncio.Task]
 
 ### 工作流程
 
-1. 收到消息，`appendPendingMessage()` 写入缓冲列表；若超过单用户最大缓冲条数(`LLM_PENDING_MSG_LIMIT`) 时，就返回 False 提示"消息太多"。
+1. 收到消息，`appendPendingMessage()` 写入缓冲列表；达到 `LLM_PENDING_MSG_LIMIT` 时返回 `False` 并提示用户。
 2. 若已有旧 `asyncio.Task` 在跑，则执行 `task.cancel()` 取消旧的进程。
 3. 创建新的 `_runLLMPipeline` task，然后注册 `done_callback` 进行清理。
-4. 新任务等待防抖时长 (`LLM_DEBOUNCE_SECONDS`) 后，批量合并处理全部缓冲消息。
+4. 新任务等待 `LLM_DEBOUNCE_SECONDS` 后，通过 `popPendingMessages()` 取出批次并构造 `GenerationRequest`。
 
 ### 消息合并规则
 
-- 多行文本 `text` 使用换行拼接。
-- 任意一条消息开启上下文 (`includeContext` 为 `True`)，整体就启用记忆与历史；`contextOnce` 单次标记仅生效一轮。
-- 图片资源列表 `images` 直接串联。
-- `urlIntentText` / `urlCandidateText` 用换行拼接。
-- `memoryTurn` 按原消息顺序保留，聚合后成为 `MemoryQuery.turns`；引用与当前消息不会跨条目错配。
+- `GenerationRequest.userMessage` 按顺序渲染批次正文；每条消息的引用与正文保持配对。
+- 任一消息启用上下文，或 one-shot 标记生效，整批启用记忆和历史。
+- 图片、扩展上下文块及 memory turns 按原顺序汇总；URL 意图只由当前正文组成，候选文本还包含引用正文。
+- 展示文本由同一请求独立派生；重试复用原始请求和抓取结果。
 
 ---
 
@@ -462,7 +371,7 @@ _pendingTasks: dict[str, asyncio.Task]
 - 否定词压制：否定词（`不要 / 别 / do not / don't` 等）只压制其邻近窗口内的第一个意图词——「不要总结」被拦，但「不要只总结，帮我分析」里「分析」未被压制，整体仍触发。
 - 匹配到关键词 `读 / 看 / 总结 / 分析 / 翻译 / summarize / explain` 等，判定为有需求。
 
-且实际上，匹配词要比这里的多得多，也详细得多……
+意图词和否定词列表以 `utils/llm/urlIntent.py` 为准。
 
 ### 上下文注入位置
 
@@ -632,18 +541,10 @@ LLM 输出习惯用 Markdown 排版，但 Telegram 原生只支持一小部分�
 - **记忆 id 字段必须保留**：在每条记忆头部的括号里（`id=` 字段），`<MEMORY_ACTION>` 指令依赖它来修改记忆
 - **`[来源：…]` 标注行与块首低信任提示不可删除**：它们提供块含义与信任度说明，删掉会让 LLM 失去上下文类型信息
 
-### 记忆检索：完整候选、保守准入与有限预算
+### 记忆检索
 
-memory 与知识库的职责不同：知识库可以接受“先召回、再作为备选参考”的语义断层；memory 会直接影响当前对话，因此不能用一次额外的生成调用让模型替检索器补救，也不能把低置信候选全部塞进 prompt。当前正式入口是 `retrieveMemoryContext()`，流程如下：
+记忆检索由 `utils/llm/memory/retrieval.py` 执行，组合 pinned 记录、情境候选、语义/词面通道和字符预算。默认模式为 `legacy`；`hybrid` 需管理员显式开启，并依赖已校准的通道阈值。具体策略与当前校准状态见 [LLM 上下文组装文档](llm-context-assembly.md)。本节只说明 handler 与检索之间的输入边界。
 
-1. 按当前 `chatID`、`userID`、`sessionID` 读取 global/chat/user/session scope 的全部 `enabled` 记录。这里不按 `priority` 或旧的数量上限截断，先解决候选池过早被挤满的问题；代价是宽候选的 SQLite、解密和 BM25 成本随规模增长，必须用真实全链路 benchmark 设定运维边界。
-2. `mode=pinned` 的记录进入常驻分支，按 `priority`、scope 专属度和更新时间排序；`priority` 只参与准入后的排序，不是相关性门槛。`mode=contextual` 的记录进入情境分支。
-3. 情境分支独立计算三个通道：当前消息语义、当前消息加明确引用和短历史的辅助语义、当前消息加引用/反馈的 memory 专用词面分数。词面使用独立的 BM25 实现，`tags` 参与加权，`retrieval_hint` 只进入语义索引，不进入词面评分。
-4. 每个通道只接受自己的绝对校准阈值；未过阈值的记录没有该通道贡献，不用“本轮最高分比例”或 `priority` 放宽准入。通过通道的 rank 用 RRF 融合，同一事实在同一 scope 内去重。
-5. 语义通道由 `runtime.py` 中的可选本地 encoder 提供，不访问外部 embedding API，也不新增生成型 LLM 调用。模型未安装、向量未就绪、队列满或超时，保留已完成的严格词面结果与 pinned，不自动调用旧 priority 选择器冒充 hybrid。
-6. 渲染按完整包装后的 Unicode 字符数计算：memory 总块不超过 2500 字，pinned 段不超过 1000 字；条目整条放入，超预算就跳过，不截断事实正文。渲染前按 ID 批量复核 enabled 与完整状态指纹，过期结果直接移除。
-
-当前配置默认是 `legacy`，所以线上默认行为仍是旧 priority 检索；只有管理员显式切换到 `hybrid` 才会执行新准入链。`retrievalCalibration.json` 目前没有数据集散列和阈值，`hybrid` 的语义/词面通道会报告不可用原因并降级，不能据此宣称语义质量已校准。
 
 ### memory 查询输入与历史复用
 
@@ -675,16 +576,16 @@ LLM 在回复里夹带 `<MEMORY_ACTION>` 标签、想要新增 / 修改 / 删除
 | `memoryAutoApprove == False` 且非 console | 给管理员推送 Telegram 记忆审核卡片 |
 | 无 ops 且非 auto-approve | 静默丢弃本次记忆操作，仅打印 `Warning` 日志 |
 
-这里和普通回复的兜底逻辑做了区分：用户能直观看见有没有文字回复，消息消失会疑惑；但记忆是后台隐性操作，用户大多感知不到，没必要额外弹窗提示，安静记录日志就足够啦。
+记忆操作属于后台行为；没有可用审核入口时会记录警告并丢弃操作，不影响文字回复。
 
 ---
 
 ## 安全边界
 
-下面这些隔离规则都是踩过坑之后特意定下的，千万别为了代码简洁"顺手"合并逻辑，每一条都对应一类风险场景。
+以下输入边界影响安全或行为，修改时应保持一致：
 
 1. URL intent vs candidate 分离
-> `urlIntentText` 和 `urlCandidateText` 必须来自不同源。意图只取自用户本次发言，链接候选可以带上回复消息内容。一旦合并，攻击者能通过转发带指令的消息，诱导其他人被动触发网页抓取，这是很危险的安全漏洞。
+> `urlIntentText` 只包含当前批次正文；`urlCandidateText` 还包含引用文本。引用只能提供链接，不能表达抓取意图。
 
 2. reply-to 只贡献 URL 候选，只提取链接，不生成读取意图
 > 回复里的文字再怎么写"帮我看看这个"，都不会被判定为读取指令，仅用来捞里面的 URL，意图判定权限只留给用户本人当期消息。
@@ -705,7 +606,7 @@ LLM 在回复里夹带 `<MEMORY_ACTION>` 标签、想要新增 / 修改 / 删除
 > llm_memreview_{chatID}_{reviewMsgID}      # 主 memory review
 > llm_editidx_{reviewMsgID}                 # :edit 反向索引
 > ```
-> 
+>
 > reply 的 `chatID` 在 callback 里转 `int`；memory 的 `chatID` 不转。回复审核、记忆审核、编辑索引三类 key 命名规则分开，是早期迭代遗留的实现，改动要同步修改全链路回调匹配逻辑，收益很低，没必要统一重构。
 
 ---
@@ -764,7 +665,7 @@ def register():
 
 ## 已知局限
 
-这里记录当前版本管线没法完美解决、或是设计上遗留的小短板，后续迭代可以对照着优化：
+这里记录当前实现的已知限制：
 
 - **历史写入机制**（原「memoryEnabled 对 Telegram 无效」已修复）：`handleLLMMessage` 门禁通过后写 incoming（`interactiveChatID` 守卫——`/send -c` receiver 活跃于该聊天时让位，防双写）；outgoing 挂在 `sendLLMReply` 咽喉（`recordBotMessage`），四条发送路径（on 直发 / off 审核通过 / console·chatScreen / NetworkError 重试）统一覆盖，`:edit` 定稿在审核通过发送时落库、取消与中间重试不落库。
 - **hybrid 尚未校准**：正式 fixture 扩充后，旧 threshold/holdout 报告已失效；当前 `retrievalCalibration.json` 的数据集散列与三个通道阈值为空，显式切换 hybrid 时可能只有 pinned 或严格已启用通道结果。这不是 legacy 的隐式回退，也不是语义质量通过的证明。需重新完成脱敏 holdout、目标机资源和受控人工回复验收后再启用。
@@ -782,5 +683,5 @@ def register():
 1. **新增能力优先做成 helper**，且优先下沉 `utils/llm/` 对应域模块（handlers 层只留 PTB wiring），尽量不让 `handleLLMMessage` 或 `_runLLMPipeline` 再度膨胀。
 2. **尽量不破坏现有触发边界**（mention/keyword/URL intent 三层）。
 3. **不合并 `autoMode` 的三种路径**，线上调试、Telegram 审核、控制台离线审查是三套完全独立的运维场景，它们对应真实的不同部署阶段。
-4. **不轻易改动防抖数据结构**。缓冲内单条消息的 dict 键与 `DebouncedBatch` 字段对应，新增字段时追加 key 比改结构成本低。
+4. **保持消息批次数据可追踪**。防抖缓冲保存 `MessageInput`，批次派生数据集中由 `GenerationRequest` 提供；新增字段应有明确来源和用途。
 5. **任何新增的外部 I/O（HTTP、DB）**都应该考虑是否要进 `_runLLMPipeline` 的后台阶段，同时记得注册到`ResourceManager`，程序退出时正常释放连接，不会残留占用进程的句柄。

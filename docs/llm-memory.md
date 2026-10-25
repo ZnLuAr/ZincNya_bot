@@ -73,8 +73,8 @@ Memory 由一个 SQLite 正本和一套「本轮选哪些记忆进 prompt」的�
 
 ```mermaid
 flowchart TB
-    input["① 接入层<br/><code>handlers/llm.py</code> · <code>messagePrep.py</code> · <code>state.py</code><br/>把消息、引用和防抖批次整理成 MemoryQuery，算出 includeContext"]
-    orchestration["② 编排层<br/><code>contextBuilder.py</code> · <code>review.py</code> · <code>handlers/llmReview.py</code><br/>按 includeContext 检索，分流模型申请的记忆操作"]
+    input["① 接入层<br/><code>handlers/llm.py</code> · <code>messagePrep.py</code> · <code>models.py</code> · <code>state.py</code><br/>提取 MessageInput，防抖后由 GenerationRequest 派生 MemoryQuery，算出 includeContext"]
+    orchestration["② 编排层<br/><code>generation.py</code> · <code>contextBuilder.py</code> · <code>review.py</code> · <code>handlers/llmReview.py</code><br/>按 includeContext 检索，分流模型申请的记忆操作"]
     strategy["③ 策略层<br/><code>memory/retrieval.py</code><br/>legacy / hybrid 分支、准入、融合、预算、注入前复核"]
     lexical["④ 词面打分<br/><code>memory/lexical.py</code><br/>BM25，无状态"]
     semantic["④ 语义打分<br/><code>memory/runtime.py</code> → <code>memory/encoder.py</code><br/>向量缓存与本地 ONNX 编码"]

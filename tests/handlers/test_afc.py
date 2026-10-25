@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from handlers.afc import afcIntentDetector, register
-from utils.llm.contextBuilder import ContextTier
+from utils.llm.config import ContextTier
 
 
 # ====================================================================================================
@@ -21,6 +21,7 @@ def _makeUpdate(text="今天天气怎么样", chatID=12345):
     message = MagicMock()
     message.text = text
     message.chat_id = chatID
+    message.message_id = 77
 
     update = MagicMock()
     update.message = message
@@ -49,7 +50,7 @@ async def test_intent_hit_writes_slot():
          patch("handlers.afc.buildAFCContextBlock", return_value="<TOOLS>...</TOOLS>"):
         await afcIntentDetector(update, context)
 
-    key = "llm_extra_blocks_12345"
+    key = "llm_extra_blocks_12345_77"
     assert key in context.bot_data
     assert "afc" in context.bot_data[key]
 
@@ -64,7 +65,7 @@ async def test_intent_hit_preserves_other_slots():
     """写入 afc 槽位时不覆盖其它模块的槽位"""
     update = _makeUpdate()
     context = _makeContext()
-    key = "llm_extra_blocks_12345"
+    key = "llm_extra_blocks_12345_77"
     # 预置其它模块的槽位
     context.bot_data[key] = {"other": ("tierX", "标签X", "内容X")}
 
@@ -97,10 +98,10 @@ async def test_no_intent_no_write():
 
 @pytest.mark.asyncio
 async def test_no_intent_clears_stale_own_slot():
-    """无意图时清除本模块上一条消息遗留的槽位，但保留其它模块槽位"""
+    """无意图时清除当前消息旧槽位，但保留其它模块槽位。"""
     update = _makeUpdate(text="随便聊聊")
     context = _makeContext()
-    key = "llm_extra_blocks_12345"
+    key = "llm_extra_blocks_12345_77"
     context.bot_data[key] = {
         "afc": (ContextTier.TOOLS, "工具", "旧块"),
         "other": ("tierX", "标签X", "内容X"),
@@ -124,9 +125,24 @@ async def test_empty_block_not_written():
          patch("handlers.afc.buildAFCContextBlock", return_value=""):
         await afcIntentDetector(update, context)
 
-    key = "llm_extra_blocks_12345"
+    key = "llm_extra_blocks_12345_77"
     # 未写入 afc 槽位（空块）
     assert key not in context.bot_data or "afc" not in context.bot_data.get(key, {})
+
+
+@pytest.mark.asyncio
+async def test_caption_message_is_checked_and_uses_message_key():
+    """带图片说明的消息也能准备工具上下文，并按消息 ID 保存。"""
+    update = _makeUpdate(text=None)
+    update.message.caption = "查一下天气"
+    context = _makeContext()
+
+    with patch("handlers.afc.detectTools", return_value={"weather"}) as mockDetect, \
+         patch("handlers.afc.buildAFCContextBlock", return_value="block"):
+        await afcIntentDetector(update, context)
+
+    mockDetect.assert_called_once_with("查一下天气", "12345")
+    assert "afc" in context.bot_data["llm_extra_blocks_12345_77"]
 
 
 # ====================================================================================================
@@ -153,7 +169,9 @@ async def test_non_text_message_returns_early():
     """消息无 text（如图片）时直接返回"""
     message = MagicMock()
     message.text = None
+    message.caption = None
     message.chat_id = 12345
+    message.message_id = 77
 
     update = MagicMock()
     update.message = message
@@ -168,8 +186,8 @@ async def test_non_text_message_returns_early():
 
 
 @pytest.mark.asyncio
-async def test_edited_message_used_as_fallback():
-    """message 为空时回退到 edited_message"""
+async def test_edited_message_is_ignored():
+    """编辑消息不进入 LLM/AFC 推送链，避免没有对应消费方的槽位残留"""
     edited = MagicMock()
     edited.text = "改成查天气"
     edited.chat_id = 999
@@ -179,12 +197,11 @@ async def test_edited_message_used_as_fallback():
     update.edited_message = edited
     context = _makeContext()
 
-    with patch("handlers.afc.detectTools", return_value={"weather"}) as mockDetect, \
-         patch("handlers.afc.buildAFCContextBlock", return_value="block"):
+    with patch("handlers.afc.detectTools") as mockDetect:
         await afcIntentDetector(update, context)
 
-    mockDetect.assert_called_once_with("改成查天气", "999")
-    assert "afc" in context.bot_data["llm_extra_blocks_999"]
+    mockDetect.assert_not_called()
+    assert context.bot_data == {}
 
 
 # ====================================================================================================

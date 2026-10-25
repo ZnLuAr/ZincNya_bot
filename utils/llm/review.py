@@ -21,18 +21,12 @@ utils/llm/state.py（getReviewQueue）——状态容器留 state，领域契约
     - kind == "memory"：LLM 自主记忆操作审核
 """
 
-from dataclasses import dataclass, replace
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from config import (
-    LLM_REVIEW_FEEDBACK_MAX_LENGTH,
-    LLM_MEMORY_MAX_ACTIONS,
-    TG_MESSAGE_MAX_LEN,
-)
+from config import TG_MESSAGE_MAX_LEN
 
 from utils.core.logger import logAction, LogLevel, LogChildType, logSystemEvent
-from utils.llm.client import generateReply
+from utils.llm.generation import generateResponse
 from utils.llm.config import getMemoryAutoApprove
 from utils.llm.memory.action import (
     MemoryAction,
@@ -40,11 +34,10 @@ from utils.llm.memory.action import (
     buildMemoryActionReviewPayload,
     executeAction,
     formatActionDetail,
-    parseMemoryActions,
     requiresHumanReview,
-    validateAction,
 )
 from utils.llm.memory.types import MemoryQuery
+from utils.llm.models import DisplayBlocks, GeneratedOutput, GenerationRequest, MessageOrigin
 from utils.llm.state import getReviewQueue
 from utils.telegramHelpers import escapeHtml, sendLLMReply, truncateText
 
@@ -107,10 +100,11 @@ def makeReplyReviewItem(
     userID: str | int | None = None,
     includeContext: bool = False,
     urlContexts: list[dict] | None = None,
-    displayBlocks: object | None = None,
+    displayBlocks: DisplayBlocks | None = None,
     memoryQuery: MemoryQuery | None = None,
+    generationRequest: GenerationRequest | None = None,
 ) -> dict:
-    """构造回复审核快照，并保留 retry 时必须复用的原始 memory query。"""
+    """构造回复审核快照，保留重试使用的原始生成请求。"""
     return {
         "kind": "reply",
         "chatID": chatID,
@@ -123,6 +117,7 @@ def makeReplyReviewItem(
         "urlContexts": urlContexts or [],
         "displayBlocks": displayBlocks,
         "memoryQuery": memoryQuery,
+        "generationRequest": generationRequest,
     }
 
 
@@ -135,8 +130,9 @@ def addReviewItem(
     userID: str | int | None = None,
     includeContext: bool = False,
     urlContexts: list[dict] | None = None,
-    displayBlocks: object | None = None,
+    displayBlocks: DisplayBlocks | None = None,
     memoryQuery: MemoryQuery | None = None,
+    generationRequest: GenerationRequest | None = None,
 ):
     """
     将待审核消息加入队列
@@ -161,6 +157,7 @@ def addReviewItem(
         urlContexts=urlContexts,
         displayBlocks=displayBlocks,
         memoryQuery=memoryQuery,
+        generationRequest=generationRequest,
     ))
 
 
@@ -171,7 +168,7 @@ def makeMemoryReviewItem(
     originalMsg: str,
     opsID: str,
     userID: str | int | None = None,
-    displayBlocks: object | None = None,
+    displayBlocks: DisplayBlocks | None = None,
 ) -> dict:
     """构造 memory 审核项；``action`` 可包含批准时使用的目标状态快照。"""
     return {
@@ -192,7 +189,7 @@ def addMemoryReviewItem(
     originalMsg: str,
     opsID: str,
     userID: str | int | None = None,
-    displayBlocks: object | None = None,
+    displayBlocks: DisplayBlocks | None = None,
 ):
     """
     将 LLM 记忆操作加入审核队列。
@@ -341,60 +338,8 @@ def getReviewItemActions(item: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 记忆操作解析 / 校验 / 分发（审核层共享）
+# 记忆操作分发
 # ---------------------------------------------------------------------------
-
-async def extractValidatedMemoryActions(
-    reply: str,
-    *,
-    logLabel: str,
-    chatID=None,
-    userID=None,
-) -> tuple[str, list, int]:
-    """
-    清理 reply 中的 <MEMORY_ACTION> 块、截断超限操作、逐个校验。
-
-    这是 action.py 原语（parse/validate）之上的审核层编排：
-    截断阈值与"丢弃失败项并计数"的语义都为审核流程服务，故放在 review 层。
-
-    参数:
-        reply: LLM 原始回复（可能含 <MEMORY_ACTION> 块）
-        logLabel: 日志来源标签，如 'retry' / 'feedback retry' / 'console retry'
-        chatID/userID: 当前请求的可信身份；只用于约束 chat/user scope，不能
-            从 action 内容推导。global scope 没有归属身份，按策略允许通过。
-
-    返回:
-        清理后的 reply, 校验通过的 action 列表, 校验失败数
-    """
-    cleanedReply, actions = parseMemoryActions(reply)
-    actionContext = MemoryActionContext(chatID=chatID, userID=userID)
-
-    # 截断超限操作
-    if len(actions) > LLM_MEMORY_MAX_ACTIONS:
-        await logSystemEvent(
-            f"LLM 记忆操作数量超限（{logLabel}）",
-            f"请求 {len(actions)} 个，上限 {LLM_MEMORY_MAX_ACTIONS}，截断",
-            LogLevel.WARNING,
-        )
-        actions = actions[:LLM_MEMORY_MAX_ACTIONS]
-
-    # 逐个校验，失败项丢弃并计数
-    validated = []
-    failed = 0
-    for act in actions:
-        err = await validateAction(act, actionContext=actionContext)
-        if err:
-            failed += 1
-            await logSystemEvent(
-                f"LLM 记忆操作校验失败（{logLabel}）",
-                f"{act.action} | {err}",
-                LogLevel.WARNING,
-            )
-        else:
-            validated.append(act)
-
-    return cleanedReply, validated, failed
-
 
 def queueMemoryActionsToConsole(actions: list, *, chatID, originalMsg, opsID, userID) -> None:
     """将校验通过的记忆操作加入 console 审核队列。"""
@@ -528,64 +473,6 @@ async def dispatchMemoryActions(
 # 首生成分发（dispatchTextReply / dispatchGeneratedOutput）
 # ---------------------------------------------------------------------------
 
-@dataclass(frozen=True, kw_only=True)
-class DispatchTarget:
-    """
-    一次生成分发的目标定位。纯数据载体，不涉及 Python-Telegram-Bot。
-
-    handleLLMMessage 入口构造、全程透传（update 对象不跨任务——防抖窗口后
-    可能已过期，定位信息经它存活）。消费：防抖键、typing、生成、分发闭包、日志。
-
-    字段:
-        chatID:       聊天 ID（str 形式；TG API 调用处由 handler 闭包 int() 转换）
-        userID:       触发用户 ID（白名单校验通过后的 int）
-        username:     展示用 @username / first_name / str(userID)（getSenderDisplayName）
-        triggerMsgID: 触发消息 ID——发送回复的 replyTo 目标、reaction 挂载目标
-    """
-    chatID: str
-    userID: int
-    username: str
-    triggerMsgID: int
-
-
-@dataclass(frozen=True, kw_only=True)
-class GeneratedOutput:
-    """
-    一次生成的完整产出。纯数据载体，不涉及 Python-Telegram-Bot。
-
-    _runLLMPipeline 生成完成后组装（唯一生产点）；dispatchGeneratedOutput
-    按内容分流（空输出丢弃 / 文字回复 / 记忆操作），prompt 线与展示线在此汇合。
-
-    字段:
-        reply:              LLM 生成回复。includeContext=True 时已由组装方剥离
-                            <MEMORY_ACTION> 块并逐条校验（失败项丢弃；首生成路径
-                            失败计数不透出，retry/feedback 路径经 memoryFailedCount
-                            写回 item）；False 时记忆块保留在原文
-        memoryActions:      校验通过的记忆操作列表（MemoryAction），
-                            includeContext=False 时恒 []
-        displayOriginalMsg: 展示用原始消息（字符串线）——"@username：[附带 N 张图片]
-                            \n combinedText" + 可选 URL 摘要。消费：审核卡退化路径、
-                            console/chatScreen item、日志、记忆审核的触发消息
-        includeContext:     本次生成是否带上下文（retry 复用、记忆门禁依赖）
-        urlContexts:        URL 抓取结果（默认 None；唯一生产点实传空时为 []）；
-                            retry 复用不重抓
-        displayBlocks:      审核卡结构化展示块（DisplayBlocks：引用/当前配对 +
-                            标注前缀）；None 时渲染层走退化路径（对 displayOriginalMsg
-                            按引用标记切分）。降级边界：console/chatScreen 的记忆审核项
-                            永远无 displayBlocks——这两端本就不渲染 blockquote，
-                            属可接受降级
-        memoryQuery:        首生成使用的结构化 current/reply 轮次；进入审核项后供
-                            retry 复用，避免从 displayOriginalMsg 逆向恢复检索查询
-    """
-    reply: str
-    memoryActions: list
-    displayOriginalMsg: str
-    includeContext: bool
-    urlContexts: list[dict] | None = None
-    displayBlocks: object | None = None
-    memoryQuery: MemoryQuery | None = None
-
-
 async def _safeReaction(sendReaction, emoji: str) -> None:
     """reaction 失败记 WARNING 后继续（不中断分发）；sendReaction 为 None 时跳过。"""
     if sendReaction is None:
@@ -603,7 +490,7 @@ async def _safeReaction(sendReaction, emoji: str) -> None:
 async def dispatchTextReply(
     generated: GeneratedOutput,
     *,
-    target: DispatchTarget,
+    origin: MessageOrigin,
     autoMode: str,
     opsList: list,
     bot=None,
@@ -622,51 +509,52 @@ async def dispatchTextReply(
     if autoMode == "on":
         await sendLLMReply(
             bot=bot,
-            chatID=target.chatID,
+            chatID=origin.chatID,
             reply=generated.reply,
-            replyToMessageID=target.triggerMsgID,
+            replyToMessageID=origin.messageID,
             maxLength=TG_MESSAGE_MAX_LEN,
         )
-        await logAction("System", f"LLM 生成内容直接发送至 @{target.username}（{target.chatID}）", f"原文：{generated.displayOriginalMsg}", LogLevel.INFO, LogChildType.WITH_CHILD)
+        await logAction("System", f"LLM 生成内容直接发送至 @{origin.sender}（{origin.chatID}）", f"原文：{generated.displayOriginalMsg}", LogLevel.INFO, LogChildType.WITH_CHILD)
         await logAction("System", "", f"生成的消息：{generated.reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
 
     elif autoMode == "off":
         if not opsList:
-            await bot.send_message(chat_id=target.chatID, text=_NO_OPS_HINT)
+            await bot.send_message(chat_id=origin.chatID, text=_NO_OPS_HINT)
         else:
             if sendReview is None:
                 raise RuntimeError("dispatchTextReply: off 分支需要 sendReview 回调")
             for opsID in opsList:
                 await sendReview(opsID)
             await _safeReaction(sendReaction, "👀")
-            await logAction("System", f"LLM 生成内容待审核：@{target.username}（{target.chatID}）", f"原文：{generated.displayOriginalMsg}", LogLevel.INFO, LogChildType.WITH_CHILD)
+            await logAction("System", f"LLM 生成内容待审核：@{origin.sender}（{origin.chatID}）", f"原文：{generated.displayOriginalMsg}", LogLevel.INFO, LogChildType.WITH_CHILD)
             await logAction("System", "", f"生成的消息：{generated.reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
 
     else:
         if not opsList:
-            await bot.send_message(chat_id=target.chatID, text=_NO_OPS_HINT)
+            await bot.send_message(chat_id=origin.chatID, text=_NO_OPS_HINT)
         else:
             addReviewItem(
-                chatID=target.chatID,
-                messageID=target.triggerMsgID,
+                chatID=origin.chatID,
+                messageID=origin.messageID,
                 originalMsg=generated.displayOriginalMsg,
                 reply=generated.reply,
                 opsID=opsList[0],
-                userID=target.userID,
+                userID=origin.userID,
                 includeContext=generated.includeContext,
                 urlContexts=generated.urlContexts,
                 displayBlocks=generated.displayBlocks,
                 memoryQuery=generated.memoryQuery,
+                generationRequest=generated.generationRequest,
             )
             await _safeReaction(sendReaction, "👀")
-            await logAction("System", f"LLM 生成内容等待控制台审核：@{target.username}（{target.chatID}）", f"原文：{generated.displayOriginalMsg}", LogLevel.INFO, LogChildType.WITH_CHILD)
+            await logAction("System", f"LLM 生成内容等待控制台审核：@{origin.sender}（{origin.chatID}）", f"原文：{generated.displayOriginalMsg}", LogLevel.INFO, LogChildType.WITH_CHILD)
             await logAction("System", "", f"生成的消息：{generated.reply}", LogLevel.INFO, LogChildType.LAST_CHILD)
 
 
 async def dispatchGeneratedOutput(
     generated: GeneratedOutput,
     *,
-    target: DispatchTarget,
+    origin: MessageOrigin,
     autoMode: str,
     opsList: list,
     bot=None,
@@ -685,7 +573,7 @@ async def dispatchGeneratedOutput(
         await _safeReaction(sendReaction, "🤔")
         await logSystemEvent(
             "LLM 回复为空",
-            f"chatID={target.chatID}, user=@{target.username} | 回复为空且无有效记忆操作",
+            f"chatID={origin.chatID}, user=@{origin.sender} | 回复为空且无有效记忆操作",
             LogLevel.WARNING,
             LogChildType.WITH_ONE_CHILD,
         )
@@ -694,7 +582,7 @@ async def dispatchGeneratedOutput(
     if generated.reply.strip():
         await dispatchTextReply(
             generated,
-            target=target,
+            origin=origin,
             autoMode=autoMode,
             opsList=opsList,
             bot=bot,
@@ -706,9 +594,9 @@ async def dispatchGeneratedOutput(
         generated.memoryActions,
         autoMode=autoMode,
         opsList=opsList,
-        chatID=target.chatID,
+        chatID=origin.chatID,
         originalMsg=generated.displayOriginalMsg,
-        userID=target.userID,
+        userID=origin.userID,
         sendTGMemoryReview=sendTGMemoryReview,
     )
 
@@ -735,7 +623,7 @@ def truncateCardText(text: str, limit: int) -> str:
     return truncateText(text, limit, suffix="……[内容过长，已截断]")
 
 
-def renderOriginalMsgBlock(originalMsg: str, displayBlocks=None) -> str:
+def renderOriginalMsgBlock(originalMsg: str, displayBlocks: DisplayBlocks | None = None) -> str:
     """
     渲染原始消息区为 HTML blockquote。
 
@@ -743,9 +631,9 @@ def renderOriginalMsgBlock(originalMsg: str, displayBlocks=None) -> str:
     合并在同一个块里、以粗体小节区分——TG 块的宽度由块内最长行决定（HTML 无法
     设置块宽），分块在内容长短悬殊时两条右边缘参差不齐；合块只留一条边缘。
 
-    displayBlocks 非 None（数据源结构化，messagePrep.DisplayBlocks）时走结构化渲染：
+    displayBlocks 非 None（数据源结构化，models.DisplayBlocks）时走结构化渲染：
     prefix 标注行 + 每 pair 一个合并 blockquote（多消息批次每条消息一块，配对保真）；
-    None 时走退化路径：originalMsg 可能是 injectReplyTextContext 的输出
+    None 时走退化路径：originalMsg 可能是 GenerationRequest.displayOriginalMsg 的文本
     （含 [引用的消息]/[当前用户消息] 标记 + <@sender>），按标记切分后同样
     合并为一个双小节块；无标记则整块一个 blockquote。
     两条路径都遵守铁律：先截断原始文本再 escape（截断 → 转义 → 拼），避免断实体。
@@ -781,7 +669,7 @@ def renderOriginalMsgBlock(originalMsg: str, displayBlocks=None) -> str:
     return f"<blockquote>{escapeHtml(truncated)}</blockquote>"
 
 
-def formatReviewText(originalMsg: str, reply: str, displayBlocks=None) -> str:
+def formatReviewText(originalMsg: str, reply: str, displayBlocks: DisplayBlocks | None = None) -> str:
     """
     构造回复审核卡片 HTML（blockquote 原始消息区 + <pre> Monospace 回复块）。
 
@@ -814,7 +702,7 @@ def buildReviewKeyboard(chatID) -> InlineKeyboardMarkup:
     ])
 
 
-def renderReviewCard(originalMsg: str, reply: str, chatID, suffix: str = "", displayBlocks=None) -> tuple[str, InlineKeyboardMarkup]:
+def renderReviewCard(originalMsg: str, reply: str, chatID, suffix: str = "", displayBlocks: DisplayBlocks | None = None) -> tuple[str, InlineKeyboardMarkup]:
     """
     构造回复审核卡片 (text, markup)。
     suffix 接 retry/feedback 的动态后缀（warningText / 正在生成 / 失败恢复），整体再截断到 TG 上限。
@@ -824,7 +712,7 @@ def renderReviewCard(originalMsg: str, reply: str, chatID, suffix: str = "", dis
     return truncateCardText(text, TG_MESSAGE_MAX_LEN), buildReviewKeyboard(chatID)
 
 
-def formatMemoryReviewText(action: dict, originalMsg: str, displayBlocks=None) -> str:
+def formatMemoryReviewText(action: dict, originalMsg: str, displayBlocks: DisplayBlocks | None = None) -> str:
     """
     构造记忆审核卡片 HTML（普通文本标题 + 字段行 + 触发消息 blockquote）。
 
@@ -886,7 +774,7 @@ def buildMemoryReviewKeyboard(chatID) -> InlineKeyboardMarkup:
     ])
 
 
-def renderMemoryReviewCard(action: dict, originalMsg: str, chatID, suffix: str = "", displayBlocks=None) -> tuple[str, InlineKeyboardMarkup]:
+def renderMemoryReviewCard(action: dict, originalMsg: str, chatID, suffix: str = "", displayBlocks: DisplayBlocks | None = None) -> tuple[str, InlineKeyboardMarkup]:
     """
     构造记忆审核卡片 (text, markup)。
     memory 审核不支持 :fb（handleFeedbackRetry 拒绝 llm_memreview_），故提示只有 :edit。
@@ -905,46 +793,36 @@ def renderMemoryReviewCard(action: dict, originalMsg: str, chatID, suffix: str =
 async def _retryReplyReview(
     item: dict,
     *,
+    feedback: str = "",
     memoryDispatcher=dispatchMemoryActionsToConsole,
     logLabel: str = "console retry",
 ) -> dict:
-    """重新生成回复，并复用审核项保存的原始 memory 查询轮次。"""
-    newReply = await generateReply(
-        item["originalMsg"],
-        item["chatID"],
-        includeContext=bool(item.get("includeContext")),
-        userID=item.get("userID"),
-        urlContexts=item.get("urlContexts"),
-        memoryQuery=item.get("memoryQuery"),
-    )
-
-    # 清理 <MEMORY_ACTION> 块、校验并按 memoryDispatcher 分发（默认入 console 队列）
-    failed = 0
-    if item.get("includeContext"):
-        newReply, validated, failed = await extractValidatedMemoryActions(
-            newReply,
-            logLabel=logLabel,
-            chatID=item.get("chatID"),
-            userID=item.get("userID"),
-        )
+    """复用原始请求生成回复；反馈只用于本次生成，不写回请求。"""
+    request = item.get("generationRequest")
+    if request is None:
+        raise ValueError("审核项缺少原始生成请求，无法重试")
+    generated = await generateResponse(request, feedback=feedback, logLabel=logLabel)
+    if request.includeContext:
         await memoryDispatcher(
-            validated,
-            chatID=item["chatID"],
-            originalMsg=item["originalMsg"],
-            opsID=item["opsID"],
-            userID=item.get("userID"),
-            logLabel=logLabel,
+            generated.memoryActions,
+            chatID=request.chatID, originalMsg=item["originalMsg"],
+            opsID=item["opsID"], userID=request.userID, logLabel=logLabel,
         )
 
+    feedback = feedback.strip()
+    title = "LLM 审核：补充反馈重试" if feedback else "LLM 审核：重新生成"
+    detail = f"补充：{feedback[:_LOG_FEEDBACK_LEN]}" if feedback else f"原文：{item['originalMsg']}"
+    await logAction("System", title, detail, LogLevel.INFO, LogChildType.WITH_CHILD)
     await logAction(
-        "System", "LLM 审核：重新生成",
-        f"原文：{item['originalMsg']}", LogLevel.INFO, LogChildType.WITH_CHILD,
+        "System", "", f"生成的消息：{generated.reply}",
+        LogLevel.INFO, LogChildType.LAST_CHILD,
     )
-    await logAction(
-        "System", "",
-        f"生成的消息：{newReply}", LogLevel.INFO, LogChildType.LAST_CHILD,
-    )
-    return {**item, "reply": newReply, "memoryFailedCount": failed}
+    return {
+        **item,
+        "reply": generated.reply,
+        "memoryQuery": request.memoryQuery,
+        "memoryFailedCount": generated.memoryFailedCount,
+    }
 
 
 async def reviewRetryWithFeedback(
@@ -954,87 +832,12 @@ async def reviewRetryWithFeedback(
     memoryDispatcher=dispatchMemoryActionsToConsole,
     logLabel: str = "feedback retry",
 ) -> dict:
-    """
-    Ops 补充反馈后打回去重试生成。
-
-    将 ops 的补充要求追加到 originalMsg 后，作为 [背景信息补充：...] 块。
-    LLM 会将其理解为可信的背景信息；memory 检索则在保留原始 turns 的同时，
-    把 feedbackText 作为本次当前语义、辅助语义和词面查询的补充，但不把
-    增强后的展示字符串反解析为检索输入。生成结束后立即清掉 feedbackText，
-    后续普通 retry 不会继承本次反馈。
-
-    参数:
-        item: 原始审核项
-        feedback: ops 输入的补充要求（超 LLM_REVIEW_FEEDBACK_MAX_LENGTH 抛 ValueError）
-
-    返回:
-        更新后的审核项（reply 已替换，含 memoryFailedCount）
-
-    抛出:
-        ValueError: feedback 超过 LLM_REVIEW_FEEDBACK_MAX_LENGTH（调用方负责提示用户精简）
-    """
-    trimmed = feedback.strip()
-    # 长度检查置于 enhancedMsg 构造之前：超长直接拒绝，不白调用 generateReply
-    if len(trimmed) > LLM_REVIEW_FEEDBACK_MAX_LENGTH:
-        raise ValueError(
-            f"反馈过长喵（{len(trimmed)}/{LLM_REVIEW_FEEDBACK_MAX_LENGTH} 字），请精简后重试"
-        )
-
-    # 格式化并追加。
-    # trimmed 的分隔符中和由下游统一处理：
-    # enhancedMsg 作为 userMessage 流经 generateReply → buildConversationContext，
-    # 在进 <CURRENT_USER_MESSAGE> 前被 neutralizePromptDelimiters 整体中和，
-    # 故此处不再各自转义（见 utils/llm/promptSafety.py）。
-    enhancedMsg = f"{item['originalMsg']}\n\n[背景信息补充：{trimmed}]"
-    storedMemoryQuery = item.get("memoryQuery")
-    retryMemoryQuery = storedMemoryQuery
-    if storedMemoryQuery is not None:
-        retryMemoryQuery = replace(storedMemoryQuery, feedbackText=trimmed)
-
-    newReply = await generateReply(
-        enhancedMsg,
-        item["chatID"],
-        includeContext=bool(item.get("includeContext")),
-        userID=item.get("userID"),
-        urlContexts=item.get("urlContexts"),
-        memoryQuery=retryMemoryQuery,
+    """以一次性补充反馈重新生成回复；不改变原始消息或后续重试的输入。"""
+    if item.get("kind", "reply") == "memory":
+        raise ValueError("记忆审核项暂不支持重试")
+    return await _retryReplyReview(
+        item, feedback=feedback, memoryDispatcher=memoryDispatcher, logLabel=logLabel,
     )
-
-    # 清理 <MEMORY_ACTION> 块、校验并按 memoryDispatcher 分发（默认入 console 队列）
-    failed = 0
-    if item.get("includeContext"):
-        newReply, validated, failed = await extractValidatedMemoryActions(
-            newReply, logLabel=logLabel,
-            chatID=item.get("chatID"),
-            userID=item.get("userID"),
-        )
-        await memoryDispatcher(
-            validated,
-            chatID=item["chatID"],
-            originalMsg=item["originalMsg"],
-            opsID=item["opsID"],
-            userID=item.get("userID"),
-            logLabel=logLabel,
-        )
-
-    await logAction(
-        "System",
-        "LLM 审核：补充反馈重试",
-        f"补充：{trimmed[:_LOG_FEEDBACK_LEN]}", LogLevel.INFO, LogChildType.WITH_CHILD,
-    )
-    await logAction(
-        "System", "",
-        f"生成的消息：{newReply}", LogLevel.INFO, LogChildType.LAST_CHILD,
-    )
-    return {
-        **item,
-        "reply": newReply,
-        "memoryQuery": (
-            replace(storedMemoryQuery, feedbackText="")
-            if storedMemoryQuery is not None else None
-        ),
-        "memoryFailedCount": failed,
-    }
 
 
 async def _approveMemoryReview(item: dict) -> bool:
@@ -1155,7 +958,7 @@ async def reviewRetry(
         更新后的审核项（reply 已替换，含 memoryFailedCount）
     """
     if item.get("kind", "reply") == "memory":
-        raise ValueError("memory 审核项暂不支持重试")
+        raise ValueError("记忆审核项暂不支持重试")
 
     return await _retryReplyReview(item, memoryDispatcher=memoryDispatcher, logLabel=logLabel)
 
