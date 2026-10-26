@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from handlers.cli import handleConsoleCommand
+
 from utils.command import send
 
 
@@ -57,6 +59,15 @@ class TestChatModeThreeStates:
         await send.execute(_app(), ["-c", "12345"])
         mockScreen.assert_awaited_once()
 
+    @pytest.mark.parametrize("option", ["-c", "--chat"])
+    @patch("utils.command.send.chatIDList", new_callable=AsyncMock)
+    @patch("utils.chatScreen.chatScreen", new_callable=AsyncMock, return_value=None)
+    async def test_negative_group_id_enters_directly(self, mockScreen, mockPick, option):
+        app = _app()
+        await handleConsoleCommand(app, f"/send {option} -1001234567890")
+        mockScreen.assert_awaited_once_with(app, app.bot, "-1001234567890")
+        mockPick.assert_not_awaited()
+
 
 
 class TestSendValidation:
@@ -72,6 +83,22 @@ class TestSendValidation:
     async def test_valid_send_invokes(self, mockSend):
         await send.execute(_app(), ["-id", "12345", "-t", "hello"])
         mockSend.assert_awaited_once()
+
+    @pytest.mark.parametrize("option", ["-id", "--id", "-i"])
+    @patch("utils.command.send.sendMsg", new_callable=AsyncMock)
+    async def test_group_and_username_targets(self, mockSend, option):
+        app = _app()
+        await handleConsoleCommand(app, f"/send {option} -1001234567890 12345 @example -t '你好' ")
+        mockSend.assert_awaited_once_with(
+            app.bot, ["-1001234567890", "12345", "@example"], None, "你好",
+        )
+
+    @pytest.mark.parametrize("idArgs", ["-id", "-id ''", "-id -id 12345", "-id 12345 -id"])
+    @patch("utils.command.send.sendMsg", new_callable=AsyncMock)
+    async def test_missing_target_stops_send(self, mockSend, idArgs, capsys):
+        await handleConsoleCommand(_app(), f"/send {idArgs} -t '你好'")
+        assert "❌" in capsys.readouterr().out
+        mockSend.assert_not_awaited()
 
 
 

@@ -46,13 +46,15 @@ parseArgsTokens() 是通用参数解析器，供各指令模块调用。
     - --flag value
     - --flag=value
     - -id 123 456 789
-    并自动忽略非以"-"开头的 token。
+    - -c -1001234567890
+    独立出现、未归属任何参数的普通 token 会被忽略。
 
 关于参数解析行为的要点：
     - 若 aliasMap 存在且输入为缩写（如 -a），会被替换为对应的全称键（如 add）
     - 若 parsed[key] 是 list，则追加读取到的多个值
     - 若 parsed[key] 是其他类型，则仅接收第一个值
     - 若参数未显式带值，会返回 True 作为占位（flag 语义）
+    - 负整数可作为参数值；所有带值参数均保留字符串，由命令校验或转换类型
 
 该解析器是所有命令模块共享的基础能力，使得 Bot 的指令系统能够以统一、可扩展的方式处理各种输入。
 """
@@ -158,8 +160,9 @@ def parseArgsTokens(parsed: dict, tokens: list[str], aliasMap: dict|None=None):
     原始 parsed 形如：
         {"at": None, "text": None, "id": [], "chat": None}
 
-    进行分词，形成新的参数列表（tokens），把带"-"的和后一个不带"-"的元素对应，
-    最后返回填充了各个参数值的 parsed
+    将 tokens 中的参数名与后续值对应，原地填充并返回 parsed。
+    以 "-" 开头的 token 表示新参数，但负整数（如 -1001234567890）作为值接收。
+    所有值保持字符串，具体类型与合法性由各命令校验。
 
         另外，还支持解析简写的参数，这主要通过各指令模块中的 argAlias:dict 实现
             - argAlias 形如：
@@ -180,9 +183,9 @@ def parseArgsTokens(parsed: dict, tokens: list[str], aliasMap: dict|None=None):
         值/[] = 参数出现且有值（标量取首值；list 类型收集全部后续值；光杆时 list 收到 [True]）
 
 
-    已知限制：-n -5 的负数值会被当作 flag 跳过（用 -n=-5 形式传递）。
+    其他以 "-" 开头的值请用等号形式传入，如 --text=--正文。
 
-    非参数（不以 '-' 开头的 token）会被忽略。
+    独立出现、未归属任何参数的普通 token 会被忽略。
     '''
 
     i = 0
@@ -218,10 +221,13 @@ def parseArgsTokens(parsed: dict, tokens: list[str], aliasMap: dict|None=None):
             values.append(eqValue)
             i += 1
         else:
-            # 向后收集所有不以“-”开头的 token
+            # 负整数也属于值，避免负号后紧接的值被识别为新参数。
             j = i + 1
-            while j < len(tokens) and not tokens[j].startswith("-"):
-                values.append(tokens[j])
+            while j < len(tokens):
+                value = tokens[j]
+                if value.startswith("-") and not value[1:].isdecimal():
+                    break
+                values.append(value)
                 j += 1
             i = j
 

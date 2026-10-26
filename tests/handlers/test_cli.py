@@ -100,13 +100,40 @@ class TestFlagSemantics:
 
 
 class TestEdgeCases:
-    def test_negative_number_value_requires_eq_form(self):
-        """-n -5 的 -5 被当 flag 跳过（已知限制，= 形式可传）"""
-        out = parseArgsTokens({"n": None}, ["-n", "-5"])
-        assert out["n"] is True      # 光杆；-5 被跳过
+    @pytest.mark.parametrize("tokens", [["-n", "-5"], ["-n=-5"]])
+    def test_negative_integer_remains_string(self, tokens):
+        """负整数作为值传入，是否允许负数由命令自行校验。"""
+        out = parseArgsTokens({"n": None}, tokens)
+        assert out["n"] == "-5"
 
-        out2 = parseArgsTokens({"n": None}, ["-n=-5"])
-        assert out2["n"] == "-5"
+    @pytest.mark.parametrize("option", ["-c", "--chat"])
+    def test_negative_chat_id_followed_by_option(self, option):
+        out = parseArgsTokens(
+            {"chat": None, "n": None},
+            [option, "-1001234567890", "-n", "50"],
+            {"c": "chat"},
+        )
+        assert out == {"chat": "-1001234567890", "n": "50"}
+
+    def test_list_collects_mixed_positive_and_negative_ids(self):
+        out = parseArgsTokens(
+            {"id": [], "text": None},
+            ["-id", "-1001234567890", "12345", "-67890", "-t", "你好"],
+            {"t": "text"},
+        )
+        assert out == {"id": ["-1001234567890", "12345", "-67890"], "text": "你好"}
+
+    def test_unknown_option_still_stops_value_collection(self):
+        out = parseArgsTokens(
+            {"chat": None, "export": None},
+            ["-c", "--typo", "--export"],
+            {"c": "chat"},
+        )
+        assert out == {"chat": True, "export": True}
+
+    def test_leading_hyphen_text_uses_eq_form(self):
+        out = parseArgsTokens({"text": None}, ["--text=--这是一段正文"])
+        assert out["text"] == "--这是一段正文"
 
     def test_value_containing_hyphen(self):
         out = parseArgsTokens({"t": None}, ["-t", "hello-world", "x"])

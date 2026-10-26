@@ -178,7 +178,7 @@ async def execute(app, args):
         print("❌ 参数 <-t/--text <text>> 要加上才可以发得出文字的说\n")
         return
     
-    if not idList or idList == [True]:
+    if not idList or any(chatID is True or not chatID for chatID in idList):
         print("❌ 参数 <-id/--id <chatID>> 得加上才对的说\n")
         return
     

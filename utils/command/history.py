@@ -16,8 +16,10 @@ utils/command/history.py
 /history                               # 列出所有有记录的会话
 /history -c <chatID>                   # 预览该会话最近 N 条消息（默认 20 条）
 /history -c <chatID> -n <数量>         # 预览最近指定数量的消息
-/history -c <chatID> --export          # 导出该会话为 txt 文件
-/history --export                      # 导出所有会话为 txt 文件
+/history -c <chatID> --export          # 导出该会话的全部消息
+/history -c <chatID> --export -n <数量> # 导出该会话最近指定数量的消息
+/history --export                      # 导出所有会话的全部消息
+/history --export -n <数量>             # 每个会话导出最近指定数量的消息
 
 导出文件保存至 data/chatExport/ 目录，文件名格式为：
     chat_<chatID>_<日期时间>.txt（单个或全部导出均按会话分文件）
@@ -28,10 +30,10 @@ utils/command/history.py
 ================================================================================
 
 -c / --chat   <chatID>   指定目标会话 ID
--n            <数量>     预览条数（默认使用 config.CHAT_PREVIEW_LIMIT）
+-n            <数量>     预览或导出的消息条数；预览不指定时默认使用 config.CHAT_PREVIEW_LIMIT
 -e / --export            执行导出操作（而非预览）
 
-注意：--export 优先级高于 -n，同时指定时 -n 会被忽略（导出始终为全量）。
+不带 -n 时，导出全部可读取的消息。
 
 
 ================================================================================
@@ -92,42 +94,46 @@ async def execute(app, args: list[str]):
     countArg  = parsed["n"]
     doExport  = parsed["export"]
 
+    # 显式指定的会话必须有效，缺值时不能退回列表或扩大为全部导出。
+    # 同时应当能正常解析负数的 chatID。
+    # 出于可读性考虑就不把该判断放进子命令的规则里了。
+    if chatID is not None:
+        if chatID is True or not chatID:
+            print("❌ -c/--chat 后需要提供会话 ID 的说\n")
+            return
+        if not re.fullmatch(r"-?[0-9]+", chatID):
+            print("❌ 会话 ID 必须是整数的说\n")
+            return
+
+    limit = None
+    if countArg is not None:
+        if countArg is True or not countArg:
+            print("❌ -n 后需要提供消息条数的说\n")
+            return
+        try:
+            limit = int(countArg)
+            if limit <= 0:
+                print("❌ 消息条数必须是正整数的说\n")
+                return
+        except ValueError:
+            print(f"❌ 这个 {countArg} 是无效的条数哦\n")
+            return
 
     # --export 导出模式
     if doExport is not None:
-        if chatID and chatID is not True:
-            await logAction(
-                "System",
-                f"/history --export -c {chatID}",
-                "开始导出喵",
-                LogLevel.INFO,
-                LogChildType.WITH_CHILD
-            )
-            await _exportChat(chatID)
+        if chatID is not None:
+            await _exportChat(chatID, limit=limit)
         else:
-            await logAction(
-                "System",
-                "/history --export",
-                "开始导出全部会话喵",
-                LogLevel.INFO,
-                LogChildType.WITH_CHILD
-            )
-            await _exportAll()
+            await _exportAllChat(limit=limit)
+        return
+
+    if countArg is not None and chatID is None:
+        print("❌ 使用 -n 预览消息时，还需要用 -c/--chat 指定会话 ID 喵——\n")
         return
 
     # -c <chatID> 预览模式
-    if chatID and chatID is not True:
-        limit = CHAT_PREVIEW_LIMIT
-        if countArg and countArg is not True:
-            try:
-                limit = int(countArg)
-                if limit <= 0:
-                    print("❌ 预览条数必须是正整数的说——\n")
-                    return
-            except ValueError:
-                print(f"❌ 这个 {countArg} 是无效的条数哦——\n")
-                return
-        await _previewChat(chatID, limit)
+    if chatID is not None:
+        await _previewChat(chatID, limit if limit is not None else CHAT_PREVIEW_LIMIT)
         return
 
     # 无参数：列出所有会话
@@ -215,20 +221,20 @@ async def _previewChat(chatID: str, limit: int):
     print()
 
 
-async def _exportChat(chatID: str):
-    """将指定会话导出为 txt 文件"""
+async def _exportChat(chatID: str, limit: int | None=None):
+    """将指定会话的聊天历史导出为 txt 文件"""
     total = await getMessageCount(chatID)
 
     if total == 0:
         await logSystemEvent(
             "",
-            f"ChatID {chatID} 暂无任何聊天记录，无需导出喵……",
+            f"ChatID {chatID} 暂无任何聊天记录，无需导出……",
             LogLevel.INFO,
             LogChildType.LAST_CHILD
         )
         return
 
-    messages = await loadHistory(chatID)
+    messages = await loadHistory(chatID, limit=limit)
 
     if not messages:
         await logSystemEvent(
@@ -255,14 +261,14 @@ async def _exportChat(chatID: str):
         )
 
 
-async def _exportAll():
+async def _exportAllChat(limit: int | None=None):
     """将所有会话导出为各自的 txt 文件"""
     chats = await getChatList()
 
     if not chats:
         await logSystemEvent(
             "",
-            "暂无任何聊天记录，无需导出喵……",
+            "暂无任何聊天记录，无需导出……",
             LogLevel.INFO,
             LogChildType.LAST_CHILD
         )
@@ -283,7 +289,7 @@ async def _exportAll():
 
     for chat in chats:
         chatID = chat["chat_id"]
-        messages = await loadHistory(chatID)
+        messages = await loadHistory(chatID, limit=limit)
 
         if not messages:
             await logSystemEvent(
@@ -371,8 +377,8 @@ def getHelp():
 
         "usage": (
             "/history\n"
-            "/history -c <chatID> (-n <数量>)\n"
-            "/history (-c <chatID>) --export"
+            "/history -c <chatID> [-n <数量>]\n"
+            "/history [ -c <chatID> ] --export [-n <数量>]"
         ),
 
         "example": (
@@ -380,7 +386,9 @@ def getHelp():
             "预览最近 20 条：/history -c '1234567'\n"
             "预览最近 50 条：/history -c '1234567' -n 50\n"
             "导出指定会话：/history -c '1234567' --export\n"
-            "导出全部会话：/history --export"
+            "导出指定会话最近 50 条：/history -c '1234567' --export -n 50\n"
+            "导出全部会话：/history --export\n"
+            "导出全部会话各自最近 50 条：/history --export -n 50"
         ),
 
     }
