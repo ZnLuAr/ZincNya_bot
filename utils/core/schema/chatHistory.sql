@@ -8,8 +8,10 @@ CREATE TABLE IF NOT EXISTS messages (
     direction TEXT NOT NULL,
     sender TEXT,
     content BLOB NOT NULL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    telegram_message_id INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_id ON messages(chat_id);
 CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_telegram_message ON messages(chat_id, telegram_message_id);

@@ -5,8 +5,7 @@ utils/core/stateManager.py
 
 管理的状态：
 - interactiveMode: 是否处于交互模式（CLI 界面接管输入）
-- interactiveChatID: chatScreen receiver 当前停留的聊天 ID
-- messageQueue: 全局消息队列
+- interactiveChatID / messageQueue: 当前 chatScreen 的聊天 ID 与展示通知队列
 - memoryRuntime: 可选的 LLM memory 在线索引运行时引用
 - shutdownEvent / restartRequested: 远程关机/重启信号
 """
@@ -88,17 +87,8 @@ class StateManager:
             return self._interactiveMode
 
 
-    def setInteractiveChatID(self, chatID):
-        """
-        设置 receiver 活跃聊天 ID（None 清除）。入参统一 str() 归一——
-        whitelist uid（int/str 不定）与 llm 侧 str，不如直接统一用 str
-        """
-        with self._stateLock:
-            self._interactiveChatID = str(chatID) if chatID is not None else None
-
-
     def getInteractiveChatID(self) -> Optional[str]:
-        """获取 receiver 活跃聊天 ID（无活跃窗口为 None）"""
+        """获取正在订阅消息的聊天 ID；无聊天界面时为 None。"""
         with self._stateLock:
             return self._interactiveChatID
 
@@ -192,20 +182,32 @@ class StateManager:
     # 消息队列管理
     # ========================================================================
 
-    def setMessageQueue(self, queue: asyncio.Queue):
-        """设置全局消息队列"""
+    def subscribeChatMessages(self, chatID: str) -> asyncio.Queue:
+        """为一次 chatScreen 聊天会话创建展示队列，在加载历史之前调用。"""
         with self._stateLock:
-            self._messageQueue = queue
-
-
-    def getMessageQueue(self) -> Optional[asyncio.Queue]:
-        """获取全局消息队列"""
-        with self._stateLock:
+            self._interactiveChatID = str(chatID)
+            self._messageQueue = asyncio.Queue()
             return self._messageQueue
 
 
+    def unsubscribeChatMessages(self, queue: asyncio.Queue):
+        """退出时解除该会话的订阅；旧会话不能解除新会话的订阅。"""
+        with self._stateLock:
+            if self._messageQueue is queue:
+                self._interactiveChatID = None
+                self._messageQueue = None
 
 
+    def notifyChatMessage(self, chatID: str, recordID: int, message):
+        """在应用事件循环内，向当前聊天发送已提交记录的展示通知。"""
+        with self._stateLock:
+            if self._interactiveChatID == str(chatID) and self._messageQueue is not None:
+                self._messageQueue.put_nowait((recordID, message))
+
+
+
+
+    # ========================================================================
     # LLM memory runtime 管理
     # ========================================================================
 

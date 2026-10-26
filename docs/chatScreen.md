@@ -1,6 +1,6 @@
 # ChatScreen 聊天界面技术文档
 
-> 最后更新：2026-09-07
+> 最后更新：2026-10-26
 >
 > ChatScreen 是 TUI 框架 `FullScreenTUIApp` 范式的复杂实例——会话契约、范式分层、横切关注点的总规则写在 [docs/tui.md](tui.md)，本文专注聊天界面自身的实现细节。
 >
@@ -39,11 +39,11 @@
 
 ## 架构
 
-chatScreen 功能由两层协作实现——业务编排层（`session.py`）负责管理构造与三态收尾，UI 控制层（`ChatScreenApp`）管渲染、键盘事件，以及 receiver/回调的自管生命周期。重构后两者通过 `await ui.runSession()`（全生命周期）连起来，里面再套 `runOnce`（单轮事件）。
+ChatScreen 功能由两层协作实现——业务编排层（`session.py`）负责管理构造与收尾，UI 控制层（`ChatScreenApp`）司掌渲染、键盘事件，以及 receiver/回调的自管生命周期。两者通过 `await ui.runSession()`（全生命周期）连起来，里面再套 `runOnce`（单轮事件）。
 
-为什么要分成两层？这是因为聊天界面在运转时要同时做两件事：一边要响应用户的按键、滚动、发送消息（这是 UI 的活），一边要处理 LLM 审核命令、管理后台协程、清理资源（即业务逻辑）。把它们拆开来，UI 层就只管"界面长什么样、键盘按下去发生什么"，业务层则负责"进来了要做什么、退出时要清理什么"，两边各干各的。
+聊天界面运转时，应用需要同时处理用户按键、滚动、发送消息（UI 控制层）和 LLM 审核命令、管理后台协程与清理资源（业务逻辑层）两方面的工作，两层的设计就刚好契合其工作的编排了。
 
-详细来说，就是通过 `runSession` 这个全生命周期入口连起来：`session` 调一次 `await ui.runSession()`，里面 `onEnter` 起receiver、`mainLoop` 跑业务主循环（每轮 `await ui.runOnce()` 等一次按键）、`onExit` 收尾。举个例子：UI 正常渲染，若用户按了发送键，`runOnce()` 就返回输入框内容，内容传到业务主循环，调用 Telegram API 发出去；如果按下的是 Esc，`runOnce()` 返回 `None`，这时候，业务层知道该退出了。
+详细来说，就是通过 `runSession` 这个全生命周期入口连起来：`session` 调一次 `await ui.runSession()`，里面 `onEnter` 起receiver、`mainLoop` 跑业务主循环（每轮 `await ui.runOnce()` 等一次按键）、`onExit` 收尾。举个例子：UI 正常渲染，若用户按了发送键，`runOnce()` 就返回输入框内容，内容传到业务主循环，调用 Telegram API 发出去；如果按下的是 Esc，`runOnce()` 返回 `None`，这时候，业务层就知道该退出了。
 
 ### 1. 业务编排层
 
@@ -51,10 +51,10 @@ chatScreen 功能由两层协作实现——业务编排层（`session.py`）负
 
 主循环 `runMainLoop` 的返回值 `reviewEditItem` 有三种可能——下文统称**三态**：① 正常退出（`None`，Esc/Ctrl+C）；② Alt+←/→ 切换聊天对象（switch 信号 dict）；③ 审核编辑模式中退出（审核项 dict）。session 对这三种各有一种收尾动作，紧跟着的表格逐条列。
 
-早时手工管的 `interactiveMode` 旗标、`consoleOutputCallback`、receiver 协程的启动和 cancel，现在全下沉到 `ChatScreenApp.onEnter`/`onExit` 和 `TUISession.runSession` 的 finally 里了——这些是所有 TUI 范式共用的横切规则，总纲写在 [docs/tui.md](tui.md)。session 层只剩 chatScreen 自己的编排：
+其实在早时，有手工管理的 `interactiveMode` 旗标、`consoleOutputCallback`、receiver 协程的启动和 cancel，它们现在全下沉到 `ChatScreenApp.onEnter`/`onExit` 和 `TUISession.runSession` 的 finally 里了——而且成为了所有 TUI 范式共用的横切规则，总纲写在 [docs/tui.md](tui.md)。session 层只剩 chatScreen 自己的编排：
 
 - 校验 `targetChatID`（必须是有效 ID，不接受光杆 flag（`True`，即 `/send -c` 未选出目标）——目标选择由调用方 `send.py` 负责）
-- 构造历史记录 + 欢迎行，灌进 `ChatScreenApp` 的 `initialLines`
+- 构造 `ChatScreenApp`；历史加载由 `onEnter` 在建立消息订阅后完成
 - `await ui.runSession()` 跑完整生命周期，拿回 `reviewEditItem`
 - 按 `reviewEditItem` 三态收尾
 
@@ -72,19 +72,16 @@ chatScreen 功能由两层协作实现——业务编排层（`session.py`）负
 
 ……从用户输入 `/send -c` 并按下回车开始，整个生命周期的走向是这样的——
 
-```
-chatScreen(app, bot, targetChatID)
-    ↓
-buildHistoryLines + 欢迎行 → initialLines
-    ↓
-构造 ChatScreenApp(targetChatID, bot, shutdownEvent=None, initialLines)
-    ↓
-await ui.runSession()
-    ├─ onEnter：登记 interactiveChatID + 注册 console 回调 + 启动 receiver + 初次刷新
-    ├─ mainLoop → runMainLoop（每轮 await ui.runOnce() 处理输入）
-    └─ finally：onExit（注销回调 + 清除 interactiveChatID）→ 恢复 interactiveMode → cancel+await receiver
-    ↓
-reviewEditItem 三态处理（放回队列 / switch 透传 / None）
+```mermaid
+flowchart TD
+    A[chatScreen 构造 ChatScreenApp] --> B[runSession]
+    B --> C[onEnter：订阅当前聊天消息]
+    C --> D[加载历史快照及欢迎行]
+    D --> E[启动 receiver 并刷新界面]
+    E --> F[mainLoop：发送、审核或切换聊天]
+    F --> G[onExit：解除订阅、注销控制台回调]
+    G --> H[恢复交互状态并取消 receiver]
+    H --> I[session 处理审核项、切换信号或正常退出]
 ```
 
 <details>
@@ -97,10 +94,7 @@ async def chatScreen(app, bot, targetChatID: str):
     if not targetChatID or targetChatID is True:
         raise ValueError("targetChatID 必须是有效的 chat ID，不能是光杆 flag")
 
-    initialLines = await buildHistoryLines(targetChatID)
-    initialLines.extend(["", f"已进入聊天界面喵", f"与 {targetChatID} 的实时聊天已连接", "=" * 64])
-
-    ui = ChatScreenApp(targetChatID, bot=bot, shutdownEvent=None, initialLines=initialLines)
+    ui = ChatScreenApp(targetChatID, bot=bot, shutdownEvent=None)
     reviewEditItem = await ui.runSession()
 
     # 非 switch 的审核项放回队列
@@ -114,13 +108,13 @@ async def chatScreen(app, bot, targetChatID: str):
     return None
 ```
 
-`buildHistoryLines()` 从加密数据库 `chatHistory.db` 加载历史记录、格式化成带时间戳的字符串列表，追加欢迎信息后作为 `initialLines` 传给构造器，灌进 `_allLines`。
+`onEnter` 先订阅来信通知，再用 `loadHistory()` 取得历史快照；`buildHistoryLines(..., history=history)` 格式化这份快照，连同欢迎行追加到 `_allLines`。receiver 按数据库记录 ID 跳过快照已有的消息，加载期间收到的消息也只显示一次。
 
-早年写在这一层的 `setInteractiveMode` / `setConsoleOutputCallback` / `startReceiver` / `receiverTask.cancel()` 全挪走了——前三个进 `ChatScreenApp.onEnter`，注销和 cancel 进 `onExit` 与 `runSession` 的 finally。`runSession` 的收尾顺序、嵌套旗标恢复这些横切规则见 [docs/tui.md](tui.md)。
+`onEnter` 建立消息订阅、注册控制台回调并启动 receiver，`onExit` 解除订阅和注销回调。交互旗标的恢复、后台任务的取消和等待统一由 `runSession` 收尾，具体顺序见 [docs/tui.md](tui.md)。
 
 **控制台输出为什么路由到 UI**：`ChatScreenApp.onEnter` 注册 `stateManager.setConsoleOutputCallback(self._appendConsoleOutput)`，handler 把文本拆行追加到 transcript。这样后台日志（审核队列处理、错误提示）能在界面里看到——不然直接打印日志会冲掉下方的输入框和状态栏，整个 TUI 布局就乱了。`onExit` 注销回调（置 `None`）交还。
 
-> receiver 协程的超时机制、消息过滤、非目标消息放回队列的实现，都在下面 [receiverLoop 后台协程](#receiverloop-后台协程) 一节。
+> receiver 的通知去重、超时检查和退出清理，见下面 [receiverLoop 后台协程](#receiverloop-后台协程) 一节。
 
 </details>
 
@@ -134,7 +128,7 @@ async def chatScreen(app, bot, targetChatID: str):
 - 维护聊天记录的缓冲区（`_allLines`）和滚动状态（`_scrollOffset`）
 - 处理用户的键盘快捷键，如发送、退出、滚动、清空等
 - 更新状态栏提示（审核队列、滚动位置、聊天对象）
-- 通过 `onEnter`/`onExit` 自管 chatScreen 专属资源（interactiveChatID 登记、console 输出回调、receiver 协程）
+- 通过 `onEnter`/`onExit` 自管 chatScreen 专属资源（当前聊天的消息订阅、console 输出回调、receiver 协程）
 
 又有以下的 **关键组件**:
 - `_transcriptArea`：作为只读 `TextArea`，显示聊天记录
@@ -359,8 +353,8 @@ chatScreen 依赖 `utils/core/stateManager.py` 的全局状态：
 | 状态 | 类型 | 用途 |
 |------|------|------|
 | `interactiveMode` | `bool` | 标记当前是否在交互模式，暂停外层 CLI 的 `asyncInput()` |
-| `interactiveChatID` | `Optional[str]` | receiver 当前活跃聊天 ID，LLM handler 据此让位 incoming 写入（防双写，见「消息流转」的互斥守卫） |
-| `messageQueue` | `asyncio.Queue` | 全局消息队列，bot 收到的所有 Telegram 消息都进入此队列 |
+| `interactiveChatID` | `Optional[str]` | 当前订阅的聊天 ID，仅决定展示通知发给哪个界面 |
+| `messageQueue` | `Optional[asyncio.Queue]` | 本次会话的展示队列；元素为 `(recordID, message)`，没有聊天界面时不创建队列 |
 | `consoleOutputCallback` | `Callable` | 控制台输出回调，chatScreen 设置后，logger 的输出会路由到 UI transcript |
 | `shutdownEvent` | `asyncio.Event` | 关机信号，receiverLoop 检测到后会强制退出 UI |
 
@@ -436,29 +430,30 @@ chatScreen 内置了 LLM 审核队列的处理功能——可以在聊天界面�
 
 ### 接收消息流程
 
-```
-Telegram 用户发送消息
-        ↓
-Bot 的全局 MessageHandler (group=-1, messageCollector)
-        ↓
-消息进入 stateManager.messageQueue (asyncio.Queue)
-        ↓
-receiverLoop() 后台协程持续监听队列
-        ↓
-过滤：只处理 msg.chat.id == targetChatID 的消息
-        ↓
-解析 sender 和 content
-        ↓
-守卫校验（interactiveChatID 与 LLM handler 双向互斥，见下文）
-        ↓
-保存到加密数据库: chatHistory.saveMessage(targetChatID, "incoming", sender, content)
-        ↓
-ui.appendIncomingMessage(timestamp, sender, content)
-        ↓
-UI 更新显示，自动滚动到底部（如未在浏览历史）
+```mermaid
+flowchart TD
+    A[Telegram 来信] --> B[group -1：messageCollector]
+    B --> C{会话或发送者在有效白名单中？}
+    C -->|否| D[不记录，后续 handler 继续处理]
+    C -->|是| E[提取发送者、媒体标记及原消息时间]
+    E --> F[recordIncomingMessage：加密并提交]
+    F --> G{新增记录成功？}
+    G -->|否：重复或失败| D
+    G -->|是| H{当前界面订阅了这个聊天？}
+    H -->|否| I[保留在数据库，进入界面时加载]
+    H -->|是| J[发送 recordID 和消息到会话队列]
+    J --> K[receiver 跳过已展示的记录]
+    K --> L[按原消息时间追加到界面]
 ```
 
-对于**非目标消息的处理**，receiverLoop 在收到其他聊天的消息时，会暂存到 `nonTargetMessages` 列表；在退出时由 finally 块把这些消息放回 `messageQueue`，供外层处理
+### 记录范围与安全边界
+
+记录历史属于收信流程——咱关掉聊天界面、关闭 LLM，或收到没有触发回复的消息，都不改变记录范围。有效白名单中的会话记录该会话收到的消息；有效白名单用户在其他聊天发来的消息也会记录。未支持的服务消息没有可读正文或媒体标记时跳过。
+
+数据库按 `(chat_id, telegram_message_id)` 保证同一条来信只插入一次。相同内容、不同消息 ID 的来信仍分别保留。界面只展示已经提交的记录，不再承担保存来信的职责，其他聊天的消息也不进入当前队列。
+
+消息正文仍通过 Fernet 加密落盘，聊天 ID、消息 ID 和时间保持明文。消息时间取 Telegram 的 `message.date`，转换为系统本地时间后存储和展示；队列等待不会改变时间。旧库启动时自动补充可空的 `telegram_message_id` 和唯一索引，原记录保留，无法推断的消息 ID 留空。
+
 
 ---
 
@@ -486,57 +481,25 @@ UI 更新显示，输入框清空
 
 ## receiverLoop 后台协程
 
-`receiverLoop()` 是 chatScreen 的核心后台任务，负责持续监听消息队列并更新 UI——它在后台跑着，一边盯着队列有没有新消息进来，一边定期检查审核队列和关机信号。
+receiver 监听当前会话的展示通知。收到 `(recordID, message)` 后，先检查记录 ID 是否已经包含在历史快照或实时展示中；已有记录直接跳过，新记录按原消息时间格式化后追加到界面。
 
-### 实现细节
+`ChatScreenApp.onEnter` 的顺序决定了历史与实时消息如何交接：
 
-```python
-async def receiverLoop():
-    nonTargetMessages = []
-    
-    try:
-        while state.isInteractive():
-            try:
-                # 0.5 秒超时读取队列
-                msg = await asyncio.wait_for(queue.get(), timeout=0.5)
-            except asyncio.TimeoutError:
-                # 检测关机信号
-                if shutdownEvent.is_set():
-                    ui.requestExit()
-                    break
-                # 定期检查审核队列,更新状态栏
-                rq = getReviewQueue()
-                if rq.qsize() > 0:
-                    ui.showStatus(...)
-                continue
-            
-            # 过滤非目标消息
-            if str(msg.chat.id) != str(targetChatID):
-                nonTargetMessages.append(msg)
-                continue
-            
-            # 解析并显示
-            sender = _getSenderName(msg)
-            content = _extractDisplayText(msg)
-            if getStateManager().getInteractiveChatID() == str(targetChatID):
-                await saveMessage(targetChatID, "incoming", sender, content)
-            ui.appendIncomingMessage(timestamp, sender, content)
-            
-    finally:
-        # 放回非目标消息
-        for msg in nonTargetMessages:
-            await queue.put(msg)
-```
+1. `subscribeChatMessages(chatID)` 建立本次会话的队列。
+2. `loadHistory(chatID)` 读取一次历史快照，保存其中的记录 ID。
+3. 历史行就位后启动 receiver，消费加载期间积攒的通知。
 
-上面的实现里藏着几个关键设计——**超时机制**：`wait_for(timeout=0.5)` 避免无限阻塞，每 0.5 秒检查一次状态；**消息过滤**：只处理 `msg.chat.id == targetChatID` 的消息，其他暂存；**审核队列轮询**：超时时顺便检查审核队列，更新状态栏提示；**关机检测**：`shutdownEvent.is_set()` 时强制退出 UI，避免卡死；**清理保证**：finally 块确保非目标消息不丢失。
+这样，消息若已经出现在快照里，通知会被跳过；若提交发生在快照之后，则由通知追加。`onExit` 解除订阅，基类随后取消并等待 receiver。再次进入或切换聊天时创建新队列，历史从数据库加载。
 
-**写入互斥守卫（与 LLM handler 双向互斥，issue #1）**：receiver 写库前校验 `getStateManager().getInteractiveChatID() == str(targetChatID)`。chatScreen 打开时 `onEnter` 登记 `interactiveChatID`、退出时 `onExit` 清除；LLM handler 侧读同一登记决定 incoming 让位与否。receiver 侧再校验一次是因为 TUISession 的收尾顺序是「先 onExit（清登记）后 cancel receiver」——毫秒级窗口内 llm.py 侧守卫已放行，此处不校验就会双写一帧。守卫不过只跳过写库，UI 显示照常。
+receiver 的读取超时为 0.5 秒，超时时检查关机事件与审核队列；异常通过系统日志记录。队列没有固定条数上限，但只保存当前会话尚未展示的通知，不在界面关闭期间积压历史。
+
+数据库提交与内存通知是两个步骤。提交后若恰逢任务取消或进程退出，当前界面可能没有及时展示该条记录，重新进入后仍可从历史加载。数据库唯一约束覆盖保留在当前历史库中的消息；旧记录没有 Telegram 消息 ID，已有的重复数据不会自动清理。
 
 ---
 
 ## 切换功能
 
-用户按 **Alt+← / Alt+→** 可以在聊天界面内切换到白名单中的上/下一个聊天对象——不用退出界面，屏幕闪一下就换到下一个对象了。
+用户按 **Alt+← / Alt+→** 可以在聊天界面内热切换到白名单中的上/下一个聊天对象。
 
 ### 信号传递链
 
@@ -694,7 +657,7 @@ if stripped == ":help":
 **常见原因**：
 - `targetChatID` 格式不匹配（数字 vs 字符串）
 - receiverTask 被意外取消
-- messageQueue 被其他 handler 消费
+- 消息不在记录范围内，或数据库保存失败；先检查白名单和系统日志
 
 ---
 
@@ -755,7 +718,9 @@ if stripped == ":help":
 | `utils/core/tui/paradigms/fullScreen.py` | `FullScreenTUIApp` 基类（chatScreen 继承它） |
 | `utils/command/send.py` | 命令入口、普通消息发送、目标选择、切换循环 |
 | `utils/whitelistManager/data.py` | getAllowedUserIDs 提供切换列表 |
-| `utils/chatHistory.py` | 聊天记录加密存储与读取（含 `recordBotMessage` bot 发言入库策略） |
+| `utils/chatHistory.py` | 聊天记录加密存储、来信幂等写入与 bot 发言记录 |
+| `utils/core/appLifecycle.py` | 全局收信入口与记录范围判断 |
+| `utils/telegramHelpers.py` | Telegram 消息文本、发送者和时间提取 |
 | `utils/core/stateManager.py` | 全局状态管理(interactiveMode / interactiveChatID / messageQueue) |
 | `utils/command/llm/review/chatScreenReview.py` | LLM 审核命令处理(`handleChatScreenReviewCommand` 等) |
 | `utils/llm/state.py` | 审核队列容器(`getReviewQueue`)、防抖缓冲 |
@@ -809,7 +774,7 @@ if userInput is None:
 
 - 启动时调用 `loadHistory(targetChatID)` 一次性加载全部历史
 - 历史存储在 `_allLines: list[str]` 中（内存）
-- 长聊天记录可能占用较多内存，但通常不超过几 MB
+- 内存占用随历史行数和消息长度增长；receiver 另保留本次会话已展示的记录 ID
 
 **优化方向**（未实现）：
 - 分页加载：只加载最近 N 条，向上滚动时动态加载更多

@@ -5,6 +5,7 @@ utils/core/appLifecycle.py
 
 负责：
 - Telegram Application 的初始化和配置
+- 白名单范围内的来信记录与界面通知
 - 后台任务的启动和协调
 - 优雅关机流程
 - 进程重启逻辑
@@ -18,13 +19,20 @@ import inspect
 
 from telegram.ext import ApplicationBuilder, MessageHandler, filters
 
-from config import BOT_TOKEN, TELEGRAM_PROXY
+from config import BOT_TOKEN, TELEGRAM_PROXY, DB_TIMESTAMP_FORMAT
 from loader import loadHandlers
 
 from utils.core.resourceManager import cleanupAllResources
 from utils.core.stateManager import getStateManager
 from utils.core.errorHandler import initErrorHandler, setupAsyncioErrorHandler
 from utils.core.logger import initLogger
+from utils.core.errorDecorators import handleErrors
+
+from utils.chatHistory import initDatabase, recordIncomingMessage
+from utils.telegramHelpers import (
+    extractTelegramMessageText, getTelegramSenderName, getTelegramMessageTime,
+)
+from utils.whitelistManager.data import whetherAuthorizedUser
 
 
 
@@ -48,17 +56,17 @@ def initializeApp(app):
     migrateLegacyLLMPaths()
 
     state = getStateManager()
-    state.setMessageQueue(asyncio.Queue())
 
     loop = asyncio.get_running_loop()
     state.setEventLoop(loop)
 
     initLogger()
     initErrorHandler(app)
+    initDatabase()
 
     # 动态调用模块的 initFunctions（自动去重）
     allModules = getAllModules()
-    calledFunctions = set()  # 去重集合
+    calledFunctions = {"utils.chatHistory:initDatabase"}  # 核心已完成的初始化
 
     for moduleName, config in allModules.items():
         if not config.get("enabled", True):
@@ -80,17 +88,35 @@ def initializeApp(app):
     loadHandlers(app)
     setupAsyncioErrorHandler(loop)
 
-    # 全局消息收集器
-    async def messageCollector(update, context):
-        """把所有收到的消息放入队列"""
-        message = update.message
-        if message:
-            queue = state.getMessageQueue()
-            if queue:
-                await queue.put(message)
-
     # group=-1 确保在所有其他 handler 之前执行
     app.add_handler(MessageHandler(filters.ALL, messageCollector), group=-1)
+
+
+
+
+@handleErrors(errorType="来信记录")
+async def messageCollector(update, context):
+    """记录白名单会话或白名单用户的来信，提交后通知当前聊天界面。"""
+    message = update.message
+    if message is None:
+        return
+
+    chatID = str(message.chat_id)
+    user = message.from_user
+    if not whetherAuthorizedUser(chatID) and not (user and whetherAuthorizedUser(user.id)):
+        return
+
+    content = extractTelegramMessageText(message)
+    if not content:
+        return
+
+    recordID = await recordIncomingMessage(
+        chatID, getTelegramSenderName(message), content,
+        telegramMessageID=message.message_id,
+        timestamp=getTelegramMessageTime(message, DB_TIMESTAMP_FORMAT),
+    )
+    if recordID is not None:
+        getStateManager().notifyChatMessage(chatID, recordID, message)
 
 
 

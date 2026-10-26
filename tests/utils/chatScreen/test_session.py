@@ -18,14 +18,13 @@ from utils.chatScreen.session import chatScreen
 
 
 
-def _patches(reviewEditItem, historyLines=None):
+def _patches(reviewEditItem):
     """构造一组 patch：ChatScreenApp 替身为 mock ui（runSession 返回 reviewEditItem）。"""
     mockUi = MagicMock()
     mockUi.runSession = AsyncMock(return_value=reviewEditItem)
     mockQueue = MagicMock()
     patches = [
         patch('utils.chatScreen.session.ChatScreenApp', return_value=mockUi),
-        patch('utils.chatScreen.session.buildHistoryLines', new_callable=AsyncMock, return_value=historyLines or []),
         patch('utils.chatScreen.session.getReviewQueue', return_value=mockQueue),
     ]
     return mockUi, mockQueue, patches
@@ -97,22 +96,10 @@ async def test_chatScreen_switch_passthrough():
 
 
 @pytest.mark.asyncio
-async def test_chatScreen_constructs_app_with_bot_and_history():
-    """构造 ChatScreenApp：传入 bot + initialLines（历史 + 欢迎行）"""
+async def test_chatScreen_constructs_app_with_bot():
+    """session 只构造界面和运行会话，历史加载属于订阅后的 onEnter。"""
     mockUi = MagicMock()
     mockUi.runSession = AsyncMock(return_value=None)
-    with patch('utils.chatScreen.session.ChatScreenApp', return_value=mockUi) as mockCtor, \
-         patch('utils.chatScreen.session.buildHistoryLines', new_callable=AsyncMock, return_value=["历史行1"]), \
-         patch('utils.chatScreen.session.getReviewQueue', return_value=MagicMock()):
+    with patch('utils.chatScreen.session.ChatScreenApp', return_value=mockUi) as mockCtor:
         await chatScreen(MagicMock(), "BOT_INSTANCE", "chat_999")
-
-    mockCtor.assert_called_once()
-    _args, kwargs = mockCtor.call_args
-    # targetChatID 位置参数
-    assert mockCtor.call_args.args[0] == "chat_999"
-    # bot + initialLines 经 kwargs 传
-    assert kwargs.get("bot") == "BOT_INSTANCE"
-    initialLines = kwargs.get("initialLines") or []
-    assert "历史行1" in initialLines                  # buildHistoryLines 结果
-    assert "已进入聊天界面喵" in initialLines          # 欢迎行
-    assert any(set(line) == {"="} and len(line) >= 60 for line in initialLines)  # 分隔线
+    mockCtor.assert_called_once_with("chat_999", bot="BOT_INSTANCE", shutdownEvent=None)

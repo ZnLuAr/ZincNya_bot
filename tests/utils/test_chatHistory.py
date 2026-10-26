@@ -10,6 +10,9 @@ chatHistory（utils/chatHistory.py）核心行为：
 用真实临时 DB（monkeypatch DB 路径），走项目 Database 封装——不 mock crypto。
 """
 
+import asyncio
+import sqlite3
+from contextlib import closing
 from datetime import datetime
 from unittest.mock import patch
 
@@ -23,6 +26,7 @@ from utils.chatHistory import (
     iterMessagesWithDateMarkers,
     loadHistory,
     recordBotMessage,
+    recordIncomingMessage,
     saveMessage,
 )
 
@@ -119,6 +123,90 @@ class TestRecordBotMessage:
         assert history[0]["direction"] == "outgoing"
         assert history[0]["sender"] == BOT_DISPLAY_NAME
         assert history[0]["content"] == "锌酱的回复"
+
+
+class TestIncomingMessageIdentity:
+
+    async def test_concurrent_duplicate_is_inserted_once(self, db):
+        """同一 Telegram 来信并发处理，只允许一个调用返回新增记录 ID。"""
+        results = await asyncio.gather(*(
+            recordIncomingMessage(
+                "-100", "alice", "重复投递",
+                telegramMessageID=42, timestamp="2026-10-25 12:34:56",
+            ) for _ in range(8)
+        ))
+        assert sum(result is not None for result in results) == 1
+        history = await loadHistory("-100")
+        assert len(history) == 1
+        assert history[0]["timestamp"] == datetime(2026, 10, 25, 12, 34, 56)
+        assert history[0]["id"] == next(result for result in results if result is not None)
+
+    async def test_identity_is_scoped_to_chat_and_does_not_compare_text(self, db):
+        for chatID, messageID in (("-100", 1), ("-100", 2), ("-200", 1)):
+            assert await recordIncomingMessage(
+                chatID, "alice", "相同内容", telegramMessageID=messageID,
+                timestamp="2026-10-25 12:34:56",
+            ) is not None
+        assert await getMessageCount() == 3
+
+    async def test_old_schema_keeps_records_and_accepts_new_messages(self, tmp_path, monkeypatch):
+        """旧库补列可重复执行，历史密文、时间和主键保持不变。"""
+        from utils.core.crypto import encryptText
+        from utils.core.database import Database
+
+        path = tmp_path / "old.db"
+        content = encryptText("旧记录")
+        with closing(sqlite3.connect(path)) as conn:
+            conn.execute("""CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL,
+                direction TEXT NOT NULL, sender TEXT, content BLOB NOT NULL, timestamp TEXT
+            )""")
+            conn.execute(
+                "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)",
+                (27, "-100", "incoming", "alice", content, "2026-09-01 01:02:03"),
+            )
+            conn.commit()
+            chatHistory._initSchema(conn)
+            chatHistory._initSchema(conn)
+            row = conn.execute("SELECT * FROM messages").fetchone()
+            assert row == (27, "-100", "incoming", "alice", content, "2026-09-01 01:02:03", None)
+        monkeypatch.setattr(chatHistory, "chatHistoryDB", Database(str(path), "OldChat"))
+        assert await recordIncomingMessage(
+            "-100", "alice", "新记录", telegramMessageID=28, timestamp="2026-10-25 12:34:56",
+        ) is not None
+        assert [message["content"] for message in await loadHistory("-100")] == ["旧记录", "新记录"]
+
+    async def test_concurrent_overflow_archives_every_removed_message(self, db, tmp_path, monkeypatch):
+        monkeypatch.setattr(chatHistory, "CHAT_HISTORY_LIMIT", 3)
+        monkeypatch.setattr(chatHistory, "CHAT_BACKUP_DIR", str(tmp_path / "archives"))
+        results = await asyncio.gather(*(
+            recordIncomingMessage(
+                "-100", "alice", f"消息 {i}", telegramMessageID=i,
+                timestamp=f"2026-10-25 12:34:{i:02}",
+            ) for i in range(10)
+        ))
+        assert all(result is not None for result in results)
+        with closing(sqlite3.connect(db._dbPath)) as conn:
+            retained = {row[0] for row in conn.execute("SELECT telegram_message_id FROM messages")}
+        archived = set()
+        for path in (tmp_path / "archives").glob("*.db"):
+            with closing(sqlite3.connect(path)) as conn:
+                archived.update(row[0] for row in conn.execute("SELECT telegram_message_id FROM messages"))
+        assert retained == {7, 8, 9}
+        assert retained.isdisjoint(archived)
+        assert retained | archived == set(range(10))
+
+    async def test_archive_failure_keeps_committed_messages(self, db, tmp_path, monkeypatch):
+        monkeypatch.setattr(chatHistory, "CHAT_HISTORY_LIMIT", 1)
+        blockedPath = tmp_path / "not-a-directory"
+        blockedPath.write_text("阻止创建归档目录", encoding="utf-8")
+        monkeypatch.setattr(chatHistory, "CHAT_BACKUP_DIR", str(blockedPath))
+        for messageID in (1, 2):
+            assert await recordIncomingMessage(
+                "-100", "alice", "保留消息", telegramMessageID=messageID,
+                timestamp="2026-10-25 12:34:56",
+            ) is not None
+        assert await getMessageCount("-100") == 2
 
 
 

@@ -29,9 +29,10 @@ def printMessage(mode, content):
 
 
 
-async def buildHistoryLines(targetChatID) -> list[str]:
+async def buildHistoryLines(targetChatID, *, history: list[dict] | None = None) -> list[str]:
     """将历史聊天记录格式化为行列表，不打印。"""
-    history = await loadHistory(targetChatID)
+    if history is None:
+        history = await loadHistory(targetChatID)
     lines: list[str] = []
     if history:
         lines.append("─────── 历史记录 ───────")

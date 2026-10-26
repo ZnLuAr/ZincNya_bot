@@ -4,6 +4,7 @@ utils/telegramHelpers.py
 Telegram 消息操作的公共工具函数。
 """
 
+from datetime import datetime
 from html import escape as _htmlEscape
 
 from telegram.constants import MessageEntityType
@@ -92,6 +93,78 @@ def removeMention(text: str, botUsername: str) -> str:
 
 
 
+def getTelegramSenderName(message) -> str:
+    """提取 Telegram 消息的发送者名称，缺失时回退为聊天名称或 Unknown。"""
+    user = getattr(message, "from_user", None)
+    if user:
+        return user.username or user.first_name or "Unknown"
+
+    chat = getattr(message, "chat", None)
+    if chat:
+        return getattr(chat, "title", None) or getattr(chat, "full_name", None) or "Unknown"
+
+    return "Unknown"
+
+
+
+
+def extractTelegramMessageText(message) -> str:
+    """提取 Telegram 消息的可读文本，媒体没有正文时返回类型标记。"""
+    if message.text:
+        return message.text
+    if message.caption:
+        prefix = ""
+        if message.photo:
+            prefix = "[图片] "
+        elif message.document:
+            prefix = "[文件] "
+        elif message.video:
+            prefix = "[视频] "
+        elif message.animation:
+            prefix = "[GIF] "
+        return prefix + message.caption
+    if message.photo:
+        return "[图片]"
+    if message.sticker:
+        emoji = message.sticker.emoji or ""
+        return f"[贴纸] {emoji}".strip()
+    if message.animation:
+        return "[GIF]"
+    if message.video:
+        return "[视频]"
+    if message.voice:
+        return "[语音消息]"
+    if message.video_note:
+        return "[视频留言]"
+    if message.audio:
+        title = message.audio.title or ""
+        return f"[音频] {title}".strip()
+    if message.document:
+        name = message.document.file_name or ""
+        return f"[文件] {name}".strip()
+    if message.contact:
+        return "[联系人]"
+    if message.location:
+        return "[位置]"
+    if message.poll:
+        return f"[投票] {message.poll.question}"
+    return ""
+
+
+
+
+def getTelegramMessageTime(message, formatString: str = "%H:%M:%S") -> str:
+    """按消息发生时间格式化时间；Telegram 未提供时间时使用当前时间。"""
+    messageDate = getattr(message, "date", None)
+    if messageDate is None:
+        messageDate = datetime.now()
+    elif messageDate.tzinfo is not None:
+        messageDate = messageDate.astimezone().replace(tzinfo=None)
+    return messageDate.strftime(formatString)
+
+
+
+
 def truncateText(text: str, limit: int, *, suffix: str = "…") -> str:
     """
     按 Unicode 码点长度截断文本，超出 limit 时附加 suffix，保证返回长度 ≤ limit。
@@ -136,6 +209,8 @@ def prepareMarkdownReply(reply: str, maxLength: int = TG_MESSAGE_MAX_LEN) -> tup
     htmlText = convertMarkdownToHtml(reply)
     htmlText = truncateText(htmlText, maxLength, suffix="...")
     return (htmlText, "HTML")
+
+
 
 
 async def sendLLMReply(

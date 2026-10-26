@@ -1,11 +1,7 @@
 """
 tests/handlers/test_llm.py
 
-handleLLMMessage 的 incoming 历史写入（issue #1）：
-    - 门禁全绿 + 无 receiver 活跃 → 写 incoming（chatID / sender / 原文 rawText）
-    - interactiveChatID 守卫：receiver 活跃于该聊天 → 让位不写；异聊天 → 照写
-    - 门禁早退（LLM 关 / 未授权）→ 不写
-    - 写入不影响主流程（防抖入队照常）
+验证 LLM 入口门禁、防抖调度和生成输入；来信历史由全局收信入口记录。
 
 awaitability 铁律：getLLMEnabled / whetherAuthorizedUser / shouldTriggerLLM / isRateLimited
 是同步 def——必须 MagicMock(return_value=...)，patch 成 AsyncMock 会返回协程对象（恒真值），
@@ -64,17 +60,6 @@ def _gatePatches(**overrides):
     return patches
 
 
-def _stateManagerPatch(interactiveChatID):
-    """getStateManager → MagicMock，getInteractiveChatID 返回指定值"""
-    sm = MagicMock()
-    sm.getInteractiveChatID.return_value = interactiveChatID
-    return patch("handlers.llm.getStateManager", return_value=sm)
-
-
-def _savePatch():
-    return patch("handlers.llm.saveMessage", new_callable=AsyncMock)
-
-
 async def _run(mockUpdate, mockContext):
     # conftest 的 mockMessage.photo / .document 是 MagicMock（truthy），会骗过
     # extractImageRefsForPrompt 走进 _pickBestPhoto 遍历 mock 抛 TypeError——
@@ -85,83 +70,43 @@ async def _run(mockUpdate, mockContext):
     await handleLLMMessage(mockUpdate, mockContext)
 
 
-class TestIncomingHistoryWrite:
+class TestMessageGates:
 
-    async def test_incoming_written_after_gate(self, mockUpdate, mockContext):
-        """门禁全绿 + 无 receiver 活跃 → 写 incoming 恰一次，参数为 (str(chatID), incoming, username, rawText)"""
-        with ExitStack() as stack, _savePatch() as mockSave:
+    async def test_authorized_message_reaches_debounce(self, mockUpdate, mockContext):
+        with ExitStack() as stack:
             for p in _gatePatches():
                 stack.enter_context(p)
-            stack.enter_context(_stateManagerPatch(None))
+            enqueue = stack.enter_context(patch("handlers.llm._enqueueLLMDebounce", new_callable=AsyncMock))
             await _run(mockUpdate, mockContext)
+        enqueue.assert_awaited_once()
 
-        mockSave.assert_awaited_once_with("987654321", "incoming", "test_user", "test message")
-
-    async def test_skipped_when_receiver_active(self, mockUpdate, mockContext):
-        """receiver 活跃于同一聊天（interactiveChatID == chatID）→ 让位不写"""
-        with ExitStack() as stack, _savePatch() as mockSave:
-            for p in _gatePatches():
+    @pytest.mark.parametrize("gate", ["getLLMEnabled", "whetherAuthorizedUser", "shouldTriggerLLM"])
+    async def test_rejected_message_does_not_reach_debounce(self, mockUpdate, mockContext, gate):
+        with ExitStack() as stack:
+            for p in _gatePatches(**{f"handlers.llm.{gate}": False}):
                 stack.enter_context(p)
-            stack.enter_context(_stateManagerPatch("987654321"))
+            enqueue = stack.enter_context(patch("handlers.llm._enqueueLLMDebounce", new_callable=AsyncMock))
             await _run(mockUpdate, mockContext)
+        enqueue.assert_not_awaited()
 
-        mockSave.assert_not_awaited()
-
-    async def test_written_when_receiver_on_other_chat(self, mockUpdate, mockContext):
-        """receiver 活跃于另一聊天 → 该聊天无人写，llm 侧照写"""
-        with ExitStack() as stack, _savePatch() as mockSave:
-            for p in _gatePatches():
-                stack.enter_context(p)
-            stack.enter_context(_stateManagerPatch("111111"))
-            await _run(mockUpdate, mockContext)
-
-        mockSave.assert_awaited_once()
-
-    async def test_not_written_llm_disabled(self, mockUpdate, mockContext):
-        """LLM 总开关关闭 → 门禁早退，不写"""
+    async def test_disabled_llm_consumes_extra_blocks(self, mockUpdate, mockContext):
         key = f"llm_extra_blocks_{mockUpdate.effective_chat.id}_{mockUpdate.message.message_id}"
         mockContext.bot_data[key] = {"afc": (200, "工具", "临时块")}
-        with ExitStack() as stack, _savePatch() as mockSave:
+        with ExitStack() as stack:
             for p in _gatePatches(**{"handlers.llm.getLLMEnabled": False}):
                 stack.enter_context(p)
             await _run(mockUpdate, mockContext)
-
-        mockSave.assert_not_awaited()
         assert key not in mockContext.bot_data
 
-    async def test_not_written_unauthorized(self, mockUpdate, mockContext):
-        """非白名单用户 → 门禁早退，不写"""
-        with ExitStack() as stack, _savePatch() as mockSave:
-            for p in _gatePatches(**{"handlers.llm.whetherAuthorizedUser": False}):
-                stack.enter_context(p)
-            await _run(mockUpdate, mockContext)
-
-        mockSave.assert_not_awaited()
-
-    async def test_enqueue_still_called(self, mockUpdate, mockContext):
-        """写入后主流程不受影响：防抖入队照常被调（单独 patch 以持有同一 mock 实例）"""
-        with ExitStack() as stack:
-            stack.enter_context(_savePatch())
-            for p in _gatePatches():
-                stack.enter_context(p)
-            stack.enter_context(_stateManagerPatch(None))
-            enqueue = stack.enter_context(patch("handlers.llm._enqueueLLMDebounce", new_callable=AsyncMock, return_value=True))
-            await _run(mockUpdate, mockContext)
-
-        enqueue.assert_awaited_once()
-
-    async def test_caption_message_uses_caption(self, mockUpdate, mockContext, mockMessage):
-        """图片消息（text=None）→ content 走 caption"""
+    async def test_caption_message_reaches_debounce(self, mockUpdate, mockContext, mockMessage):
         mockMessage.text = None
         mockMessage.caption = "图片说明"
-        with ExitStack() as stack, _savePatch() as mockSave:
+        with ExitStack() as stack:
             for p in _gatePatches():
                 stack.enter_context(p)
-            stack.enter_context(_stateManagerPatch(None))
+            enqueue = stack.enter_context(patch("handlers.llm._enqueueLLMDebounce", new_callable=AsyncMock))
             await _run(mockUpdate, mockContext)
-
-        mockSave.assert_awaited_once()
-        assert mockSave.await_args.args[3] == "图片说明"
+        assert enqueue.await_args.kwargs["messageInput"].text == "图片说明"
 
 
 class TestMemoryQueryWiring:
@@ -296,8 +241,6 @@ async def test_message_handler_reaches_real_debounce_queue(mockUpdate, mockConte
         for p in _gatePatches():
             if p.attribute != "_enqueueLLMDebounce":
                 stack.enter_context(p)
-        stack.enter_context(_savePatch())
-        stack.enter_context(_stateManagerPatch(None))
         key = makeDebounceKey(str(mockUpdate.effective_chat.id), mockUpdate.message.from_user.id)
         try:
             await _run(mockUpdate, mockContext)

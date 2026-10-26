@@ -17,7 +17,7 @@ utils/chatScreen/ui.py
 
 继承 FullScreenTUIApp：app 在 __init__ 构造（createApplication 覆写留本文件，保 patch 目标
 utils.chatScreen.ui.Application）；单轮入口 runOnce（保留 _exitRequested 守卫）；mainLoop
-委托聊天主循环；onEnter/onExit 自管 interactiveChatID 登记 + console 回调 + receiver
+委托聊天主循环；onEnter/onExit 自管消息订阅、历史快照、console 回调与 receiver
 （chatScreen 专属，不进基类）。
 """
 
@@ -35,6 +35,10 @@ from prompt_toolkit.widgets import TextArea
 
 from utils.core.stateManager import getStateManager
 from utils.core.tui.paradigms.fullScreen import FullScreenTUIApp
+
+from utils.chatHistory import loadHistory
+
+from .history import buildHistoryLines
 
 
 # receiver 启动后首刷前的等待时长（秒）：让 receiver 就绪再画首轮 transcript
@@ -56,6 +60,7 @@ class ChatScreenApp(FullScreenTUIApp):
         self._targetChatID = targetChatID
         self._bot = bot
         self._shutdownEvent = shutdownEvent
+        self._messageQueue: asyncio.Queue | None = None
         self._exitRequested = False
         self._pendingNewMessages = 0
         self._switchDirection: str | None = None  # "prev" / "next" / None
@@ -95,7 +100,7 @@ class ChatScreenApp(FullScreenTUIApp):
             height=1,
         )
 
-        # ── 历史记录（__init__ 灌入 _allLines；onEnter 时初次刷新）──
+        # ── 展示缓冲（onEnter 订阅后加载历史；initialLines 可提供额外初始行）──
         self._allLines: list[str] = []
         self._scrollOffset: int = 0  # 0 = 底部（最新），>0 = 向上偏移行数
         if initialLines:
@@ -194,27 +199,30 @@ class ChatScreenApp(FullScreenTUIApp):
 
 
     async def onEnter(self):
-        # 聊天界面启动流程：
-        # 1. 登记 receiver 活跃聊天（LLM handler 据此让位给 incoming 写入，防两方同时写入数据库）
-        self._stateManager.setInteractiveChatID(self._targetChatID)
-        # 2. 注册控制台输出回调（chatScreen 专属，把 logger 输出路由到 UI ）
+        # 先订阅再读取历史，读取期间提交的消息会留在本次会话的展示队列。
+        self._messageQueue = self._stateManager.subscribeChatMessages(self._targetChatID)
         self._stateManager.setConsoleOutputCallback(self._appendConsoleOutput)
-        # 3. 启动 receiver 并登记（必须在 (2) 之后，保证 callback-before-receiver）
+        history = await loadHistory(self._targetChatID)
+        self._allLines.extend(await buildHistoryLines(self._targetChatID, history=history))
+        self._allLines.extend([
+            "", "已进入聊天界面喵", f"与 {self._targetChatID} 的实时聊天已连接", "=" * 64,
+        ])
+
+        # 按数据库记录 ID 跳过历史快照已包含的通知，不依赖时间或消息内容判断。
         from .receiver import startReceiver
-        queue = self._stateManager.getMessageQueue()
         shutdownEvent = self._shutdownEvent or getStateManager().getShutdownEvent()
-        task = await startReceiver(self._stateManager, self._targetChatID, self, queue, shutdownEvent)
+        task = await startReceiver(
+            self, self._messageQueue, shutdownEvent, {message["id"] for message in history},
+        )
         self.addBackgroundTask(task)
         await asyncio.sleep(_INITIAL_REFRESH_DELAY)
-        # 4. 初次刷新（画 __init__ 已灌入 _allLines 的内容）
         self._refreshTranscript()
 
 
     async def onExit(self):
         # 注销控制台输出回调（与 listMenu.onExit=rmcup 对称，各范式收自己的尾）
         self._stateManager.setConsoleOutputCallback(None)
-        # 清除 receiver 活跃聊天登记
-        self._stateManager.setInteractiveChatID(None)
+        self._stateManager.unsubscribeChatMessages(self._messageQueue)
 
 
     async def runOnce(self):

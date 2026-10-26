@@ -348,6 +348,9 @@ def ensure_memory_schema(conn: sqlite3.Connection) -> None:
 
 
 def ensure_chat_schema(conn: sqlite3.Connection) -> None:
+    columns = table_columns(conn, "messages")
+    if columns and "telegram_message_id" not in columns:
+        conn.execute("ALTER TABLE messages ADD COLUMN telegram_message_id INTEGER")
     conn.executescript(_loadSchema("chatHistory"))
 
 
@@ -861,7 +864,9 @@ def encrypt_memory_hint_value(fernet: Any, hint: Any) -> Any:
 
 
 
-def chat_key_for(row: dict[str, Any], plaintext: str) -> tuple[str, str, str, str, str]:
+def chat_key_for(row: dict[str, Any], plaintext: str) -> tuple:
+    if row.get("telegram_message_id") is not None:
+        return (str(row.get("chat_id") or ""), "telegram", row["telegram_message_id"])
     return (
         str(row.get("chat_id") or ""),
         str(row.get("direction") or ""),
@@ -940,7 +945,7 @@ def plan_chat_history(ctx: ScriptContext) -> SectionPlan:
         plan.preview_lines.append("# 错误：未安装 cryptography 库，无法解密 chatHistory.db")
         return plan
 
-    sql = "SELECT id, chat_id, direction, sender, content, timestamp FROM messages ORDER BY timestamp, id"
+    sql = "SELECT * FROM messages ORDER BY timestamp, id"
 
     try:
         fernet = Fernet(target_key)
@@ -1014,6 +1019,7 @@ def plan_chat_history(ctx: ScriptContext) -> SectionPlan:
                 "sender": row.get("sender"),
                 "content": content,
                 "timestamp": row.get("timestamp"),
+                "telegram_message_id": row.get("telegram_message_id"),
             }
             preview_lines = format_chat_insert(row, plaintext, ctx=ctx)
             plan.inserts.append(PlannedInsert(row.get("id"), values, preview_lines))
@@ -1034,6 +1040,7 @@ def plan_chat_history(ctx: ScriptContext) -> SectionPlan:
                     "sender": row.get("sender"),
                     "content": content,
                     "timestamp": row.get("timestamp"),
+                    "telegram_message_id": row.get("telegram_message_id"),
                 }
                 plan.inserts.append(PlannedInsert(row.get("id"), values, []))
 
@@ -1369,10 +1376,11 @@ def apply_chat_history(plan: SectionPlan) -> int:
         ensure_chat_schema(conn)
         conn.commit()
         conn.execute("BEGIN IMMEDIATE")
-        conn.executemany(
+        inserted = conn.executemany(
             """
-            INSERT INTO messages (chat_id, direction, sender, content, timestamp)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO messages (chat_id, direction, sender, content, timestamp, telegram_message_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id, telegram_message_id) DO NOTHING
             """,
             [
                 (
@@ -1381,12 +1389,13 @@ def apply_chat_history(plan: SectionPlan) -> int:
                     item.values["sender"],
                     item.values["content"],
                     item.values["timestamp"],
+                    item.values.get("telegram_message_id"),
                 )
                 for item in plan.inserts
             ],
-        )
+        ).rowcount
         conn.commit()
-        return len(plan.inserts)
+        return inserted
     except Exception:
         conn.rollback()
         raise
@@ -1896,7 +1905,7 @@ def analyze_chat_diff(local_path: Path, remote_path: Path, key_path: Path) -> Di
         return None
 
     fernet = Fernet(key_path.read_bytes())
-    sql = "SELECT id, chat_id, direction, sender, content, timestamp FROM messages ORDER BY timestamp, id"
+    sql = "SELECT * FROM messages ORDER BY timestamp, id"
 
     local_rows, local_state = read_table_rows(
         local_path, table="messages",
@@ -2237,7 +2246,7 @@ def _merge_chat(
             for row in diff.remote_only:
                 row_id = row.get("id")
                 fetched = remote_conn.execute(
-                    "SELECT chat_id, direction, sender, content, timestamp FROM messages WHERE id = ?",
+                    "SELECT * FROM messages WHERE id = ?",
                     (row_id,),
                 ).fetchone()
                 if fetched:
@@ -2245,13 +2254,17 @@ def _merge_chat(
         finally:
             remote_conn.close()
 
+        inserted = 0
         for r in rows_to_insert:
-            conn.execute(
-                "INSERT INTO messages (chat_id, direction, sender, content, timestamp) VALUES (?, ?, ?, ?, ?)",
-                (r["chat_id"], r["direction"], r["sender"], r["content"], r["timestamp"]),
-            )
+            inserted += conn.execute(
+                """INSERT INTO messages (chat_id, direction, sender, content, timestamp, telegram_message_id)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(chat_id, telegram_message_id) DO NOTHING""",
+                (r["chat_id"], r["direction"], r["sender"], r["content"], r["timestamp"],
+                 r.get("telegram_message_id")),
+            ).rowcount
         conn.commit()
-        print(c(f"    已合并 {len(rows_to_insert)} 条聊天记录", Color.GREEN))
+        print(c(f"    已合并 {inserted} 条聊天记录", Color.GREEN))
         return True
     except Exception:
         conn.rollback()

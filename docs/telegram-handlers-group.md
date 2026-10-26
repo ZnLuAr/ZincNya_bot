@@ -1,6 +1,6 @@
 # Telegram Handler 分组与注册机制
 
-> 最后更新：2026-08-25
+> 最后更新：2026-10-26
 >
 > Written by ZincNya~ ❤
 
@@ -83,7 +83,7 @@ Telegram handlers 由 [loader.py](../loader.py) 按模块注册表（[modulesReg
 
 | Group | 来源 | 职责 |
 |------:|------|------|
-| `-1` | [utils/core/appLifecycle.py](../utils/core/appLifecycle.py) | 全局消息收集器，先于其他 handlers 收集消息到内部队列 |
+| `-1` | [utils/core/appLifecycle.py](../utils/core/appLifecycle.py) | 按白名单范围保存来信，提交后通知当前聊天界面 |
 | `0` | 大多数 [handlers/](../handlers/) 模块 | 命令、按钮回调、reaction、shutdown mention dispatcher |
 | `1` | [handlers/afc.py](../handlers/afc.py) | AFC 意图检测，检测工具调用意图并注入上下文到 bot_data 推送层 |
 | `2` | [handlers/llm.py](../handlers/llm.py) | LLM 普通消息自动回复，消费 bot_data 推送层的扩展上下文 |
@@ -98,9 +98,9 @@ Telegram handlers 由 [loader.py](../loader.py) 按模块注册表（[modulesReg
 app.add_handler(MessageHandler(filters.ALL, messageCollector), group=-1)
 ```
 
-这一条全匹配消息收集器固定在 -1 分组，把所有收到的 `update.message` 放入 `state.getMessageQueue()`。
+这一条消息收集器固定在 -1 分组。`messageCollector` 保存有效白名单会话或白名单用户发来的 `update.message`，包含普通文字与可识别的媒体；它独立于 LLM 开关。保存成功后，`notifyChatMessage` 仅向当前订阅该聊天的界面发送展示通知。
 
-这个 handler 仅做数据留存，不会修改消息、也不会阻断后面任何分组继续执行，相当于每条消息路过的第一道登记窗口。
+同一来信由数据库中的聊天 ID 和 Telegram 消息 ID 唯一定位。未纳入记录范围、重复来信或保存失败，都不阻断后续分组；保存失败会记录日志。历史与实时通知的交接见 [chatScreen.md](chatScreen.md#接收消息流程)。
 
 ---
 
@@ -274,7 +274,7 @@ loader 按注册表声明顺序加载模块，但模块加载顺序不应该作�
 
 | 场景 | 建议 group | 是否 stop |
 |------|-----------:|-----------|
-| 全局无副作用收集/观测 | `-1` | 否 |
+| 来信留存与界面通知 | `-1` | 否 |
 | Telegram 命令 `/xxx` | `0` | 通常否 |
 | CallbackQuery 按钮 | `0` | 通常否 |
 | 需要优先于 LLM 的自然语言控制 | `0` | 命中后是 |

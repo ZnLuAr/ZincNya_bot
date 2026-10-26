@@ -85,11 +85,9 @@ getMessageCount(chatID=None)
 
 """
 
-
-
-
 import os
 import sqlite3
+from contextlib import closing
 from datetime import datetime
 from typing import List, Optional
 
@@ -122,7 +120,10 @@ chatHistoryDB = Database(DB_PATH, "ChatHistory")
 
 
 def _initSchema(conn):
-    """初始化表结构（由 initDatabase 调用）"""
+    """初始化表结构，旧库仅补充可空的消息 ID，保留原记录。"""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+    if columns and "telegram_message_id" not in columns:
+        conn.execute("ALTER TABLE messages ADD COLUMN telegram_message_id INTEGER")
     conn.executescript(loadSchema("chatHistory"))
 
 
@@ -154,6 +155,12 @@ async def _archiveOverflow(chatID: str, overflowCount: int) -> bool:
     """
     try:
         def _query(conn):
+            # 在归档与删除期间串行化本库写入，删除只针对本次已归档的记录。
+            conn.execute("BEGIN IMMEDIATE")
+            currentCount = conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE chat_id = ?", (str(chatID),),
+            ).fetchone()[0]
+            actualOverflow = max(0, currentCount - CHAT_HISTORY_LIMIT)
             dateStr = datetime.now().strftime(TIMESTAMP_FORMAT_DATE)
             archiveFilename = f"archive_{chatID}_{dateStr}.db"
             archivePath = os.path.join(CHAT_BACKUP_DIR, archiveFilename)
@@ -161,13 +168,13 @@ async def _archiveOverflow(chatID: str, overflowCount: int) -> bool:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, chat_id, direction, sender, content, timestamp
+                SELECT id, chat_id, direction, sender, content, timestamp, telegram_message_id
                 FROM messages
                 WHERE chat_id = ?
-                ORDER BY timestamp ASC
+                ORDER BY timestamp ASC, id ASC
                 LIMIT ?
                 """,
-                (str(chatID), overflowCount)
+                (str(chatID), actualOverflow)
             )
             overflowMessages = cursor.fetchall()
 
@@ -177,30 +184,23 @@ async def _archiveOverflow(chatID: str, overflowCount: int) -> bool:
             os.makedirs(CHAT_BACKUP_DIR, exist_ok=True)
 
             # 归档数据库：一次性临时文件，不纳入 Database 管理
-            with sqlite3.connect(archivePath) as archiveConn:
+            with closing(sqlite3.connect(archivePath)) as archiveConn:
                 archiveCursor = archiveConn.cursor()
 
-                archiveCursor.execute("""
-                    CREATE TABLE IF NOT EXISTS messages (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        chat_id TEXT NOT NULL,
-                        direction TEXT NOT NULL,
-                        sender TEXT,
-                        content BLOB NOT NULL,
-                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
+                _initSchema(archiveConn)
 
                 archiveCursor.executemany(
                     """
-                    INSERT INTO messages (chat_id, direction, sender, content, timestamp)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO messages (chat_id, direction, sender, content, timestamp, telegram_message_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(chat_id, telegram_message_id) DO NOTHING
                     """,
-                    [(msg[1], msg[2], msg[3], msg[4], msg[5]) for msg in overflowMessages]
+                    [(msg[1], msg[2], msg[3], msg[4], msg[5], msg[6]) for msg in overflowMessages]
                 )
 
                 archiveConn.commit()
 
+            cursor.executemany("DELETE FROM messages WHERE id = ?", [(msg[0],) for msg in overflowMessages])
             return True, archiveFilename
 
         success, archiveFilename = await chatHistoryDB.run(_query)
@@ -222,73 +222,56 @@ async def _archiveOverflow(chatID: str, overflowCount: int) -> bool:
         return False
 
 
-async def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
+async def _saveMessage(
+    chatID: str, direction: str, sender: str, content: str,
+    *, telegramMessageID: int | None = None, timestamp: str | None = None,
+) -> int | None:
     """
-    保存一条消息到数据库（自动加密）。
+    加密并提交消息，返回新增记录 ID；重复来信或保存失败返回 None。
 
-    参数：
-        chatID:     聊天对象 ID
-        direction:  消息方向，'incoming' 或 'outgoing' 或 'reaction'
-        sender:     发送者名称
-        content:    消息内容（明文）
-
-    返回：
-        成功返回 True，失败返回 False
-
-    注意：
-        当某个聊天的消息数量超过 CHAT_HISTORY_LIMIT 时，会先将最旧的消息归档到
-        独立的 SQLite 数据库（data/chatBackup/archive_<chatID>_<YYYYMMDD>.db），
-        然后删除。归档文件保持加密状态，使用相同的表结构。
+    Telegram 消息由聊天 ID 和消息 ID 唯一定位。插入与重复判断在同一事务内完成；
+    超限归档在提交后执行，归档失败时保留旧记录。
     """
     try:
         fernet = getFernet()
         encryptedContent = fernet.encrypt(content.encode("utf-8"))
-        localTimestamp = datetime.now().strftime(TIMESTAMP_FORMAT_DATETIME)
+        localTimestamp = timestamp or datetime.now().strftime(TIMESTAMP_FORMAT_DATETIME)
 
         def _insertAndCount(conn):
             cursor = conn.cursor()
 
             cursor.execute(
-                "INSERT INTO messages (chat_id, direction, sender, content, timestamp) VALUES (?, ?, ?, ?, ?)",
-                (str(chatID), direction, sender, encryptedContent, localTimestamp)
+                """INSERT INTO messages
+                   (chat_id, direction, sender, content, timestamp, telegram_message_id)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(chat_id, telegram_message_id) DO NOTHING""",
+                (str(chatID), direction, sender, encryptedContent, localTimestamp, telegramMessageID)
             )
+            if cursor.rowcount == 0:
+                return None, 0
+            recordID = cursor.lastrowid
 
             # 检查是否超出限制
             cursor.execute("SELECT COUNT(*) FROM messages WHERE chat_id = ?", (str(chatID),))
-            return cursor.fetchone()[0]
+            return recordID, cursor.fetchone()[0]
 
-        currentCount = await chatHistoryDB.run(_insertAndCount)
+        recordID, currentCount = await chatHistoryDB.run(_insertAndCount)
+        if recordID is None:
+            return None
 
         # 如果超出限制，归档并删除旧消息
         if currentCount > CHAT_HISTORY_LIMIT:
             overflowCount = currentCount - CHAT_HISTORY_LIMIT
 
             # 归档旧消息
-            if await _archiveOverflow(chatID, overflowCount):
-                def _deleteOverflow(conn):
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """
-                        DELETE FROM messages
-                        WHERE chat_id = ? AND id NOT IN (
-                            SELECT id FROM messages
-                            WHERE chat_id = ?
-                            ORDER BY timestamp DESC, id DESC
-                            LIMIT ?
-                        )
-                        """,
-                        (str(chatID), str(chatID), CHAT_HISTORY_LIMIT)
-                    )
-
-                await chatHistoryDB.run(_deleteOverflow)
-            else:
+            if not await _archiveOverflow(chatID, overflowCount):
                 await logSystemEvent(
                     "❌ 归档失败，先保留旧消息……",
                     f"Chat {chatID}",
                     LogLevel.WARNING
                 )
 
-        return True
+        return recordID
 
     except Exception as e:
         await logSystemEvent(
@@ -297,7 +280,22 @@ async def saveMessage(chatID: str, direction: str, sender: str, content: str) ->
             LogLevel.ERROR,
             exception=e
         )
-        return False
+        return None
+
+
+async def saveMessage(chatID: str, direction: str, sender: str, content: str) -> bool:
+    """保存本地产生的消息；自动加密、超限归档，失败返回 False。"""
+    return await _saveMessage(chatID, direction, sender, content) is not None
+
+
+async def recordIncomingMessage(
+    chatID: str, sender: str, content: str, *, telegramMessageID: int, timestamp: str,
+) -> int | None:
+    """记录来信及原始时间，返回新增记录 ID；重复或失败返回 None。"""
+    return await _saveMessage(
+        chatID, "incoming", sender, content,
+        telegramMessageID=telegramMessageID, timestamp=timestamp,
+    )
 
 
 async def recordBotMessage(chatID: str, content: str) -> bool:
@@ -337,7 +335,7 @@ async def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict
             if limit > 0:
                 cursor.execute(
                     """
-                    SELECT direction, sender, content, timestamp
+                    SELECT id, direction, sender, content, timestamp
                     FROM messages
                     WHERE chat_id = ?
                     ORDER BY timestamp DESC, id DESC
@@ -348,7 +346,7 @@ async def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict
             else:
                 cursor.execute(
                     """
-                    SELECT direction, sender, content, timestamp
+                    SELECT id, direction, sender, content, timestamp
                     FROM messages
                     WHERE chat_id = ?
                     ORDER BY timestamp DESC, id DESC
@@ -366,6 +364,7 @@ async def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict
             try:
                 decryptedContent = fernet.decrypt(row["content"]).decode("utf-8")
                 messages.append({
+                    "id": row["id"],
                     "direction": row["direction"],
                     "sender": row["sender"],
                     "content": decryptedContent,

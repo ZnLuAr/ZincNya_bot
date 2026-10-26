@@ -49,7 +49,7 @@ chatScreen(app, bot: Bot, targetChatID: str)
     · 使用 prompt_toolkit full_screen Application 管理终端布局
     · 上方：滚动聊天记录区（历史 + 实时消息）
     · 底部：固定多行输入区（Enter 换行，Ctrl+S / Alt+Enter 发送）
-    · 收发的消息会自动保存到加密数据库（chatHistory 模块）
+    · 发送成功后保存到加密数据库；来信按白名单范围由全局收信入口记录
     · 按 Esc 或 Ctrl+C 退出界面
     · 支持 LLM 审核命令(:ra/:re/:rr/:rc)、滚动历史(Alt+↑↓ / PgUp/PgDn)
 
@@ -67,9 +67,9 @@ chatScreen(app, bot: Bot, targetChatID: str)
 内部结构：
     - ChatScreenApp (utils/chatScreen/ui.py) 继承 TUI 框架的 FullScreenTUIApp，
       管理 prompt_toolkit 全屏布局
-    - receiverLoop() 后台协程，持续监听 messageQueue 中的消息
+    - receiverLoop() 后台协程，监听本次会话中已提交消息的展示通知
         · 使用 asyncio.wait_for() 带超时读取，避免阻塞
-        · 筛选属于当前 chatID 的消息并更新 UI
+        · 按数据库记录 ID 跳过历史快照已有的消息并更新 UI
         · 检测 shutdownEvent 时主动触发 UI 退出
     - 主循环每轮调用 ui.runOnce() 事件驱动，提交后处理发送逻辑
       （注意不是 ui.run()——该方法按反递归契约已移除）

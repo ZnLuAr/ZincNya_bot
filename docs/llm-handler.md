@@ -145,6 +145,8 @@ utils/llm/
 
 ## 处理流水线总览
 
+来信历史由核心收信入口 `messageCollector` 在 group -1 按白名单范围记录，独立于 LLM 开关与触发条件；本 handler 不写 incoming，也不感知 chatScreen 是否打开。bot 的回复发送成功后仍由 `recordBotMessage` 记录。收信与界面交接见 [chatScreen.md](chatScreen.md#接收消息流程)。
+
 一条带文字或图片的 Telegram 消息，先经过 `handleLLMMessage` 的同步门禁与消息提取，再由后台任务完成防抖、生成和分发：
 
 ```mermaid
@@ -153,8 +155,7 @@ flowchart TD
     B --> C[handleLLMMessage：开关、命令、授权、触发与限流检查]
     C --> D[提取 MessageOrigin 与 MessageInput]
     D --> E[下载图片并附加扩展块]
-    E --> F[按 interactiveChatID 守卫写 incoming 历史]
-    F --> G[写入防抖缓冲并创建或重置后台任务]
+    E --> G[写入防抖缓冲并创建或重置后台任务]
     G --> H[_runLLMPipeline 等待防抖窗口]
     H --> I[取出 MessageInput 批次并构建 GenerationRequest]
     I --> J[按正文意图和候选文本读取 URL]
@@ -273,8 +274,7 @@ async def handleLLMMessage(update, context):
 | 6 | `extractImageRefsForPrompt(message)` | 提取当前消息或引用消息中的图片 |
 | 7 | `prepareMessageInput(...)` | 生成包含来源、清理后正文、引用和上下文开关的 `MessageInput` |
 | 8 | 附加扩展块、`_downloadMessageImages(...)` | 把扩展块、图片数据及失败说明写入 `MessageInput` |
-| 9 | `saveMessage(...)`（`interactiveChatID` 守卫） | 写入 incoming 历史；交互式 chatScreen 接管时避免重复写入 |
-| 10 | `_enqueueLLMDebounce(...)` | 将 `MessageInput` 入缓冲，取消旧任务并重新计时 |
+| 9 | `_enqueueLLMDebounce(...)` | 将 `MessageInput` 入缓冲，取消旧任务并重新计时 |
 
 `prepareMessageInput` 只负责从 Telegram 消息提取来源、清理正文、引用和上下文标记。它不拼 prompt，也不决定 URL 抓取；`GenerationRequest` 在后台根据完整批次派生模型输入、URL 意图/候选文本和审核展示内容。图片下载之后，结果及失败说明保存在 `MessageInput` 中。
 
@@ -667,7 +667,6 @@ def register():
 
 这里记录当前实现的已知限制：
 
-- **历史写入机制**（原「memoryEnabled 对 Telegram 无效」已修复）：`handleLLMMessage` 门禁通过后写 incoming（`interactiveChatID` 守卫——`/send -c` receiver 活跃于该聊天时让位，防双写）；outgoing 挂在 `sendLLMReply` 咽喉（`recordBotMessage`），四条发送路径（on 直发 / off 审核通过 / console·chatScreen / NetworkError 重试）统一覆盖，`:edit` 定稿在审核通过发送时落库、取消与中间重试不落库。
 - **hybrid 尚未校准**：正式 fixture 扩充后，旧 threshold/holdout 报告已失效；当前 `retrievalCalibration.json` 的数据集散列与三个通道阈值为空，显式切换 hybrid 时可能只有 pinned 或严格已启用通道结果。这不是 legacy 的隐式回退，也不是语义质量通过的证明。需重新完成脱敏 holdout、目标机资源和受控人工回复验收后再启用。
 - **语义索引是进程内缓存**：重启后需要后台重新对账/增量建立，未覆盖的记录仍可参加词面通道；超过缓存容量时不会把缓存覆盖率伪装成全量语义库。
 - `handleTelegramErrors` 不保护 `_runLLMPipeline`。里面任何未 catch 的异常都会触发 asyncio 的 "Task exception was never retrieved" warning，需要依赖自身的 try/except。

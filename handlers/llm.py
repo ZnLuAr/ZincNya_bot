@@ -21,9 +21,6 @@ from config import Permission, LLM_DEBOUNCE_SECONDS, TG_MESSAGE_MAX_LEN
 from handlers.llmReview import handleEditReply, handleFeedbackRetry, sendReviewMessage, sendMemoryReviewMessage
 
 from utils.core.errorDecorators import handleTelegramErrors
-from utils.core.stateManager import getStateManager
-
-from utils.chatHistory import saveMessage
 from utils.llm.state import (
     addRateLimit,
     appendPendingMessage,
@@ -372,16 +369,8 @@ async def handleLLMMessage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not messageInput.text:
         return
 
-    chatID = origin.chatID
-
     # 下载图片并保存说明，prompt 与展示文本在消费处分别生成
     messageInput = await _downloadMessageImages(context.bot, imageRefs, messageInput)
-
-    # 写入 incoming 历史（消息确实发生，与生成成败无关）。
-    # /send -c receiver 活跃于该聊天时由 receiver 负责写入（其记录更全：含媒体标注、
-    # 非触发消息），此处让位避免双写
-    if getStateManager().getInteractiveChatID() != chatID:
-        await saveMessage(chatID, "incoming", messageInput.origin.sender, rawText)
 
     # 进入防抖缓冲，取消旧任务并发起新任务
     await _enqueueLLMDebounce(
