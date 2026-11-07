@@ -126,3 +126,52 @@ class TestExecuteDispatch:
         with patch("utils.command.llm._dispatch.logAction", new_callable=AsyncMock):
             # 不应抛异常
             await execute(None, ["totally-bogus-subcommand"])
+
+
+@pytest.mark.parametrize("section, setter", [("model", "setModelProvider"), ("visionmodel", "setVisionProvider")])
+async def test_consoleProviderChangesCorrectProfile(section, setter):
+    with (
+        patch(f"utils.command.llm._dispatch.{setter}") as save,
+        patch("utils.command.llm._dispatch.logAction", new_callable=AsyncMock),
+    ):
+        await execute(None, [section, "provider", "openai"])
+    save.assert_called_once_with("openai")
+
+
+async def test_consoleVisionResetSynchronizesProfile():
+    with (
+        patch("utils.command.llm._dispatch.resetVisionModel") as reset,
+        patch("utils.command.llm._dispatch.logAction", new_callable=AsyncMock),
+    ):
+        await execute(None, ["visionmodel", "reset"])
+    reset.assert_called_once_with()
+
+
+async def test_consoleAcceptsOpaqueModelAndRejectsInvalidInput(capsys):
+    with (
+        patch("utils.llm.config._setConfig") as save,
+        patch("utils.command.llm._dispatch.logAction", new_callable=AsyncMock),
+    ):
+        await execute(None, ["model", "switch", "tenant/模型:preview"])
+        save.assert_called_once_with(model="tenant/模型:preview")
+        save.reset_mock()
+        await execute(None, ["model", "switch", "model\nwith-control"])
+        save.assert_not_called()
+    assert "空白或控制字符" in capsys.readouterr().out
+
+
+async def test_consoleStatusShowsEffectiveEndpointWithoutSecrets(capsys, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "OPENAI_BASE_URL", "https://user:private-pwd@relay.example/v1?key=private-key")
+    with (
+        patch("utils.command.llm._dispatch.getModel", return_value="kimi-k2.5"),
+        patch("utils.command.llm._dispatch.getModelProvider", return_value="openai"),
+        patch("utils.command.llm._dispatch.getVisionModel", return_value="kimi-k2.5"),
+        patch("utils.command.llm._dispatch.getVisionProvider", return_value="openai"),
+        patch("utils.llm.client._router._buildProviders", side_effect=AssertionError("不能初始化 SDK")),
+    ):
+        await execute(None, ["status"])
+    text = capsys.readouterr().out
+    assert "OpenAI Chat Completions" in text
+    assert "https://relay.example/v1" in text
+    assert "private-" not in text

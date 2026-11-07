@@ -336,3 +336,153 @@ class TestGeminiTruncationRetry:
             await provider.requestReply(**_KWARGS)
 
         assert provider._client.aio.models.generate_content.await_count == 2
+
+
+
+
+@pytest.mark.parametrize("model, providerKey, expectedURL", [
+    ("deepseek-chat", "anthropic", "https://anthropic-proxy.invalid/v1/messages"),
+    ("kimi-k2.5", "openai", "https://openai-proxy.invalid/v1/chat/completions"),
+    ("tenant/模型:preview", "openai", "https://openai-proxy.invalid/v1/chat/completions"),
+    ("deepseek-chat", "auto", "https://legacy-deepseek.invalid/v1/chat/completions"),
+])
+async def test_routedSDKPreservesProtocolEndpointAndModel(monkeypatch, model, providerKey, expectedURL):
+    """用真实 SDK 与 HTTP 替身核对最终请求，不访问网络。"""
+    import json
+
+    import httpx
+    from anthropic import AsyncAnthropic
+    from openai import AsyncOpenAI
+
+    import config
+
+    from utils.llm.client import _router
+    from utils.llm.client.anthropic import _sdkMajorVersion
+
+    httpLibrary = httpx
+    if providerKey == "anthropic" and _sdkMajorVersion() >= 1:
+        import httpx2
+        httpLibrary = httpx2
+
+    captured = []
+    clients = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        captured.append((str(request.url), body))
+        if request.url.path.endswith("/messages"):
+            response = {
+                "id": "msg_offline", "type": "message", "role": "assistant", "model": body["model"],
+                "content": [{"type": "text", "text": "验证成功"}], "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+        else:
+            response = {
+                "id": "chatcmpl_offline", "object": "chat.completion", "created": 0, "model": body["model"],
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "验证成功"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        return httpLibrary.Response(200, json=response)
+
+    clientType = AsyncAnthropic if providerKey == "anthropic" else AsyncOpenAI
+
+    def buildClient(**kwargs):
+        kwargs["http_client"] = httpLibrary.AsyncClient(transport=httpLibrary.MockTransport(handle))
+        client = clientType(**kwargs)
+        clients.append(client)
+        return client
+
+    settings = {
+        "ANTHROPIC_API_KEY": "offline-anthropic-key", "ANTHROPIC_AUTH_TOKEN": None,
+        "ANTHROPIC_BASE_URL": "https://anthropic-proxy.invalid",
+        "OPENAI_API_KEY": "offline-openai-key", "OPENAI_BASE_URL": "https://openai-proxy.invalid/v1",
+        "DEEPSEEK_API_KEY": "offline-deepseek-key", "LLM_OPENAI_BASE_URL": "https://legacy-deepseek.invalid/v1",
+        "LLM_PROXY": None,
+    }
+    for key, value in settings.items():
+        monkeypatch.setattr(config, key, value)
+    monkeypatch.setattr(_router, "_providers", None)
+    monkeypatch.setattr(
+        "utils.llm.client.anthropic.AsyncAnthropic" if providerKey == "anthropic"
+        else "utils.llm.client.openaiCompat.AsyncOpenAI",
+        buildClient,
+    )
+    try:
+        provider = _router.getProvider(model, providerKey)
+        result = await provider.requestReply(
+            systemMessages=["测试规则"], userContent="测试内容", model=model, maxTokens=32, temperature=0.2,
+        )
+        assert result == "验证成功"
+        assert len(captured) == 1
+        endpoint, body = captured[0]
+        assert endpoint == expectedURL
+        assert body["model"] == model
+        assert body["messages"][-1]["content"] == "测试内容"
+        if providerKey == "anthropic":
+            assert body["system"] == "测试规则"
+        else:
+            assert body["messages"][0] == {"role": "system", "content": "测试规则"}
+    finally:
+        for client in clients:
+            await client.close()
+
+
+
+
+def test_geminiConfiguredEndpointMatchesStatusAndSDK(monkeypatch):
+    """状态和实际 SDK 使用同一 Gemini 端点快照，且无需发网络请求。"""
+    import asyncio
+    import config
+    from utils.llm.client import _router
+
+    endpoint = "https://gemini-relay.example/custom-api"
+    monkeypatch.setattr(config, "GOOGLE_GEMINI_BASE_URL", endpoint)
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "offline-gemini-key")
+    monkeypatch.setattr(config, "LLM_PROXY", None)
+    # SDK 环境即使后来不同，配置组也明确使用已读取的端点。
+    monkeypatch.setenv("GOOGLE_GEMINI_BASE_URL", "https://later-env.example")
+    provider = _router._buildProviders()["gemini"]
+    assert endpoint in _router.describeRoute("gemini-test", "gemini")
+    client = provider._getClient()
+    try:
+        assert client._api_client._http_options.base_url == endpoint
+    finally:
+        asyncio.run(client.aio.aclose())
+        client.close()
+
+
+def test_directGeminiProviderRetainsSDKEnvironmentBehavior(monkeypatch):
+    """直接实例未指定 baseUrl 时，保留 SDK 自己读取现有变量的行为。"""
+    import asyncio
+    endpoint = "https://direct-sdk.example"
+    monkeypatch.setenv("GOOGLE_GEMINI_BASE_URL", endpoint)
+    provider = GeminiProvider("offline-gemini-key")
+    client = provider._getClient()
+    try:
+        assert client._api_client._http_options.base_url == endpoint
+    finally:
+        asyncio.run(client.aio.aclose())
+        client.close()
+
+
+def test_geminiProxyAndExplicitEndpointAreBothAcceptedByRealSDK():
+    """真实 SDK 验证 HttpOptions，代理和端点都必须合法并同时生效。"""
+    import asyncio
+    from google.genai import types
+
+    provider = GeminiProvider(
+        "offline-key", proxy="http://proxy.example:1080", baseUrl="https://gemini.example",
+    )
+    client = provider._getClient()
+    try:
+        options = client._api_client._http_options
+        assert isinstance(options, types.HttpOptions)
+        assert options.base_url == "https://gemini.example"
+        assert options.async_client_args == {"proxy": "http://proxy.example:1080"}
+        assert client._api_client._async_httpx_client_args["proxy"] == "http://proxy.example:1080"
+        assert options.httpx_async_client is None
+        assert client._api_client._async_httpx_client.is_closed is False
+    finally:
+        asyncio.run(client.aio.aclose())
+        client.close()
+    assert client._api_client._async_httpx_client.is_closed is True

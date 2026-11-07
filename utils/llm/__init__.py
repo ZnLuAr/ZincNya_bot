@@ -4,7 +4,7 @@ utils/llm/
 LLM 集成模块：
     - config: 配置管理（开关、模式、模型、视觉模型、提示词、记忆自动批准）
     - state: 运行时状态容器（审核队列、速率限制、防抖消息缓冲、one-shot context）
-    - client: 多模型 LLM 客户端（按模型前缀路由至各 provider，双调用视觉架构）
+    - client: 多模型 LLM 客户端（显式选择调用配置组，旧配置按模型前缀路由，双调用视觉架构）
     - memory: structured memory 存储、检索与 LLM 自主操作
     - knowledge: 知识库（Markdown 文件管理、BM25 检索、上下文注入）
     - contextBuilder: 统一上下文组装（背景侧）
@@ -25,6 +25,11 @@ from .config import (
     setModel,
     getVisionModel,
     setVisionModel,
+    getModelProvider,
+    setModelProvider,
+    getVisionProvider,
+    setVisionProvider,
+    resetVisionModel,
     getForceFallbackPrompt,
     setForceFallbackPrompt,
     getGroupTriggerMode,

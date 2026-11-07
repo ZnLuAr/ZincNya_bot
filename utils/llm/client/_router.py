@@ -1,9 +1,12 @@
 """
 utils/llm/client/_router.py
 
-模型名 → LLM 提供商的路由逻辑。
+调用配置组 → 协议、凭据与端点；未显式指定时兼容旧模型前缀路由。
 """
 
+from urllib.parse import urlsplit, urlunsplit
+
+from ..config import validateModelName, validateModelProvider
 from ._base import LLMProvider
 
 
@@ -49,20 +52,32 @@ _providers: dict[str, LLMProvider] | None = None
 
 
 
+def _providerBaseURLs() -> dict[str, str]:
+    """供请求与状态展示共用；不初始化 SDK 或读取凭据。"""
+    from config import ANTHROPIC_BASE_URL, GOOGLE_GEMINI_BASE_URL, OPENAI_BASE_URL, LLM_OPENAI_BASE_URL
+
+    return {
+        "anthropic": ANTHROPIC_BASE_URL or "https://api.anthropic.com",
+        "gemini": GOOGLE_GEMINI_BASE_URL or "https://generativelanguage.googleapis.com",
+        "openai": OPENAI_BASE_URL or "https://api.openai.com/v1",
+        "deepseek": LLM_OPENAI_BASE_URL or "https://api.deepseek.com",
+        "doubao": "https://ark.cn-beijing.volces.com/api/v3",
+    }
+
+
 def _buildProviders() -> dict[str, LLMProvider]:
-    """构建所有 provider 实例。SDK 缺失时跳过，不阻塞启动。"""
+    """构建调用配置组；SDK 缺失时跳过，凭据在实际调用前检查。"""
     from config import (
         ANTHROPIC_API_KEY,
         ANTHROPIC_AUTH_TOKEN,
-        ANTHROPIC_BASE_URL,
         GEMINI_API_KEY,
         OPENAI_API_KEY,
         DEEPSEEK_API_KEY,
         DOUBAO_API_KEY,
-        LLM_OPENAI_BASE_URL,
         LLM_PROXY,
     )
 
+    endpoints = _providerBaseURLs()
     providers: dict[str, LLMProvider] = {}
 
     try:
@@ -71,29 +86,29 @@ def _buildProviders() -> dict[str, LLMProvider]:
             ANTHROPIC_API_KEY,
             proxy=LLM_PROXY,
             authToken=ANTHROPIC_AUTH_TOKEN,
-            baseUrl=ANTHROPIC_BASE_URL,
+            baseUrl=endpoints["anthropic"],
         )
     except ImportError:
         pass
 
     try:
         from .gemini import GeminiProvider
-        providers["gemini"] = GeminiProvider(GEMINI_API_KEY, proxy=LLM_PROXY)
+        providers["gemini"] = GeminiProvider(
+            GEMINI_API_KEY, proxy=LLM_PROXY, baseUrl=endpoints["gemini"],
+        )
     except ImportError:
         pass
 
     try:
         from .openaiCompat import OpenAICompatProvider
-        providers["openai"] = OpenAICompatProvider(OPENAI_API_KEY, proxy=LLM_PROXY)
+        providers["openai"] = OpenAICompatProvider(
+            OPENAI_API_KEY, baseURL=endpoints["openai"], proxy=LLM_PROXY,
+        )
         providers["deepseek"] = OpenAICompatProvider(
-            DEEPSEEK_API_KEY,
-            baseURL=LLM_OPENAI_BASE_URL or "https://api.deepseek.com",
-            proxy=LLM_PROXY,
+            DEEPSEEK_API_KEY, baseURL=endpoints["deepseek"], proxy=LLM_PROXY,
         )
         providers["doubao"] = OpenAICompatProvider(
-            DOUBAO_API_KEY,
-            baseURL="https://ark.cn-beijing.volces.com/api/v3",
-            proxy=LLM_PROXY,
+            DOUBAO_API_KEY, baseURL=endpoints["doubao"], proxy=LLM_PROXY,
         )
     except ImportError:
         pass
@@ -103,8 +118,60 @@ def _buildProviders() -> dict[str, LLMProvider]:
 
 
 
-def getProvider(model: str) -> LLMProvider:
-    """根据模型名前缀返回对应的 LLM 提供商实例。"""
+def resolveProviderKey(model: str, providerKey: str = "auto") -> str:
+    """显式配置优先；auto 只兼容旧前缀，不根据凭据猜测端点。"""
+    validateModelName(model)
+    validateModelProvider(providerKey)
+    if providerKey != "auto":
+        return providerKey
+
+    for prefix, key in _PREFIX_MAP:
+        if model.startswith(prefix):
+            return key
+
+    suggestion = _suggestModel(model)
+    hint = f"\n你是不是想用 {suggestion}？" if suggestion else ""
+    raise ValueError(
+        f"未知的模型名：{model}{hint}"
+        "\n无法按前缀选择调用配置组，请用 /llm model provider <配置组> 显式指定"
+        "（视觉模型使用 /llm visionmodel provider <配置组>）"
+    )
+
+
+def describeRoute(model: str, providerKey: str = "auto") -> str:
+    """解释当前配置，不要求 SDK、凭据或网络；端点隐藏认证及查询参数。"""
+    try:
+        key = resolveProviderKey(model, providerKey)
+    except ValueError as error:
+        return f"配置无效：{error}"
+
+    protocol = {
+        "anthropic": "Anthropic Messages",
+        "gemini": "Gemini GenerateContent",
+        "openai": "OpenAI Chat Completions",
+        "deepseek": "OpenAI Chat Completions",
+        "doubao": "OpenAI Chat Completions",
+    }[key]
+    source = "按模型前缀" if providerKey == "auto" else "显式配置"
+    try:
+        parsed = urlsplit(_providerBaseURLs()[key])
+        host = parsed.hostname or ""
+        if ":" in host:
+            host = f"[{host}]"
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        endpoint = urlunsplit((parsed.scheme, host, parsed.path, "", ""))
+        if not host or parsed.scheme not in ("http", "https"):
+            endpoint = "（端点格式无效）"
+    except ValueError:
+        endpoint = "（端点格式无效）"
+    return f"{key}（{source}；{protocol}；端点：{endpoint}）"
+
+
+def getProvider(model: str, providerKey: str = "auto") -> LLMProvider:
+    """取得显式或兼容推断的调用配置组，模型名称始终原样交给上游。"""
+    validateModelName(model)
+    validateModelProvider(providerKey)
     global _providers
     if _providers is None:
         _providers = _buildProviders()
@@ -115,37 +182,27 @@ def getProvider(model: str) -> LLMProvider:
             "（pip install -r requirements/llm.txt）"
         )
 
-    # 检查常见拼写错误
-    corrected = _MODEL_TYPOS.get(model.lower())
-    if corrected and corrected != model:
-        import warnings
-        warnings.warn(
-            f"模型名可能拼写有误：{model} → 建议使用 {corrected}",
-            stacklevel=3,
+    # 自定义上游可能有同名别名；只有兼容前缀路由才给拼写建议，绝不改名。
+    if providerKey == "auto":
+        corrected = _MODEL_TYPOS.get(model.lower())
+        if corrected and corrected != model:
+            import warnings
+            warnings.warn(
+                f"模型名可能拼写有误：{model} → 建议使用 {corrected}",
+                stacklevel=3,
+            )
+
+    key = resolveProviderKey(model, providerKey)
+    provider = _providers.get(key)
+    if provider is None:
+        raise RuntimeError(
+            f"模型 {model} 的调用配置组 {key} 不可用——对应 SDK 未安装"
         )
-
-    for prefix, providerKey in _PREFIX_MAP:
-        if model.startswith(prefix):
-            provider = _providers.get(providerKey)
-            if not provider:
-                raise RuntimeError(
-                    f"模型 {model} 对应的 provider ({providerKey}) 不可用"
-                    f"——SDK 未安装或 API key 未配置"
-                )
-            if not provider.isAvailable():
-                raise RuntimeError(
-                    f"模型 {model} 需要 API key，但未配置"
-                    f"（provider: {providerKey}）"
-                )
-            return provider
-
-    # 未匹配任何前缀，尝试模糊建议
-    suggestion = _suggestModel(model)
-    hint = f"\n你是不是想用 {suggestion}？" if suggestion else ""
-    raise ValueError(
-        f"未知的模型名：{model}{hint}"
-        f"\n支持的前缀：{', '.join(p for p, _ in _PREFIX_MAP)}"
-    )
+    if not provider.isAvailable():
+        raise RuntimeError(
+            f"模型 {model} 的调用配置组 {key} 未配置 API key 或认证 token"
+        )
+    return provider
 
 
 def _suggestModel(model: str) -> str | None:

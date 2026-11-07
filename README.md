@@ -221,7 +221,7 @@ ZincNya_bot/
 │   │   ├── urlReader.py            # 受控 URL 抓取（SSRF 防护、redirect、byte cap、HTML/text 提取）
 │   │   ├── client/                 # 多模型 API 客户端（双调用视觉架构）
 │   │   │   ├── _base.py            # LLMProvider 抽象基类（支持纯文本与多模态）
-│   │   │   ├── _router.py          # 模型前缀路由 + 模糊匹配纠错
+│   │   │   ├── _router.py          # 显式调用配置组 + 兼容前缀路由
 │   │   │   ├── _guardrails.py      # 安全防护提示词、视觉描述 prompt 与记忆操作指令
 │   │   │   ├── _request.py         # 请求发送与自动重试
 │   │   │   ├── _generate.py        # 回复生成编排（system prompt 构建 + 双调用视觉）
@@ -511,15 +511,30 @@ python scripts/test.py --fast
 
 ### 支持的模型
 
-| 前缀 | 提供商 | API Key 环境变量 |
-|------|--------|-----------------|
-| `claude-` | Anthropic | `ANTHROPIC_API_KEY` |
-| `gemini-` | Google Gemini | `GEMINI_API_KEY` |
-| `gpt-`、`chatgpt-`、`o1-`、`o3-` | OpenAI | `OPENAI_API_KEY` |
-| `deepseek-` | DeepSeek | `DEEPSEEK_API_KEY` |
-| `doubao-` | 豆包（火山引擎） | `DOUBAO_API_KEY` |
+模型名由上游服务决定，咱会原样传递。调用配置组（provider）同时选择请求协议、凭据和端点：
 
-切模型：`/llm model switch <模型名>`（如 `claude-sonnet-4-6`、`gemini-2.5-flash`、`deepseek-chat`）。
+| 配置组 | 请求协议 | 凭据环境变量 | 自定义端点 |
+|--------|----------|--------------|------------|
+| `anthropic` | Anthropic Messages | `ANTHROPIC_API_KEY` 或优先使用的 `ANTHROPIC_AUTH_TOKEN` | `ANTHROPIC_BASE_URL` |
+| `gemini` | Gemini GenerateContent | `GEMINI_API_KEY` | `GOOGLE_GEMINI_BASE_URL`（沿用 SDK 环境变量） |
+| `openai` | OpenAI Chat Completions | `OPENAI_API_KEY` | `OPENAI_BASE_URL` |
+| `deepseek` | OpenAI Chat Completions | `DEEPSEEK_API_KEY` | `LLM_OPENAI_BASE_URL`（历史变量名，仅影响 DeepSeek） |
+| `doubao` | OpenAI Chat Completions | `DOUBAO_API_KEY` | 当前固定火山引擎端点 |
+
+默认 `auto` 保留旧行为：`claude-` → anthropic，`gemini-` → gemini，`gpt-` / `chatgpt-` / `o1-` / `o3-` → openai，`deepseek-` → deepseek，`doubao-` → doubao。显式选择配置组后，前缀不再参与路由，也不会因为本地不认识 Kimi 或自定义别名而拒绝请求。
+
+Telegram 和控制台使用相同命令。例如，上游 Anthropic 兼容端点支持 DeepSeek 时，配置好 `ANTHROPIC_BASE_URL` 及其认证后：
+
+```bash
+/llm model provider anthropic
+/llm model switch deepseek-chat
+```
+
+使用 OpenAI 兼容端点上的 Kimi，则配置 `OPENAI_BASE_URL` 和 `OPENAI_API_KEY`，再执行 `/llm model provider openai`、`/llm model switch kimi-k2.5`。这些操作只切换配置；模型是否存在、是否支持图片等由上游决定。
+
+`/llm model`、`/llm visionmodel` 和 `/llm status` 会展示有效配置组、协议、端点及显式/前缀来源。未知前缀在 `auto` 下会提示显式选组，不会猜测凭据；已选组缺少 SDK 或认证会在调用时报错，不会换到别的端点。模型标识允许 `/`、`:` 和中文等可打印字符，最长 256 字符，禁止空白和控制字符。切换模型名会保留所选配置组；`/llm model provider auto` 恢复前缀路由。
+
+详细配置、视觉路由及重启要求见 [LLM Handler 的模型调用配置](docs/llm-handler.md#模型调用配置)。
 
 ### 图片支持（双调用视觉架构）
 
@@ -532,9 +547,9 @@ LLM 可以读用户发来的图，可以选择走双调用方案：先差遣轻�
 - 群聊 reply 含图消息 + 文字 @bot → 同上；
 - 纯图片（无文字）→ 不触发，静默忽略。
 
-视觉模型在 `data/llm/llmConfig.json` 里用 `visionModel` 字段独立配置（默认 `claude-sonnet-4-6`）。
+视觉模型在 `data/llm/llmConfig.json` 里由 `visionModel`、`visionProvider` 独立配置。命令为 `/llm visionmodel switch <模型名>`、`/llm visionmodel provider <配置组>`；`/llm visionmodel reset` 同时同步主模型名和调用配置组。
 
-> 当然也可以使用单调用。只要视觉模型和主模型相同，并且主模型拥有多模态能力，图片就可以直接被主模型读取。
+> 当然也可以使用单调用。只要视觉模型和主模型的名称、有效调用配置组都相同，并且主模型拥有多模态能力，图片就可以直接被主模型读取。
 
 ### 上下文组织
 

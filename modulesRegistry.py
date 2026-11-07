@@ -132,6 +132,7 @@ MODULES = {
             "tests/utils/llm/memory/test_memoryRuntime.py",
             "tests/scripts/test_memoryModel.py",
             "tests/scripts/test_evaluateMemory.py",
+            "tests/scripts/test_llmScriptRouting.py",
             "tests/scripts/test_memoryPanel.py",
             "tests/scripts/test_studyMemoryRetrieval.py",
             "tests/scripts/test_probeMemoryReranker.py",

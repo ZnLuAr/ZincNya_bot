@@ -10,7 +10,7 @@ from config import LLM_REQUEST_MAX_RETRIES, LLM_REQUEST_RETRY_DELAY
 
 from utils.core.logger import logSystemEvent, LogLevel, LogChildType
 
-from ..config import getModel
+from ..config import loadLLMConfig
 from ._router import getProvider
 
 
@@ -99,8 +99,9 @@ async def requestReply(
     ]
     systemMessages = [s for s in systemMessages if s.strip()]
 
-    model = getModel()
-    provider = getProvider(model)
+    cfg = loadLLMConfig()
+    model = cfg["model"]
+    provider = getProvider(model, cfg.get("modelProvider", "auto"))
     return await requestWithRetry(
         provider,
         systemMessages=systemMessages,

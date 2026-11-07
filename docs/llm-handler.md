@@ -1,6 +1,6 @@
 # LLM Handler 架构文档
 
-> 最后更新：2026-10-26
+> 最后更新：2026-11-07
 >
 > Written by ZincNya~ ❤
 
@@ -20,7 +20,7 @@
 ## 目录
 
 - [设计决策](#设计决策)
-  - [为什么拆成大量小 helper](#为什么拆成大量小-helper)
+  - [函数与模块边界](#函数与模块边界)
   - [为什么 `_runLLMPipeline` 要做成后台任务](#为什么-_runllmpipeline-要做成后台任务)
   - [为什么 URL 读取必须满足触发条件且能读取到存在意图才执行](#为什么-url-读取必须满足触发条件且能读取到存在意图才执行)
   - [为什么 reply-to 只贡献 URL 候选，不贡献意图](#为什么-reply-to-只贡献-url-候选不贡献意图)
@@ -35,6 +35,7 @@
 - [防抖聚合](#防抖聚合)
 - [URL 读取集成](#url-读取集成)
 - [图片处理](#图片处理)
+- [模型调用配置](#模型调用配置)
 - [回复分发（`autoMode`）](#回复分发automode)
 - [上下文组织](#上下文组织)
 - [记忆操作分发（`memoryAutoApprove`）](#记忆操作分发memoryautoapprove)
@@ -412,10 +413,33 @@ provider 层的截断提额重试（三个 provider 同款）则在**更早一�
 
 ### 调用策略
 
-由 `visionModel` 是否等于 `model` 决定：
+比较 `visionModel` / `model` 和 `visionProvider` / `modelProvider` 解析后的有效调用配置组：
 
-- **等于**：单调用，图片直接传主模型；
-- **不等于**：双调用，先用视觉模型描述图片，再把文本描述给主模型，节省主模型 token。
+- **模型名、有效配置组都相同**：单调用，图片直接传主模型；
+- **任一不同**：双调用，先用视觉模型描述图片，再把文本描述给主模型。同名模型配置在不同端点时也会分开调用。
+
+---
+
+## 模型调用配置
+
+模型名称和调用端点分别配置，咱就能把 `deepseek-chat` 交给支持它的 Anthropic 中转，也能通过 OpenAI 兼容端点使用 Kimi 或自定义别名。
+
+`data/llm/llmConfig.json` 的 `modelProvider` 控制主模型，`visionProvider` 控制独立视觉模型，合法值为 `auto`、`anthropic`、`openai`、`gemini`、`deepseek`、`doubao`。配置组同时选择协议、凭据及端点，环境变量对应关系见 [README 的支持模型说明](../README.md#支持的模型)。
+
+| 配置与入口 | 行为 |
+|------------|------|
+| provider 未配置或为 `auto` | 保留旧模型前缀路由；未知前缀提示显式选择配置组 |
+| 显式 provider | 优先于模型前缀，模型名不改写；无拼写纠错替换 |
+| `model switch` / `visionmodel switch` | 只改模型名，保留该模型所选配置组 |
+| `visionmodel reset` | 加锁读取同一快照，同时同步主模型名和配置组 |
+| `generateReply` | 一份请求级快照同时决定主模型和视觉调用 |
+| `requestReply` | 共享底层入口同样从一份配置快照选择主模型和调用配置组 |
+
+模型标识允许 `/`、`:`、中文等可打印字符，最长 256 字符，不接受空白或控制字符；配置与 Telegram / console 命令共用校验。上游是否支持名称和输入由 API 决定。配置组缺少 SDK 或凭据时明确报错，不会隐式改用其它配置组。记忆选择器继续使用自己的独立协议、凭据和端点，不继承主生成配置。
+
+`/llm model`、`/llm visionmodel`、`/llm status` 解释有效配置组、协议、端点及选择来源，只读取配置，不初始化 SDK 或发出请求，也不要求凭据已配齐。展示端点时隐藏 URL 的认证信息、查询参数和片段。直接编辑配置写错 provider 或模型名时，状态会标明配置无效。
+
+配置组在请求开始时确定，网络重试不重新选路。provider 和 SDK 客户端沿用进程级缓存，修改 `.env` 后需要重启；运行时命令修改的 `modelProvider` / `visionProvider` 对后续请求生效。`OPENAI_BASE_URL` 只影响 openai 配置组；历史 `LLM_OPENAI_BASE_URL` 继续只影响 deepseek，两个端点和凭据互不串用。
 
 ---
 
@@ -647,7 +671,10 @@ def register():
 /llm -on | -off              开启/关闭 LLM
 /llm status                  显示完整配置
 /llm model [switch <名称>]   主模型
+/llm model provider [配置组] 主模型协议、凭据及端点
 /llm visionmodel [...]       视觉模型
+/llm visionmodel provider [配置组]
+/llm visionmodel reset       同步主模型名和调用配置组
 /llm trigger mention|keyword 群聊触发模式
 /llm keyword add|del <词>    触发关键词
 /llm memory -on | -off       长期记忆

@@ -116,3 +116,57 @@ async def test_generate_reply_passes_memory_query_without_extra_provider_call():
     assert result == "final reply"
     assert mockContext.await_args.kwargs["memoryQuery"] is memoryQuery
     mockRequest.assert_awaited_once()
+
+
+
+
+@pytest.mark.parametrize("mainModel, mainProvider, visionModel, visionProvider, expectedCalls", [
+    ("same-model", "anthropic", "same-model", "openai", 2),
+    ("claude-test", "auto", "claude-test", "anthropic", 1),
+    ("text-model", "openai", "vision-model", "openai", 2),
+    ("same-model", "openai", "same-model", "openai", 1),
+])
+async def test_generationRoutesMainAndVisionFromSameSnapshot(
+    mainModel, mainProvider, visionModel, visionProvider, expectedCalls,
+):
+    """同名但不同端点的模型必须双调用；auto 与显式同路由仍可单调用。"""
+    cfg = {"model": mainModel, "modelProvider": mainProvider,
+           "visionModel": visionModel, "visionProvider": visionProvider}
+    with (
+        patch("utils.llm.client._generate.loadPrompts", return_value=_PROMPTS),
+        patch("utils.llm.client._generate._buildSystemMessages", return_value=["system"]),
+        patch("utils.llm.client._generate.loadLLMConfig", return_value=cfg) as loadConfig,
+        patch("utils.llm.client._generate.buildConversationContext", new_callable=AsyncMock, return_value="context"),
+        patch("utils.llm.client._generate.getProvider", side_effect=lambda model, key: key) as getProvider,
+        patch("utils.llm.client._generate.requestWithRetry", new_callable=AsyncMock, return_value="图片描述" * 200) as request,
+        patch("utils.llm.afcApi.handleAFCInLLMResponse", new_callable=AsyncMock, return_value="最终回复"),
+    ):
+        result = await generateReply("当前消息", "chat", images=[{"data": "aW1hZ2U=", "mimeType": "image/png"}])
+    assert result == "最终回复"
+    loadConfig.assert_called_once_with()
+    assert request.await_count == expectedCalls
+    assert getProvider.call_args_list[-1].args == (mainModel, mainProvider)
+    assert request.await_args_list[-1].args == (mainProvider,)
+    assert request.await_args_list[-1].kwargs["model"] == mainModel
+    if expectedCalls == 2:
+        assert getProvider.call_args_list[0].args == (visionModel, visionProvider)
+        assert request.await_args_list[0].kwargs["model"] == visionModel
+        assert request.await_args_list[0].args == (visionProvider,)
+    else:
+        assert isinstance(request.await_args.kwargs["userContent"], list)
+
+
+async def test_sharedRequestUsesSingleConfigSnapshotAndOpaqueModel():
+    from utils.llm.client._request import requestReply
+    model = "tenant/模型:latest"
+    with (
+        patch("utils.llm.client._request.loadLLMConfig", return_value={"model": model, "modelProvider": "anthropic"}) as loadConfig,
+        patch("utils.llm.client._request.getProvider", return_value="provider") as getProvider,
+        patch("utils.llm.client._request.requestWithRetry", new_callable=AsyncMock, return_value="回复") as request,
+    ):
+        result = await requestReply(systemBlocks=[{"text": "规则"}], userContent="内容", maxTokens=32, temperature=0.5)
+    assert result == "回复"
+    loadConfig.assert_called_once_with()
+    getProvider.assert_called_once_with(model, "anthropic")
+    assert request.await_args.kwargs["model"] == model
+    assert request.await_args.kwargs["systemMessages"] == ["规则"]

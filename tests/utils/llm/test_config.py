@@ -409,3 +409,49 @@ def test_set_knowledge_min_score_invalid():
     """无效的 minScore 抛出异常"""
     with pytest.raises(ValueError, match="必须是大于等于 0 的数"):
         setKnowledgeMinScore(-1)
+
+
+
+
+@pytest.mark.parametrize("model", ["kimi-k2.5", "org/模型:preview", "x" * 256])
+def test_modelNamePreservesOpaqueUpstreamIdentifiers(model):
+    from utils.llm.config import validateModelName
+    assert validateModelName(model) == model
+
+
+@pytest.mark.parametrize("model", ["", "x y", "x\ny", "x\x00y", "x" * 257, None, 3])
+def test_modelSettersRejectInvalidNamesBeforeSaving(model):
+    from utils.llm.config import setModel, setVisionModel
+    with patch("utils.llm.config._setConfig") as save:
+        for setter in (setModel, setVisionModel):
+            with pytest.raises(ValueError):
+                setter(model)
+    save.assert_not_called()
+
+
+def test_providerSettingsPersistAndVisionResetCopiesBothFields(tmp_path):
+    from utils.llm.config import setModel, setVisionModel, setModelProvider, setVisionProvider, resetVisionModel
+    path = tmp_path / "llmConfig.json"
+    path.write_text(json.dumps({"enabled": True, "model": "deepseek-chat"}), encoding="utf-8")
+    with patch("utils.llm.config.LLM_CONFIG_PATH", str(path)):
+        assert loadLLMConfig()["modelProvider"] == "auto"
+        assert loadLLMConfig()["visionProvider"] == "auto"
+        setModelProvider("anthropic")
+        setModel("kimi-k2.5")
+        setVisionProvider("openai")
+        setVisionModel("tenant/vision:latest")
+        assert loadLLMConfig()["modelProvider"] == "anthropic"
+        resetVisionModel()
+        cfg = loadLLMConfig()
+    assert cfg["visionModel"] == cfg["model"] == "kimi-k2.5"
+    assert cfg["visionProvider"] == cfg["modelProvider"] == "anthropic"
+    assert cfg["enabled"] is True
+
+
+def test_invalidProviderNeverSaves():
+    from utils.llm.config import setModelProvider, setVisionProvider
+    with patch("utils.llm.config._setConfig") as save:
+        for setter in (setModelProvider, setVisionProvider):
+            with pytest.raises(ValueError, match="配置组"):
+                setter("unknown")
+    save.assert_not_called()

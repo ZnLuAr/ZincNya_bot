@@ -8,7 +8,7 @@ scripts/expand_knowledge_tags.py
     python scripts/expand_knowledge_tags.py            # 增量（默认）
     python scripts/expand_knowledge_tags.py --force    # 全量重扩展
     python scripts/expand_knowledge_tags.py --dry-run  # 只显示将要处理的文件
-    python scripts/expand_knowledge_tags.py --model anthropic/claude-haiku-4-5  # 指定模型
+    python scripts/expand_knowledge_tags.py --model claude-haiku-4-5-20251001 --provider anthropic  # 指定模型
 """
 
 import os
@@ -26,7 +26,7 @@ import yaml
 from config import LLM_KNOWLEDGE_DIR
 from utils.llm.client._request import requestWithRetry
 from utils.llm.client._router import getProvider
-from utils.llm.config import getModel
+from utils.llm.config import loadLLMConfig, validateModelName, validateModelProvider
 
 
 EXPAND_SYSTEM_PROMPT = """
@@ -147,8 +147,11 @@ def parseMarkdownFile(filepath: str) -> dict | None:
 
 
 
-async def expandTags(title: str, content: str, coreTags: list[str], model: str | None = None) -> list[str] | None:
-    """调用 LLM 扩展 tags"""
+async def expandTags(
+    title: str, content: str, coreTags: list[str], model: str | None = None,
+    *, providerKey: str | None = None,
+) -> list[str] | None:
+    """扩展标签；省略模型时继承主路由，显式模型默认 auto，可单独覆盖配置组。"""
     userPrompt = f"""标题：{title}
 内容：{content}
 核心标签：{json.dumps(coreTags, ensure_ascii=False)}
@@ -156,8 +159,12 @@ async def expandTags(title: str, content: str, coreTags: list[str], model: str |
 请在一行内用逗号分隔输出扩展标签："""
 
     try:
-        modelToUse = model or getModel()
-        provider = getProvider(modelToUse)
+        cfg = loadLLMConfig()
+        modelToUse = cfg["model"] if model is None else model
+        providerToUse = providerKey if providerKey is not None else (
+            cfg.get("modelProvider", "auto") if model is None else "auto"
+        )
+        provider = getProvider(modelToUse, providerToUse)
         response = await requestWithRetry(
             provider,
             systemMessages=[EXPAND_SYSTEM_PROMPT],
@@ -248,7 +255,7 @@ def writeMarkdownFile(filepath: str, parsed: dict, newTagsExpanded: list[str]):
 
 
 
-async def processFile(filepath: str, force: bool, dryRun: bool, model: str | None) -> dict:
+async def processFile(filepath: str, force: bool, dryRun: bool, model: str | None, providerKey: str | None = None) -> dict:
     """处理单个文件"""
     filename = os.path.basename(filepath)
     parsed = parseMarkdownFile(filepath)
@@ -268,7 +275,7 @@ async def processFile(filepath: str, force: bool, dryRun: bool, model: str | Non
 
     print(printWithColor(Color.RESET, f"[处理] {filename} - {parsed['title']} ..."))
 
-    expanded = await expandTags(parsed["title"], parsed["content"], parsed["tags"], model)
+    expanded = await expandTags(parsed["title"], parsed["content"], parsed["tags"], model, providerKey=providerKey)
     if not expanded:
         print(printWithColor(Color.RED, f"[失败] {filename} - LLM 扩展失败\n"))
         return {"status": "fail", "reason": "LLM 扩展失败"}
@@ -289,7 +296,9 @@ async def main():
     parser = argparse.ArgumentParser(description="用 LLM 扩展知识库标签")
     parser.add_argument("--force", action="store_true", help="强制重扩展所有文件")
     parser.add_argument("--dry-run", action="store_true", help="只显示将要处理的文件")
-    parser.add_argument("--model", type=str, help="指定 LLM 模型（如 anthropic/claude-haiku-4-5）")
+    parser.add_argument("--model", type=validateModelName, help="指定上游模型名；未指定时沿用主模型")
+    parser.add_argument("--provider", type=validateModelProvider, default=None,
+                        help="调用配置组；未指定模型时沿用主配置，指定模型时默认 auto")
     args = parser.parse_args()
 
     if not os.path.exists(LLM_KNOWLEDGE_DIR):
@@ -313,7 +322,7 @@ async def main():
 
     for filename in mdFiles:
         filepath = os.path.join(LLM_KNOWLEDGE_DIR, filename)
-        result = await processFile(filepath, args.force, args.dry_run, args.model)
+        result = await processFile(filepath, args.force, args.dry_run, args.model, args.provider)
         stats[result["status"]] += 1
 
     print("\n" + "="*50)
