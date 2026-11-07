@@ -17,6 +17,7 @@ scripts/evaluate_llm_quality.py
     - 风格规则、禁忌规则均从知识库动态加载（category=style / pitfalls），不依赖硬编码
     - --chat-id 影响记忆（memory）和对话历史（history）的加载，不同 chatID 结果会有差异
     - 查询文件每行一条，# 开头视为注释
+    - judge 默认继承主模型名与调用配置组；显式模型默认 auto，--judge-provider 可覆盖
 
 用法：
     python scripts/evaluate_llm_quality.py \\
@@ -24,7 +25,7 @@ scripts/evaluate_llm_quality.py
         --chat-id 12345
     python scripts/evaluate_llm_quality.py \\
         --queries queries.txt --chat-id 12345 \\
-        --judge-model anthropic/claude-haiku-4-5-20251001 \\
+        --judge-model claude-haiku-4-5-20251001 --judge-provider anthropic \\
         --out data/llm/eval_results.json
 """
 
@@ -42,7 +43,7 @@ from utils.llm.knowledge import initDatabase as initKnowledgeDB, getKnowledgeEnt
 from utils.llm.client import generateReply
 from utils.llm.client._router import getProvider
 from utils.llm.client._request import requestWithRetry
-from utils.llm.config import getModel
+from utils.llm.config import loadLLMConfig, validateModelName, validateModelProvider
 
 
 _JUDGE_MAX_TOKENS = 256
@@ -51,9 +52,9 @@ _EVAL_CONTENT_LEN = 120
 _PROGRESS_QUERY_LEN = 60
 
 
-async def _judge(systemPrompt: str, userPrompt: str, *, judgeModel: str) -> dict:
+async def _judge(systemPrompt: str, userPrompt: str, *, judgeModel: str, judgeProvider: str = "auto") -> dict:
     """调用 judge 模型，返回解析后的 JSON dict。解析失败返回 {"error": raw}。"""
-    provider = getProvider(judgeModel)
+    provider = getProvider(judgeModel, judgeProvider)
     raw = await requestWithRetry(
         provider,
         systemMessages=[systemPrompt],
@@ -69,7 +70,7 @@ async def _judge(systemPrompt: str, userPrompt: str, *, judgeModel: str) -> dict
         return {"error": raw.strip()}
 
 
-async def evalContextHit(query: str, reply: str, *, judgeModel: str) -> dict:
+async def evalContextHit(query: str, reply: str, *, judgeModel: str, judgeProvider: str = "auto") -> dict:
     """评估回复是否利用了知识库检索结果。无检索结果时跳过。"""
     entries = await retrieveKnowledge(query)
     if not entries:
@@ -84,11 +85,11 @@ async def evalContextHit(query: str, reply: str, *, judgeModel: str) -> dict:
         f"检索到的上下文：\n{ctx}\n\n问题：{query}\n\n回复：{reply}\n\n"
         '回复是否使用或体现了上述上下文中的任何信息？'
         '输出：{"hit": true/false, "reason": "一句话说明"}',
-        judgeModel=judgeModel,
+        judgeModel=judgeModel, judgeProvider=judgeProvider,
     )
 
 
-async def evalPersona(reply: str, evalCtx: dict, *, judgeModel: str) -> dict:
+async def evalPersona(reply: str, evalCtx: dict, *, judgeModel: str, judgeProvider: str = "auto") -> dict:
     """评估人设一致性，规则从知识库动态加载。无规则时跳过。"""
     styleRules = "\n".join(f"- {e['content']}" for e in evalCtx['style'])
     pitfallRules = "\n".join(f"- {e['content']}" for e in evalCtx['pitfalls'])
@@ -102,29 +103,29 @@ async def evalPersona(reply: str, evalCtx: dict, *, judgeModel: str) -> dict:
         f"回复：{reply}\n\n"
         '回复是否符合风格规则且未触犯禁忌？'
         '输出：{"consistent": true/false, "violation": "触犯的规则或null", "reason": "一句话说明"}',
-        judgeModel=judgeModel,
+        judgeModel=judgeModel, judgeProvider=judgeProvider,
     )
 
 
-async def evalRelevance(query: str, reply: str, *, judgeModel: str) -> dict:
+async def evalRelevance(query: str, reply: str, *, judgeModel: str, judgeProvider: str = "auto") -> dict:
     """评估回复针对性（是否为通用回复）。"""
     return await _judge(
         "你是回复针对性评审员。只输出 JSON，不输出其他内容。",
         f"问题：{query}\n\n回复：{reply}\n\n"
         '回复是否针对性地回答了该问题（而非通用模糊回复）？'
         '输出：{"relevant": true/false, "reason": "一句话说明"}',
-        judgeModel=judgeModel,
+        judgeModel=judgeModel, judgeProvider=judgeProvider,
     )
 
 
-async def evalQuery(query: str, chatID: str, evalCtx: dict, *, judgeModel: str) -> dict:
+async def evalQuery(query: str, chatID: str, evalCtx: dict, *, judgeModel: str, judgeProvider: str = "auto") -> dict:
     """对单条 query 完整评估（生成回复 + 3 个维度并发 judge）。"""
     reply = await generateReply(query, chatID, includeContext=True)
 
     hitResult, personaResult, relevanceResult = await asyncio.gather(
-        evalContextHit(query, reply, judgeModel=judgeModel),
-        evalPersona(reply, evalCtx, judgeModel=judgeModel),
-        evalRelevance(query, reply, judgeModel=judgeModel),
+        evalContextHit(query, reply, judgeModel=judgeModel, judgeProvider=judgeProvider),
+        evalPersona(reply, evalCtx, judgeModel=judgeModel, judgeProvider=judgeProvider),
+        evalRelevance(query, reply, judgeModel=judgeModel, judgeProvider=judgeProvider),
     )
     return {
         "query": query,
@@ -139,12 +140,18 @@ async def main():
     parser = argparse.ArgumentParser(description="评估 LLM 回复质量（真实 API 调用）")
     parser.add_argument("--queries", required=True, help="查询文件路径，每行一条，# 开头为注释")
     parser.add_argument("--chat-id", required=True, dest="chatID", help="用于加载记忆/历史的 chatID")
-    parser.add_argument("--judge-model", dest="judgeModel", default=None,
+    parser.add_argument("--judge-model", dest="judgeModel", type=validateModelName, default=None,
                         help="judge 使用的模型（默认同主模型）")
+    parser.add_argument("--judge-provider", dest="judgeProvider", type=validateModelProvider, default=None,
+                        help="judge 调用配置组；未指定模型时沿用主配置，指定模型时默认 auto")
     parser.add_argument("--out", default=None, help="结果输出 JSON 文件路径（默认打印到 stdout）")
     args = parser.parse_args()
 
-    judgeModel = args.judgeModel or getModel()
+    cfg = loadLLMConfig()
+    judgeModel = cfg["model"] if args.judgeModel is None else args.judgeModel
+    judgeProvider = args.judgeProvider if args.judgeProvider is not None else (
+        cfg.get("modelProvider", "auto") if args.judgeModel is None else "auto"
+    )
 
     # 初始化知识库（建表 / 加载 schema）
     await initKnowledgeDB()
@@ -168,13 +175,14 @@ async def main():
     results = []
     for i, query in enumerate(queries, 1):
         print(f"[{i}/{len(queries)}] {query[:_PROGRESS_QUERY_LEN]}", flush=True)
-        result = await evalQuery(query, args.chatID, evalCtx, judgeModel=judgeModel)
+        result = await evalQuery(query, args.chatID, evalCtx, judgeModel=judgeModel, judgeProvider=judgeProvider)
         results.append(result)
 
     total = len(results)
     summary = {
         "total": total,
         "judge_model": judgeModel,
+        "judge_provider": judgeProvider,
         "context_hit_rate": sum(1 for r in results if r["context_hit"].get("hit") is True) / total if total else 0,
         "persona_consistency_rate": sum(1 for r in results if r["persona"].get("consistent") is True) / total if total else 0,
         "relevance_rate": sum(1 for r in results if r["relevance"].get("relevant") is True) / total if total else 0,

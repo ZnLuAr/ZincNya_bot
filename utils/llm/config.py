@@ -6,7 +6,8 @@ LLM 配置管理：
       群聊触发模式与关键词、长期记忆、URL 读取配置与黑名单）
     - 加载 prompts.json（不存在或解析失败时 fallback 到内嵌的"褪色"占位 prompt）
 
-settable 配置都会通过 _setConfig 加锁串行写盘（read-modify-write 安全）。
+配置更新使用同一把锁串行完成读、改、写；普通 setter 复用 _setConfig，
+视觉重置从同一快照同步主模型名和调用配置组。
 """
 
 import os
@@ -44,6 +45,7 @@ class ContextTier(IntEnum):
 
 # 配置 read-modify-write 串行化，避免 Telegram / console 并发改配置时丢更新
 _configLock = threading.Lock()
+_MODEL_NAME_MAX_LENGTH = 256
 
 
 # 默认配置（首次运行或文件损坏时使用）
@@ -51,7 +53,9 @@ _DEFAULT_CONFIG = {
     "enabled": False,
     "autoMode": "console",  # "on" | "off" | "console"
     "model": LLM_DEFAULT_MODEL,
+    "modelProvider": "auto",
     "visionModel": LLM_DEFAULT_MODEL,
+    "visionProvider": "auto",
     "forceFallbackPrompt": False,
     "groupTriggerMode": "mention",  # "mention" | "keyword"
     "groupTriggerKeywords": [],
@@ -161,8 +165,33 @@ def getModel() -> str:
     return loadLLMConfig()["model"]
 
 
+def validateModelName(model: str) -> str:
+    """校验上游模型标识；不解释前缀，也不改写名称。"""
+    if not isinstance(model, str) or not model or len(model) > _MODEL_NAME_MAX_LENGTH:
+        raise ValueError(f"模型名称不能为空，且最长为 {_MODEL_NAME_MAX_LENGTH} 字符")
+    if not model.isprintable() or any(char.isspace() for char in model):
+        raise ValueError("模型名称不能包含空白或控制字符")
+    return model
+
+
+def validateModelProvider(provider: str) -> str:
+    """配置组同时选择请求协议、凭据及端点；auto 保留旧前缀路由。"""
+    choices = ("auto", "anthropic", "openai", "gemini", "deepseek", "doubao")
+    if provider not in choices:
+        raise ValueError(f"无效的模型调用配置组，可选：{', '.join(choices)}")
+    return provider
+
+
 def setModel(model: str):
-    _setConfig(model=model)
+    _setConfig(model=validateModelName(model))
+
+
+def getModelProvider() -> str:
+    return loadLLMConfig()["modelProvider"]
+
+
+def setModelProvider(provider: str):
+    _setConfig(modelProvider=validateModelProvider(provider))
 
 
 def getVisionModel() -> str:
@@ -171,7 +200,23 @@ def getVisionModel() -> str:
 
 
 def setVisionModel(model: str):
-    _setConfig(visionModel=model)
+    _setConfig(visionModel=validateModelName(model))
+
+
+def getVisionProvider() -> str:
+    return loadLLMConfig()["visionProvider"]
+
+
+def setVisionProvider(provider: str):
+    _setConfig(visionProvider=validateModelProvider(provider))
+
+
+def resetVisionModel():
+    """从同一配置快照同步主模型名和调用配置组。"""
+    with _configLock:
+        cfg = loadLLMConfig()
+        cfg.update(visionModel=cfg["model"], visionProvider=cfg["modelProvider"])
+        saveLLMConfig(cfg)
 
 
 

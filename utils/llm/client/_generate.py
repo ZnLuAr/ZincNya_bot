@@ -3,7 +3,7 @@ utils/llm/client/_generate.py
 
 LLM 回复生成编排逻辑：
     - 构建 system messages（人设 + guardrails，按 includeContext 决定是否追加记忆操作指令）
-    - 可选双调用架构：visionModel != model 时分离描述与回复，否则单次调用
+    - 可选双调用架构：模型名或有效调用配置组不同时分离描述与回复，否则单次调用
     - 通过 urlContexts 透传低信任 URL 内容到 contextBuilder
 """
 
@@ -17,7 +17,7 @@ from ..memory.types import MemoryQuery
 from ..promptSafety import neutralizePromptDelimiters
 from ._guardrails import SYSTEM_GUARDRAILS, MEMORY_ACTION_INSTRUCTIONS, VISION_DESCRIBE_PROMPT, OPS_FEEDBACK_INSTRUCTIONS
 from ._request import requestWithRetry
-from ._router import getProvider
+from ._router import getProvider, resolveProviderKey
 
 
 # 日志预览截断长度
@@ -55,6 +55,7 @@ async def _describeImages(
     images: list[dict],
     *,
     model: str,
+    providerKey: str = "auto",
 ) -> str:
     """
     双调用架构 — 第一步：轻量视觉调用
@@ -69,8 +70,9 @@ async def _describeImages(
     参数:
         model: 视觉模型名。由调用方从请求级配置快照传入（generateReply 已读
                过一次 llmConfig），避免此处再 getVisionModel() 重复读盘。
+        providerKey: 同一请求配置快照中的视觉调用配置组。
     """
-    provider = getProvider(model)
+    provider = getProvider(model, providerKey)
 
     await logSystemEvent(
         "LLM 图片描述调用",
@@ -170,9 +172,9 @@ async def generateReply(
         memoryQuery: 防抖阶段捕获的结构化当前轮次，供 memory 检索及审核重试复用；
                      None 时由 contextBuilder 从 userMessage 构造兼容查询
 
-    图片处理策略（由 visionModel 配置决定）：
-        - visionModel == model → 单调用：图片直接传给主模型
-        - visionModel != model → 双调用：轻量模型描述 + 主模型回复
+    图片处理策略（比较模型名与有效调用配置组）：
+        - 两者均相同 → 单调用：图片直接传给主模型
+        - 任一不同 → 双调用：视觉模型描述 + 主模型回复
     """
     prompts = loadPrompts()
     systemMessages = _buildSystemMessages(prompts, includeContext=includeContext)
@@ -192,13 +194,13 @@ async def generateReply(
     #   - buildConversationContext → buildKnowledgeContext 的
     #     knowledgeEnabled / knowledgeMaxResults / knowledgeMinScore
     # 未覆盖（有意保持独立读取，见各自说明）：
-    #   - _request.requestWithRetry 内的 getModel()：仅 fallback 重决策时用，
-    #     此刻重读反而能拿到运维刚改的救场配置，故不传快照。
     #   - handlers/llm.py _runLLMPipeline 的 getAutoMode()：属回复
     #     已生成后的分发阶段，与生成逻辑解耦，单独读一次即可。
     cfg = loadLLMConfig()
     model = cfg["model"]
     visionModel = cfg["visionModel"]
+    modelProvider = cfg.get("modelProvider", "auto")
+    visionProvider = cfg.get("visionProvider", "auto")
 
     textContent = await buildConversationContext(
         userMessage=userMessage,
@@ -213,9 +215,14 @@ async def generateReply(
     )
 
     # ── 构建 userContent ──
-    if images and visionModel != model:
+    if images and (
+        visionModel != model
+        or resolveProviderKey(visionModel, visionProvider) != resolveProviderKey(model, modelProvider)
+    ):
         # 双调用：分离描述与回复（省主模型 token 并或能改善模型文本读取表现）
-        imageDescription = await _describeImages(images, model=visionModel)
+        imageDescription = await _describeImages(
+            images, model=visionModel, providerKey=visionProvider,
+        )
         if imageDescription:
             # 视觉模型输出不可信。中和结构分隔符，防止其内容伪造 <IMAGE_DESCRIPTION>
             # 等结构标记，越权影响主模型的上下文边界。
@@ -241,7 +248,7 @@ async def generateReply(
     else:
         userContent = textContent
 
-    provider = getProvider(model)
+    provider = getProvider(model, modelProvider)
     llmResponse = await requestWithRetry(
         provider,
         systemMessages=systemMessages,

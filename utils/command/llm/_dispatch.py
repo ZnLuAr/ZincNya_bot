@@ -20,6 +20,8 @@ from utils.llm import (
     getMemoryAutoApprove,
     getMemoryEnabled,
     getModel,
+    getModelProvider,
+    getVisionProvider,
     getVisionModel,
     isContextOnceSet,
     removeGroupTriggerKeyword,
@@ -27,9 +29,13 @@ from utils.llm import (
     setGroupTriggerMode,
     setLLMEnabled,
     setModel,
+    setModelProvider,
+    setVisionProvider,
+    resetVisionModel,
     setVisionModel,
 )
 from utils.llm.state import getReviewQueue
+from utils.llm.client._router import describeRoute
 
 from .knowledgeCmd import _handleKnowledgeCommand
 from .memoryCmd import _handleMemoryCommand
@@ -42,7 +48,7 @@ _LLM_SUBCOMMANDS = {
     "on | off": "开启 / 关闭 LLM 功能",
     "status": "显示当前配置",
     "auto -on|-off|-console": "切换审核模式",
-    "model [switch <model>]": "显示或切换模型",
+    "model [switch <模型>|provider [配置组]]": "显示或切换模型及调用配置组",
     "visionmodel [...]": "显示 / 切换 / 重置视觉模型",
     "trigger [mention|keyword]": "显示或切换群聊触发模式",
     "keyword [add|del <关键词>]": "管理群聊触发关键词",
@@ -60,12 +66,12 @@ def _printStatus():
     auto = getAutoMode()
     modeMap = {"on": "直接发送", "off": "Telegram 审核", "console": "控制台审核"}
     print(f"  审核模式：{modeMap.get(auto, auto)}")
-    print(f"  当前模型：{getModel()}")
+    model = getModel()
     visionModel = getVisionModel()
-    if visionModel != getModel():
-        print(f"  视觉模型：{visionModel}（双调用）")
-    else:
-        print(f"  视觉模型：与主模型一致（单调用）")
+    print(f"  当前模型：{model}")
+    print(f"  主模型调用：{describeRoute(model, getModelProvider())}")
+    print(f"  视觉模型：{visionModel}")
+    print(f"  视觉模型调用：{describeRoute(visionModel, getVisionProvider())}")
     triggerMode = getGroupTriggerMode()
     triggerModeMap = {"mention": "群聊需 @", "keyword": "群聊 @ 或关键词"}
     keywords = getGroupTriggerKeywords()
@@ -112,33 +118,53 @@ async def execute(app, args):
                 print(f"❌ 无效的审核模式：{mode}（可选：on / off / console）\n")
 
         case "model":
-            if not rest:
-                print(f"当前模型：{getModel()}")
-                return
-            if rest[0].lower() == "switch" and len(rest) > 1:
-                newModel = rest[1]
-                setModel(newModel)
-                await logAction("System", f"LLM 模型切换", f"已切换为：{newModel}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            if not rest or (len(rest) == 1 and rest[0].lower() == "provider"):
+                model = getModel()
+                print(f"当前模型：{model}\n调用配置组：{describeRoute(model, getModelProvider())}\n")
+            elif len(rest) == 2 and rest[0].lower() == "switch":
+                try:
+                    newModel = rest[1]
+                    setModel(newModel)
+                except ValueError as error:
+                    print(f"❌ {error}\n")
+                    return
+                await logAction("System", "LLM 模型切换", f"已切换为：{newModel}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            elif len(rest) == 2 and rest[0].lower() == "provider":
+                try:
+                    setModelProvider(rest[1].lower())
+                except ValueError as error:
+                    print(f"❌ {error}\n")
+                    return
+                print(f"主模型调用配置组：{describeRoute(getModel(), getModelProvider())}\n")
+                await logAction("System", "LLM 调用配置组切换", rest[1].lower(), LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             else:
-                print(f"当前模型：{getModel()}\n")
+                print("用法：/llm model [switch <模型>|provider [配置组]]\n")
 
         case "visionmodel":
-            if not rest:
-                vm = getVisionModel()
-                m = getModel()
-                mode = "双调用喵" if vm != m else "单调用喵"
-                print(f"视觉模型：{vm}（{mode}）")
-                return
-            if rest[0].lower() == "switch" and len(rest) > 1:
-                newModel = rest[1]
-                setVisionModel(newModel)
-                mode = "双调用喵" if newModel != getModel() else "单调用喵"
-                await logAction("System", f"LLM 视觉模型切换", f"已切换为：{newModel}（{mode}）", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
-            elif rest[0].lower() == "reset":
-                setVisionModel(getModel())
-                await logAction("System", f"LLM 视觉模型重置", f"已重置为主模型（单调用）", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            if not rest or (len(rest) == 1 and rest[0].lower() == "provider"):
+                model = getVisionModel()
+                print(f"视觉模型：{model}\n调用配置组：{describeRoute(model, getVisionProvider())}\n")
+            elif len(rest) == 2 and rest[0].lower() == "switch":
+                try:
+                    newModel = rest[1]
+                    setVisionModel(newModel)
+                except ValueError as error:
+                    print(f"❌ {error}\n")
+                    return
+                await logAction("System", "LLM 视觉模型切换", f"已切换为：{newModel}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            elif len(rest) == 2 and rest[0].lower() == "provider":
+                try:
+                    setVisionProvider(rest[1].lower())
+                except ValueError as error:
+                    print(f"❌ {error}\n")
+                    return
+                print(f"视觉模型调用配置组：{describeRoute(getVisionModel(), getVisionProvider())}\n")
+                await logAction("System", "LLM 视觉调用配置组切换", rest[1].lower(), LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            elif len(rest) == 1 and rest[0].lower() == "reset":
+                resetVisionModel()
+                await logAction("System", "LLM 视觉模型重置", "模型名称和调用配置组已与主模型同步（单调用）", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             else:
-                print(f"视觉模型：{getVisionModel()}\n")
+                print("用法：/llm visionmodel [switch <模型>|provider [配置组]|reset]\n")
 
         case "trigger":
             modeNames = {"mention": "群聊触发需要 @", "keyword": "群聊触发需要 @ 或关键词"}
@@ -204,8 +230,10 @@ def getHelp():
             "/llm status                          显示当前配置\n"
             "/llm auto -on|-off|-console          切换审核模式\n"
             "/llm model [switch <model>]          显示或切换模型\n"
+            "/llm model provider [配置组]          显示或切换主模型调用配置组\n"
             "/llm visionmodel [switch <model>]    显示或切换视觉模型\n"
-            "/llm visionmodel reset               重置为主模型（单调用）\n"
+            "/llm visionmodel provider [配置组]    显示或切换视觉调用配置组\n"
+            "/llm visionmodel reset               同步主模型名和调用配置组（单调用）\n"
             "/llm trigger [mention|keyword]       显示或切换群聊触发模式\n"
             "/llm keyword [add|del <关键词>]       管理群聊触发关键词\n"
             "/llm memory -on|-off|-once           开启/关闭记忆模式，或仅下一次带入历史\n"

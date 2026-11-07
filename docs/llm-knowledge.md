@@ -2,7 +2,7 @@
 
 > 适用分支：`feat/llm-rag-dev`
 >
-> 最后更新：2026-07-10
+> 最后更新：2026-11-07
 >
 > Written by ZincNya~ ❤
 
@@ -529,14 +529,14 @@ Category 加成帮助在相似 BM25 分数下优先召回与用户意图最匹�
     python scripts/expand_knowledge_tags.py            # 增量
     python scripts/expand_knowledge_tags.py --force    # 全量重扩展
     python scripts/expand_knowledge_tags.py --dry-run  # 只列待处理文件
-    python scripts/expand_knowledge_tags.py --model anthropic/claude-haiku-4-5  # 临时换模型
+    python scripts/expand_knowledge_tags.py --model kimi-k2.5 --provider openai  # 临时使用兼容端点上的模型
 
 脚本工作：
   1. 扫 data/llm/knowledge/*.md
   2. 对每个文件：
      ├─ 算当前 source_hash = sha256(title + content + 人工 tags)
      ├─ 如 frontmatter 中已有 source_hash 且一致 → 跳过（已扩展过且未修改）
-     ├─ 否则调用项目现有 LLM client（按 data/llm/llmConfig.json 中的 model）
+     ├─ 否则调用项目现有 LLM client（默认从同一配置快照读取 model 和 modelProvider）
      │   └─ system: "你是语义标签扩展器，返回 JSON 数组"
      │   └─ temperature: 0.3
      ├─ 解析 LLM 响应为 JSON 数组（严格校验）
@@ -548,6 +548,8 @@ Category 加成帮助在相似 BM25 分数下优先召回与用户意图最匹�
   下次启动 / 运行 /llm knowledge reindex 时，
   loader.py 检测到 source_hash 变化（或缺失）→ 更新 DB
 ```
+
+不传 `--model` 时，脚本沿用主模型名称和调用配置组；单独传 `--model` 时，该名称按 `auto` 前缀规则选组，不会继承主模型的显式路由。`--provider` 可在两种情况下覆盖选组，例如上面的 Kimi 示例使用 `OPENAI_API_KEY` 和 `OPENAI_BASE_URL`。模型名始终原样传递，配置组的协议、凭据和端点对应关系见 [README 的支持模型说明](../README.md#支持的模型)。
 
 ### 幂等性
 

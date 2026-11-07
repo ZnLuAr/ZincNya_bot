@@ -25,18 +25,23 @@ _TRUNCATION_RETRY_ROUNDS = 2
 class GeminiProvider(LLMProvider):
     """Google Gemini 提供商。"""
 
-    def __init__(self, apiKey: str | None, *, proxy: str | None = None):
+    def __init__(self, apiKey: str | None, *, proxy: str | None = None, baseUrl: str | None = None):
         super().__init__(apiKey)
         self._proxy = proxy
+        self._baseUrl = baseUrl
         self._client: genai.Client | None = None
 
 
     def _getClient(self) -> genai.Client:
         if self._client is None:
             kwargs = {"api_key": self._apiKey}
+            httpOptions = {}
+            if self._baseUrl:
+                httpOptions["base_url"] = self._baseUrl
             if self._proxy:
-                import httpx
-                kwargs["http_options"] = {"client": httpx.AsyncClient(proxy=self._proxy)}
+                httpOptions["async_client_args"] = {"proxy": self._proxy}
+            if httpOptions:
+                kwargs["http_options"] = httpOptions
             self._client = genai.Client(**kwargs)
         return self._client
 

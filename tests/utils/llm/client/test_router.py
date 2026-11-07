@@ -112,3 +112,83 @@ class TestSuggestModel:
         assert _suggestModel("zzzzz") is None
 
 
+
+
+@pytest.mark.parametrize("model, key", [
+    ("deepseek-chat", "anthropic"),
+    ("kimi-k2.5", "openai"),
+    ("tenant/模型:preview", "openai"),
+    ("claude-sonnet-4-6", "deepseek"),
+])
+def test_explicitProviderOverridesModelPrefix(providers, model, key):
+    """模型名只交给上游；显式配置组优先于前缀和品牌。"""
+    assert getProvider(model, key) is providers[key]
+
+
+@pytest.mark.parametrize("model", [123, None, "", "has space", "line\nbreak", "x" * 257])
+def test_invalidModelFailsWithValidationError(providers, model):
+    with pytest.raises(ValueError, match="模型名称"):
+        getProvider(model)
+
+
+def test_explicitUnavailableProviderDoesNotFallback(providers):
+    providers["anthropic"].isAvailable.return_value = False
+    with pytest.raises(RuntimeError, match="anthropic.*API key"):
+        getProvider("deepseek-chat", "anthropic")
+    providers["deepseek"].isAvailable.assert_not_called()
+
+
+def test_invalidProviderRejectedBeforeBuildingSDK(monkeypatch):
+    build = MagicMock()
+    monkeypatch.setattr(_router, "_providers", None)
+    monkeypatch.setattr(_router, "_buildProviders", build)
+    with pytest.raises(ValueError, match="配置组"):
+        getProvider("kimi-k2.5", "typo")
+    build.assert_not_called()
+
+
+def test_explicitAliasesDoNotEmitTypoWarnings(providers):
+    import warnings
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert getProvider("claude-haiku-4-6", "openai") is providers["openai"]
+    assert not caught
+
+
+def test_routeDescriptionWorksWithoutProvidersAndRedactsCredentials(monkeypatch):
+    """查看状态只解释配置，URL 里的认证、查询和片段不进入展示。"""
+    import config
+    monkeypatch.setattr(config, "OPENAI_BASE_URL", "https://name:secret@relay.example:8443/v1?api_key=hidden#token")
+    monkeypatch.setattr(_router, "_providers", None)
+    build = MagicMock(side_effect=AssertionError("状态不应构建 SDK"))
+    monkeypatch.setattr(_router, "_buildProviders", build)
+    result = _router.describeRoute("tenant/模型:preview", "openai")
+    assert "OpenAI Chat Completions" in result
+    assert "显式配置" in result
+    assert "https://relay.example:8443/v1" in result
+    assert all(secret not in result for secret in ("name:", "secret", "api_key", "hidden", "#token"))
+    assert "按模型前缀" in _router.describeRoute("deepseek-chat")
+    assert "配置无效" in _router.describeRoute("kimi-k2.5")
+    build.assert_not_called()
+
+
+def test_buildProvidersKeepsEndpointAndCredentialProfilesSeparate(monkeypatch):
+    """新 OpenAI 端点与旧 DeepSeek 变量互不串用，Anthropic 认证规则保留。"""
+    import config
+    values = {
+        "OPENAI_BASE_URL": "https://openai.example/v1",
+        "LLM_OPENAI_BASE_URL": "https://deepseek.example/v1",
+        "ANTHROPIC_BASE_URL": "https://anthropic.example",
+        "OPENAI_API_KEY": "openai-test", "DEEPSEEK_API_KEY": "deepseek-test",
+        "ANTHROPIC_API_KEY": "anthropic-test", "ANTHROPIC_AUTH_TOKEN": "bearer-test",
+    }
+    for key, value in values.items():
+        monkeypatch.setattr(config, key, value)
+    built = _router._buildProviders()
+    assert built["openai"]._baseURL == "https://openai.example/v1"
+    assert built["deepseek"]._baseURL == "https://deepseek.example/v1"
+    assert built["doubao"]._baseURL == "https://ark.cn-beijing.volces.com/api/v3"
+    assert built["openai"]._apiKey == "openai-test"
+    assert built["deepseek"]._apiKey == "deepseek-test"
+    assert built["anthropic"]._baseUrl == "https://anthropic.example"
+    assert built["anthropic"]._authToken == "bearer-test"

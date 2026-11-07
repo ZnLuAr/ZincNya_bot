@@ -9,6 +9,7 @@ Telegram 端 /llm 控制命令（ops 专用）。
     /llm status                     显示完整配置（开关、审核模式、模型、群聊触发、记忆、URL 读取）
     /llm model                      查看当前模型
     /llm model switch <name>        切换模型
+    /llm model provider <配置组>     指定协议、凭据和端点
     /llm visionmodel ...            视觉模型配置
     /llm trigger mention|keyword    切换群聊触发模式
     /llm keyword [add|del <词>]     管理群聊触发关键词
@@ -19,14 +20,12 @@ Telegram 端 /llm 控制命令（ops 专用）。
 
 安全设计：
     - 所有 reply 均不传 parse_mode（plain text，规避 Markdown 注入）
-    - 模型名经正则校验后才回显
+    - 模型标识拒绝空白和控制字符，原样传递给上游
     - 鉴权统一由 hasPermission(userID, Permission.LLM) 把关
 """
 
 
 
-
-import re
 
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
@@ -43,15 +42,14 @@ from utils.llm import (
     getMemoryEnabled, setMemoryEnabled,
     getModel, setModel,
     getVisionModel, setVisionModel,
+    getModelProvider, setModelProvider,
+    getVisionProvider, setVisionProvider, resetVisionModel,
     getURLReadEnabled, setURLReadEnabled,
 )
 from utils.core.logger import logAction, LogLevel, LogChildType
+from utils.llm.client._router import describeRoute
 from utils.operators import hasPermission
 
-
-# 模型名白名单正则：只允许安全字符集，防止 Markdown 注入并限制长度
-# 覆盖 Anthropic 的实际命名规范（如 claude-sonnet-4-6、claude-haiku-4-5-20251001）
-_MODEL_RE = re.compile(r'^[a-zA-Z0-9._\-]{1,64}$')
 
 # autoMode 值到可读名称的映射（与 utils/llm/config.py 中的合法值对应）
 _MODE_NAMES = {"on": "直接发送", "off": "Telegram 审核", "console": "控制台审核"}
@@ -107,7 +105,6 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
             autoMode = getAutoMode()
             vm = getVisionModel()
             m = getModel()
-            vmLabel = f"{vm}（双调用喵）" if vm != m else "与主模型一致（单调用喵）"
             triggerMode = getGroupTriggerMode()
             triggerModeNames = {"mention": "群聊触发需 @", "keyword": "群聊触发需要 @ 或关键词"}
             keywords = getGroupTriggerKeywords()
@@ -115,7 +112,9 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"LLM 功能：{'开启喵' if getLLMEnabled() else '关闭喵'}\n"
                 f"审核模式：{_MODE_NAMES.get(autoMode, autoMode)}\n"
                 f"当前模型：{m}\n"
-                f"视觉模型：{vmLabel}\n"
+                f"主模型调用：{describeRoute(m, getModelProvider())}\n"
+                f"视觉模型：{vm}\n"
+                f"视觉模型调用：{describeRoute(vm, getVisionProvider())}\n"
                 f"群聊触发：{triggerModeNames.get(triggerMode, triggerMode)}\n"
                 f"触发关键词：{', '.join(keywords) if keywords else '……ないですニャー（目移'}\n"
                 f"记忆模式：{'开启喵' if getMemoryEnabled() else '关闭喵'}\n"
@@ -124,36 +123,64 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(text)
 
         case "model":
-            if len(args) == 1:
-                await update.message.reply_text(f"当前模型：{getModel()}")
-            elif len(args) >= 3 and args[1].lower() == "switch":
-                newModel = args[2]
-                if not _MODEL_RE.match(newModel):
-                    await update.message.reply_text("❌ 模型名称格式无效喵、\n只允许字母、数字、. - _，且最长最长就只能到 64 字符了……")
+            if len(args) == 1 or (len(args) == 2 and args[1].lower() == "provider"):
+                model = getModel()
+                await update.message.reply_text(
+                    f"当前模型：{model}\n调用配置组：{describeRoute(model, getModelProvider())}"
+                )
+            elif len(args) == 3 and args[1].lower() == "switch":
+                try:
+                    newModel = args[2]
+                    setModel(newModel)
+                except ValueError as error:
+                    await update.message.reply_text(f"❌ {error}")
                     return
-                setModel(newModel)
                 await update.message.reply_text(f"模型已切换为：{newModel}")
                 await logAction("System", "Telegram 端切换 LLM 模型", f"操作者：{operatorName}，模型：{newModel}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            elif len(args) == 3 and args[1].lower() == "provider":
+                try:
+                    setModelProvider(args[2].lower())
+                except ValueError as error:
+                    await update.message.reply_text(f"❌ {error}")
+                    return
+                await update.message.reply_text(
+                    f"主模型调用配置组已更新：{describeRoute(getModel(), getModelProvider())}"
+                )
+                await logAction("System", "Telegram 端切换 LLM 调用配置组", f"操作者：{operatorName}，配置组：{args[2].lower()}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             else:
-                await update.message.reply_text("model 的用法应该是：/llm model [{switch <模型名称>}]")
+                await update.message.reply_text("用法：/llm model [switch <模型名称>|provider [配置组]]")
 
         case "visionmodel":
-            if len(args) == 1:
-                await update.message.reply_text(f"当前的视觉模型是：{getVisionModel()}")
-            elif len(args) >= 3 and args[1].lower() == "switch":
-                newVisionModel = args[2]
-                if not _MODEL_RE.match(newVisionModel):
-                    await update.message.reply_text("❌ 模型名称格式无效喵、\n只允许字母、数字、. - _，最长最长就只能到 64 字符了……")
+            if len(args) == 1 or (len(args) == 2 and args[1].lower() == "provider"):
+                model = getVisionModel()
+                await update.message.reply_text(
+                    f"当前视觉模型：{model}\n调用配置组：{describeRoute(model, getVisionProvider())}"
+                )
+            elif len(args) == 3 and args[1].lower() == "switch":
+                try:
+                    newModel = args[2]
+                    setVisionModel(newModel)
+                except ValueError as error:
+                    await update.message.reply_text(f"❌ {error}")
                     return
-                setVisionModel(newVisionModel)
-                await update.message.reply_text(f"视觉模型已切换为：{newVisionModel}")
-                await logAction("System", "Telegram 端切换 LLM 视觉模型", f"操作者：{operatorName}，模型：{newVisionModel}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+                await update.message.reply_text(f"视觉模型已切换为：{newModel}")
+                await logAction("System", "Telegram 端切换 LLM 视觉模型", f"操作者：{operatorName}，模型：{newModel}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+            elif len(args) == 3 and args[1].lower() == "provider":
+                try:
+                    setVisionProvider(args[2].lower())
+                except ValueError as error:
+                    await update.message.reply_text(f"❌ {error}")
+                    return
+                await update.message.reply_text(
+                    f"视觉模型调用配置组已更新：{describeRoute(getVisionModel(), getVisionProvider())}"
+                )
+                await logAction("System", "Telegram 端切换 LLM 视觉调用配置组", f"操作者：{operatorName}，配置组：{args[2].lower()}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             elif len(args) == 2 and args[1].lower() == "reset":
-                setVisionModel(getModel())
-                await update.message.reply_text(f"视觉模型已经和主模型 {getModel()} 同步")
-                await logAction("System", "Telegram 端同步 LLM 视觉模型", f"操作者：{operatorName}，模型：{getModel()}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+                resetVisionModel()
+                await update.message.reply_text("视觉模型名称和调用配置组已与主模型同步")
+                await logAction("System", "Telegram 端同步 LLM 视觉模型", f"操作者：{operatorName}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
             else:
-                await update.message.reply_text("visionmodel 的用法应该是：/llm visionmodel [{switch <模型名称>|reset}]")
+                await update.message.reply_text("用法：/llm visionmodel [switch <模型名称>|provider [配置组]|reset]")
 
         case "trigger":
             modeNames = {"mention": "群聊触发需要 @", "keyword": "群聊触发需要 @ 或关键词"}
@@ -235,7 +262,9 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "/llm -on | -off              开启/关闭 LLM\n"
                 "/llm status                  显示完整配置\n"
                 "/llm model                   查看当前模型\n"
-                "/llm model switch &lt;名称&gt;      切换模型\n"
+                "/llm model switch <名称>      切换模型\n"
+                "/llm model provider <配置组>  指定调用配置组\n"
+                "/llm visionmodel provider <配置组>  指定视觉调用配置组\n"
                 "/llm fade -on | -off         开启/关闭“褪色”\n" 
                 "/llm trigger                 查看群聊触发模式\n"
                 "/llm trigger mention|keyword 切换群聊触发模式\n"
