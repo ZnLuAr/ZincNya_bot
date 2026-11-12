@@ -1,14 +1,20 @@
 """
-tests/utils/llm/test_urlReader.py
+tests/utils/afc/tools/test_web.py
 
-测试 utils/llm/urlReader.py
+测试网页读取工具 utils/afc/tools/web
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from utils.llm.urlReader import (
+
+from utils.afc.errors import ToolError
+from utils.afc.tools.web import readURL, _formatResult
+from utils.afc.tools.web.config import WEB_FETCH_MAX_CHARS, WEB_FETCH_BLOCKED_HOSTS
+from utils.afc.tools.web.fetcher import (
     _isSafeIPAddress,
     _validateURL,
-    extractURLs,
+    _makeResult,
     _isTextContentType,
     _isBinaryContent,
     _normalizeText,
@@ -143,58 +149,16 @@ def test_validate_url_localhost():
     assert ok is False
 
 
-# ============================================================================
-# extractURLs() 测试
-# ============================================================================
+def test_validate_url_default_blocked_hosts():
+    """不传 blockedHosts 时使用工具配置里的黑名单"""
+    assert "localhost" in WEB_FETCH_BLOCKED_HOSTS
 
-def test_extract_urls_single():
-    """提取单个 URL"""
-    urls = extractURLs("Check out https://example.com for more info")
-    assert urls == ["https://example.com"]
+    ok, err = _validateURL("http://localhost/")
+    assert ok is False
+    assert "blocked host" in err
 
-
-def test_extract_urls_multiple():
-    """提取多个 URL"""
-    text = "Visit https://example.com and http://test.org"
-    urls = extractURLs(text)
-    assert urls == ["https://example.com", "http://test.org"]
-
-
-def test_extract_urls_trailing_punctuation():
-    """去掉尾随标点"""
-    urls = extractURLs("See https://example.com.")
-    assert urls == ["https://example.com"]
-
-    urls = extractURLs("Link: https://example.com,")
-    assert urls == ["https://example.com"]
-
-    urls = extractURLs("Check https://example.com!")
-    assert urls == ["https://example.com"]
-
-
-def test_extract_urls_deduplication():
-    """去重但保持顺序"""
-    text = "https://example.com and https://test.org and https://example.com again"
-    urls = extractURLs(text)
-    assert urls == ["https://example.com", "https://test.org"]
-
-
-def test_extract_urls_empty():
-    """空文本返回空列表"""
-    assert extractURLs("") == []
-    assert extractURLs(None) == []
-
-
-def test_extract_urls_no_urls():
-    """无 URL 返回空列表"""
-    assert extractURLs("Just plain text without any links") == []
-
-
-def test_extract_urls_case_insensitive():
-    """协议大小写不敏感"""
-    urls = extractURLs("Visit HTTPS://EXAMPLE.COM")
-    assert len(urls) == 1
-    assert urls[0].startswith("HTTPS://")
+    ok, err = _validateURL("http://metadata.google.internal/computeMetadata/v1/")
+    assert ok is False
 
 
 # ============================================================================
@@ -402,3 +366,75 @@ def test_extract_html_invalid():
     # 应该不抛异常，返回某种文本
     assert isinstance(title, str)
     assert isinstance(body, str)
+
+
+# ============================================================================
+# readURL() 工具入口测试
+# ============================================================================
+
+def _okResult(text="正文", title="标题", truncatedBytes=False):
+    result = _makeResult("https://example.com/a")
+    result.update({
+        "ok": True,
+        "finalUrl": "https://example.com/b",
+        "status": 200,
+        "contentType": "text/html",
+        "title": title,
+        "text": text,
+        "truncatedBytes": truncatedBytes,
+    })
+    return result
+
+
+async def test_read_url_success():
+    """成功时交回地址、标题和正文，并去掉参数两端空白"""
+    fetch = AsyncMock(return_value=_okResult())
+    with patch("utils.afc.tools.web.fetcher.fetchURL", fetch):
+        output = await readURL("  https://example.com/a  ")
+
+    fetch.assert_awaited_once_with("https://example.com/a")
+    assert output == "地址：https://example.com/b\n标题：标题\n\n正文"
+
+
+@pytest.mark.parametrize("url", ["", "   ", None, 123])
+async def test_read_url_empty_raises(url):
+    """空地址或非字符串直接报告失败，不发起抓取"""
+    fetch = AsyncMock()
+    with patch("utils.afc.tools.web.fetcher.fetchURL", fetch):
+        with pytest.raises(ToolError):
+            await readURL(url)
+
+    fetch.assert_not_awaited()
+
+
+async def test_read_url_fetch_failure_raises():
+    """抓取失败时抛 ToolError，原因取自结果的 error 字段"""
+    failed = _makeResult("https://example.com/a")
+    failed["error"] = "HTTP 404"
+
+    with patch("utils.afc.tools.web.fetcher.fetchURL", AsyncMock(return_value=failed)):
+        with pytest.raises(ToolError, match="HTTP 404"):
+            await readURL("https://example.com/a")
+
+
+def test_format_result_truncates_long_text():
+    """正文超过上限时截断并标注"""
+    output = _formatResult(_okResult(text="x" * (WEB_FETCH_MAX_CHARS + 50), title=""))
+
+    assert "只保留了开头部分" in output
+    assert "标题：" not in output
+    assert output.endswith("x" * WEB_FETCH_MAX_CHARS)
+    assert "x" * (WEB_FETCH_MAX_CHARS + 1) not in output
+
+
+def test_format_result_marks_byte_truncation():
+    """抓取阶段被字节上限截断时同样标注"""
+    output = _formatResult(_okResult(truncatedBytes=True))
+    assert "只保留了开头部分" in output
+
+
+def test_format_result_falls_back_to_requested_url():
+    """没有最终地址时用请求地址"""
+    result = _okResult()
+    result["finalUrl"] = None
+    assert _formatResult(result).startswith("地址：https://example.com/a\n")

@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import aiohttp
 
+from utils.afc.errors import ToolError, ToolDependencyError
 from utils.afc.tools.weather import getWeather
 from utils.afc.tools.weather.cache import clearCache, getCacheKey, getFromCache, saveToCache
 from utils.afc.tools.weather.dateParser import parseDate
@@ -290,38 +291,38 @@ async def test_getWeather_different_dates(mockApiKey, mockSession):
 @pytest.mark.asyncio
 async def test_getWeather_city_empty(mockApiKey):
     """城市名为空"""
-    result = await getWeather("", "today")
-    assert "错误：城市名不能为空" in result
+    with pytest.raises(ToolError, match="城市名不能为空"):
+        await getWeather("", "today")
 
 
 @pytest.mark.asyncio
 async def test_getWeather_city_none(mockApiKey):
     """城市名为 None"""
-    result = await getWeather(None, "today")
-    assert "错误：城市名不能为空" in result
+    with pytest.raises(ToolError, match="城市名不能为空"):
+        await getWeather(None, "today")
 
 
 @pytest.mark.asyncio
 async def test_getWeather_api_key_missing():
     """API key 未配置"""
     with patch('utils.afc.tools.weather.config.WEATHER_API_KEY', None):
-        result = await getWeather("北京", "today")
-        assert "错误：未配置天气 API 密钥" in result
+        with pytest.raises(ToolDependencyError, match="未配置天气 API 密钥"):
+            await getWeather("北京", "today")
 
 
 @pytest.mark.asyncio
 async def test_getWeather_api_key_empty():
     """API key 为空字符串"""
     with patch('utils.afc.tools.weather.config.WEATHER_API_KEY', '   '):
-        result = await getWeather("北京", "today")
-        assert "错误：未配置天气 API 密钥" in result
+        with pytest.raises(ToolDependencyError, match="未配置天气 API 密钥"):
+            await getWeather("北京", "today")
 
 
 @pytest.mark.asyncio
 async def test_getWeather_invalid_date(mockApiKey, mockSession):
     """无效日期参数"""
-    result = await getWeather("北京", "invalid_date")
-    assert "错误：不支持的日期参数" in result
+    with pytest.raises(ToolError, match="不支持的日期参数"):
+        await getWeather("北京", "invalid_date")
 
 
 @pytest.mark.asyncio
@@ -330,8 +331,8 @@ async def test_getWeather_date_out_of_range(mockApiKey, mockSession):
     today = datetime.now().date()
     futureDate = today + timedelta(days=10)
 
-    result = await getWeather("北京", futureDate.strftime("%Y-%m-%d"))
-    assert "错误：不支持的日期参数" in result
+    with pytest.raises(ToolError, match="不支持的日期参数"):
+        await getWeather("北京", futureDate.strftime("%Y-%m-%d"))
 
 
 @pytest.mark.asyncio
@@ -346,8 +347,8 @@ async def test_getWeather_api_401(mockApiKey):
     mockSessionInstance.get = MagicMock(return_value=mockResp)
 
     with patch('utils.afc.tools.weather.client._getSession', return_value=mockSessionInstance):
-        result = await getWeather("北京", "today")
-        assert "错误：API 密钥无效" in result
+        with pytest.raises(ToolDependencyError, match="API 密钥无效"):
+            await getWeather("北京", "today")
 
 
 @pytest.mark.asyncio
@@ -362,8 +363,8 @@ async def test_getWeather_api_400(mockApiKey):
     mockSessionInstance.get = MagicMock(return_value=mockResp)
 
     with patch('utils.afc.tools.weather.client._getSession', return_value=mockSessionInstance):
-        result = await getWeather("InvalidCity12345", "today")
-        assert "错误：请求参数错误" in result
+        with pytest.raises(ToolError, match="请求参数错误"):
+            await getWeather("InvalidCity12345", "today")
 
 
 @pytest.mark.asyncio
@@ -378,8 +379,8 @@ async def test_getWeather_api_429(mockApiKey):
     mockSessionInstance.get = MagicMock(return_value=mockResp)
 
     with patch('utils.afc.tools.weather.client._getSession', return_value=mockSessionInstance):
-        result = await getWeather("北京", "today")
-        assert "错误：API 请求频率超限" in result
+        with pytest.raises(ToolDependencyError, match="API 请求频率超限"):
+            await getWeather("北京", "today")
 
 
 @pytest.mark.asyncio
@@ -394,8 +395,8 @@ async def test_getWeather_api_500(mockApiKey):
     mockSessionInstance.get = MagicMock(return_value=mockResp)
 
     with patch('utils.afc.tools.weather.client._getSession', return_value=mockSessionInstance):
-        result = await getWeather("北京", "today")
-        assert "错误：天气服务暂时不可用" in result
+        with pytest.raises(ToolDependencyError, match="天气服务暂时不可用"):
+            await getWeather("北京", "today")
 
 
 @pytest.mark.asyncio
@@ -405,8 +406,8 @@ async def test_getWeather_network_error(mockApiKey):
     mockSessionInstance.get = MagicMock(side_effect=aiohttp.ClientError("Network error"))
 
     with patch('utils.afc.tools.weather.client._getSession', return_value=mockSessionInstance):
-        result = await getWeather("北京", "today")
-        assert "错误：网络请求失败" in result
+        with pytest.raises(ToolDependencyError, match="网络请求失败"):
+            await getWeather("北京", "today")
 
 
 @pytest.mark.asyncio
@@ -422,8 +423,8 @@ async def test_getWeather_json_parse_error(mockApiKey):
     mockSessionInstance.get = MagicMock(return_value=mockResp)
 
     with patch('utils.afc.tools.weather.client._getSession', return_value=mockSessionInstance):
-        result = await getWeather("北京", "today")
-        assert "错误：API 响应解析失败" in result
+        with pytest.raises(ToolDependencyError, match="API 响应解析失败"):
+            await getWeather("北京", "today")
 
 
 @pytest.mark.asyncio
@@ -441,8 +442,8 @@ async def test_getWeather_missing_fields(mockApiKey):
     mockSessionInstance.get = MagicMock(return_value=mockResp)
 
     with patch('utils.afc.tools.weather.client._getSession', return_value=mockSessionInstance):
-        result = await getWeather("北京", "today")
-        assert "错误：API 响应缺少必需字段" in result
+        with pytest.raises(ToolDependencyError, match="API 响应缺少必需字段"):
+            await getWeather("北京", "today")
 
 
 @pytest.mark.asyncio
@@ -461,8 +462,8 @@ async def test_getWeather_insufficient_forecast_days(mockApiKey):
     mockSessionInstance.get = MagicMock(return_value=mockResp)
 
     with patch('utils.afc.tools.weather.client._getSession', return_value=mockSessionInstance):
-        result = await getWeather("北京", "today")
-        assert "错误：API 响应的预报天数不足" in result
+        with pytest.raises(ToolDependencyError, match="API 响应的预报天数不足"):
+            await getWeather("北京", "today")
 
 
 @pytest.mark.asyncio
@@ -472,5 +473,73 @@ async def test_getWeather_timeout(mockApiKey):
     mockSessionInstance.get = MagicMock(side_effect=asyncio.TimeoutError())
 
     with patch('utils.afc.tools.weather.client._getSession', return_value=mockSessionInstance):
-        result = await getWeather("北京", "today")
-        assert "错误：请求超时" in result
+        with pytest.raises(ToolDependencyError, match="请求超时"):
+            await getWeather("北京", "today")
+
+
+@pytest.mark.asyncio
+async def test_getWeather_api_other_status(mockApiKey):
+    """API 返回其他非 200 状态码（403）"""
+    mockResp = AsyncMock()
+    mockResp.status = 403
+    mockResp.__aenter__ = AsyncMock(return_value=mockResp)
+    mockResp.__aexit__ = AsyncMock(return_value=None)
+
+    mockSessionInstance = MagicMock()
+    mockSessionInstance.get = MagicMock(return_value=mockResp)
+
+    with patch('utils.afc.tools.weather.client._getSession', return_value=mockSessionInstance):
+        with pytest.raises(ToolDependencyError, match="API 请求失败（HTTP 403）"):
+            await getWeather("北京", "today")
+
+
+@pytest.mark.asyncio
+async def test_getWeather_missing_forecastday(mockApiKey):
+    """响应的 forecast 里没有 forecastday"""
+    incompleteResponse = MOCK_API_RESPONSE.copy()
+    incompleteResponse['forecast'] = {}
+
+    mockResp = AsyncMock()
+    mockResp.status = 200
+    mockResp.json = AsyncMock(return_value=incompleteResponse)
+    mockResp.__aenter__ = AsyncMock(return_value=mockResp)
+    mockResp.__aexit__ = AsyncMock(return_value=None)
+
+    mockSessionInstance = MagicMock()
+    mockSessionInstance.get = MagicMock(return_value=mockResp)
+
+    with patch('utils.afc.tools.weather.client._getSession', return_value=mockSessionInstance):
+        with pytest.raises(ToolDependencyError, match="API 响应缺少 forecast.forecastday 字段"):
+            await getWeather("北京", "today")
+
+
+@pytest.mark.asyncio
+async def test_getWeather_unexpected_error(mockApiKey, mockSession):
+    """预期外的异常：包成 ToolDependencyError，消息只带异常类型，不带异常内容"""
+    with patch(
+        'utils.afc.tools.weather.formatter.formatWeatherResponse',
+        side_effect=KeyError("internal_detail"),
+    ):
+        with pytest.raises(ToolDependencyError) as excInfo:
+            await getWeather("北京", "today")
+
+    assert str(excInfo.value) == "天气服务暂时不可用（KeyError）"
+    assert isinstance(excInfo.value.__cause__, KeyError)
+
+
+@pytest.mark.asyncio
+async def test_getWeather_failure_not_cached(mockApiKey):
+    """查询失败不写缓存"""
+    mockResp = AsyncMock()
+    mockResp.status = 500
+    mockResp.__aenter__ = AsyncMock(return_value=mockResp)
+    mockResp.__aexit__ = AsyncMock(return_value=None)
+
+    mockSessionInstance = MagicMock()
+    mockSessionInstance.get = MagicMock(return_value=mockResp)
+
+    with patch('utils.afc.tools.weather.client._getSession', return_value=mockSessionInstance):
+        with pytest.raises(ToolDependencyError):
+            await getWeather("北京", "today")
+
+    assert getFromCache(getCacheKey("北京", 0)) is None

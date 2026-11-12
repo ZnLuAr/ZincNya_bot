@@ -4,19 +4,21 @@ utils/afc/toolManager.py
 AFC 工具状态管理器。
 
 负责 AFC 工具的启用状态与清单（manifest）持久化，镜像 utils/moduleManager.py
-的原子写与读取范式，并在此之上提供模块级缓存：扫描循环里逐个工具判断
-启用状态时，只在首次读一次盘，之后查内存，避免重复的文件 I/O。
+的原子写与读取范式，并在此之上提供模块级缓存：取工具说明和执行工具时逐个
+判断启用状态，只在首次读一次盘，之后查内存，避免重复的文件 I/O。
 
 状态文件：
 - data/afcTools.json        — 每个工具的 enabled 开关（运行时自动生成，初始为空对象 {}）
-- data/afcToolsBuiltin.json — 内置工具（weather/calc/datetime）的 manifest（仓库提供，随代码入库，不忽略）
+- data/afcToolsBuiltin.json — 内置工具（weather/calc/datetime/web）的 manifest（仓库提供，随代码入库，不忽略）
 - data/afcToolsCustom.json  — 第三方工具的 manifest（install 时生成）
 
 其中 afcTools.json / afcToolsCustom.json 已加入 .gitignore，属部署实例私有状态，
 不进 git；afcToolsBuiltin.json 是仓库内容的一部分，随代码分发。
 
 关键设计：
-- 本模块不 import afcIntent / registry，保持单向依赖，避免循环。
+- 本模块不 import registry / executor，保持单向依赖，避免循环。
+- 没有写过开关的工具默认启用；内置工具可以在 manifest 里写 "defaultEnabled": false
+  改成默认停用（会主动访问外部网络的 web 就是这样），由 ops 显式启用。
 - isAfcToolEnabled() 只读 JSON 状态文件，不 import 任何工具代码。
 - getAllAfcTools() 也只读三个 JSON + 扫描目录发现 local-draft，不 import 工具代码。
 """
@@ -36,9 +38,10 @@ _AFCTOOLS_CUSTOM_PATH = os.path.join(PROJECT_ROOT, "data", "afcToolsCustom.json"
 _TOOLS_DIR_REL = os.path.join("utils", "afc", "tools")
 
 
-# ── 模块缓存，扫描循环内逐工具查询时只读一次盘 ──
+# ── 模块缓存，逐工具查询启用状态时只读一次盘 ──
 
 _afcToolsConfigCache = None  # data/afcTools.json 的内存缓存
+_builtinDefaultsCache = None  # {内置工具名: 没写过开关时是否启用}，取自 afcToolsBuiltin.json
 
 
 
@@ -88,8 +91,15 @@ def loadBuiltinAfcTools() -> dict:
 
 
 def saveBuiltinAfcTools(config: dict) -> bool:
-    """保存 data/afcToolsBuiltin.json（原子写）。一般仅初始化/迁移时用"""
-    return _atomicWriteJson(_AFCTOOLS_BUILTIN_PATH, config)
+    """
+    保存 data/afcToolsBuiltin.json（原子写），写成功后清空缓存。一般仅初始化/迁移时用
+
+    isAfcToolEnabled 缓存了 manifest 里的 defaultEnabled，不清的话同进程内读到的还是旧值。
+    """
+    ok = _atomicWriteJson(_AFCTOOLS_BUILTIN_PATH, config)
+    if ok:
+        invalidateAfcToolsCache()
+    return ok
 
 
 def loadCustomAfcTools() -> dict:
@@ -116,21 +126,23 @@ def invalidateAfcToolsCache() -> None:
     saveAfcToolsConfig() 内部会自动调用；CLI 命令写入后也应显式调用，
     确保同进程内状态一致。
     """
-    global _afcToolsConfigCache
+    global _afcToolsConfigCache, _builtinDefaultsCache
     _afcToolsConfigCache = None
+    _builtinDefaultsCache = None
 
 
 
 
 def isAfcToolEnabled(toolName: str) -> bool:
     """
-    单一权威来源：检查工具是否启用（默认 True）
+    单一权威来源：检查工具是否启用
 
     首次调用加载一次 data/afcTools.json 进模块级缓存，后续直接查内存，
-    避免扫描循环内对每个工具各读一次盘。
+    避免对每个工具各读一次盘。
 
-    如果工具名不在状态文件中（首次运行 / 新工具 / 误删条目），默认返回 True。
-    这样新增工具时无需手动配置即可立即可用。
+    如果工具名不在状态文件中（首次运行 / 新工具 / 误删条目），取默认值：
+    内置工具看 manifest 的 defaultEnabled，其余一律 True。这样新增工具时无需
+    手动配置即可立即可用，而声明了默认停用的内置工具要等 ops 显式启用。
 
     注意：此函数只读 JSON 状态文件，不 import 任何 utils.afc 的其他模块，
     避免循环依赖。缓存失效由 invalidateAfcToolsCache() 负责。
@@ -141,10 +153,24 @@ def isAfcToolEnabled(toolName: str) -> bool:
     返回:
         True 表示启用，False 表示禁用
     """
-    global _afcToolsConfigCache
+    global _afcToolsConfigCache, _builtinDefaultsCache
     if _afcToolsConfigCache is None:
         _afcToolsConfigCache = loadAfcToolsConfig()
-    return _afcToolsConfigCache.get(toolName, {}).get("enabled", True)
+    if _builtinDefaultsCache is None:
+        _builtinDefaultsCache = {
+            name: _manifestDefaultEnabled(manifest)
+            for name, manifest in loadBuiltinAfcTools().items()
+        }
+
+    default = _builtinDefaultsCache.get(toolName, True)
+    return _afcToolsConfigCache.get(toolName, {}).get("enabled", default)
+
+
+def _manifestDefaultEnabled(manifest) -> bool:
+    """内置工具 manifest 声明的默认启用状态；没写或 manifest 格式不对时为 True。"""
+    if not isinstance(manifest, dict):
+        return True
+    return manifest.get("defaultEnabled", True) is not False
 
 
 
@@ -163,7 +189,7 @@ def getAllAfcTools() -> dict:
     数据来源：只读三个 JSON 文件 + 扫描 utils/afc/tools/ 目录发现 local-draft，
     不 import 任何工具代码——名称/描述都在 manifest，无需加载模块。
 
-    此函数用于 CLI 展示，不被扫描函数（_scanTriggers/_scanTools）调用，
+    此函数用于 CLI 展示，不被扫描函数（registry._scanTools）调用，
     所以不会形成循环依赖，也不会触发工具 __init__ 的副作用。
     """
     toolsConfig = loadAfcToolsConfig()
@@ -175,7 +201,7 @@ def getAllAfcTools() -> dict:
     # 1. 内置工具（来源 builtin）
     for toolName, manifest in builtin.items():
         result[toolName] = {
-            "enabled": toolsConfig.get(toolName, {}).get("enabled", True),
+            "enabled": toolsConfig.get(toolName, {}).get("enabled", _manifestDefaultEnabled(manifest)),
             "source": manifest.get("source", "builtin"),
             "manifest": manifest,
         }

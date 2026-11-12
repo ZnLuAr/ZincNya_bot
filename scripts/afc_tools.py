@@ -19,7 +19,7 @@ ZincNya Bot AFC 工具管理 CLI。
 安全约定：
     本脚本处理"尚未被信任"的工具（含第三方下载的），全程只做 AST 静态分析，
     绝不 import 任何工具代码——import 即执行工具顶层代码，等于在用户审阅前就运行了它。
-    工具的 import 推迟到 bot 启动时，由 registry / afcIntent 在信任边界内进行。
+    工具的 import 推迟到 bot 启动时，由 registry 在信任边界内进行。
 """
 
 import os
@@ -103,8 +103,7 @@ _TOOLS_DIR_REL = os.path.join("utils", "afc", "tools")
 _TESTS_TOOLS_DIR_REL = os.path.join("tests", "utils", "afc", "tools")
 _TOOL_ID_RE = re.compile(r"^[a-z0-9_]+$")
 
-# ── 显示/网络相关阈值 ────────────────────────────────
-_PREVIEW_ITEM_COUNT = 3                # list --full 触发词预览上限（关键词/正则各显示前 N 个）
+# ── 网络相关阈值 ────────────────────────────────
 _HTTP_TIMEOUT_SECONDS = 15             # GitHub API / raw 抓取超时（urlopen）
 _RESPONSE_MAX_BYTES = 1024 * 1024      # 单次响应读取上限（commits API 等）
 
@@ -131,30 +130,6 @@ def _parseFileAst(filePath):
         return None
 
 
-def _extractStringList(tree, varName):
-    """
-    从 AST 顶层找 `varName = [...]` 的赋值，返回字符串元素列表。
-
-    只接受顶层 Assign，且元素是字符串字面量（ast.Constant(str)）。
-    找不到或结构不符返回 None。
-    """
-    if tree is None:
-        return None
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        for target in node.targets:
-            if isinstance(target, ast.Name) and target.id == varName:
-                if not isinstance(node.value, (ast.List, ast.Tuple)):
-                    return None
-                items = []
-                for elt in node.value.elts:
-                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                        items.append(elt.value)
-                return items
-    return None
-
-
 def _findAsyncFunctions(tree):
     """
     从 AST 顶层找所有 async def 函数（非下划线开头），返回函数名列表。
@@ -166,32 +141,6 @@ def _findAsyncFunctions(tree):
         if isinstance(node, ast.AsyncFunctionDef) and not node.name.startswith("_"):
             names.append(node.name)
     return names
-
-
-def _extractToolTriggers(toolName):
-    """
-    从工具的 triggers.py 用 AST 提取 KEYWORDS 和 PATTERNS。
-
-    返回 (keywords, patterns, parseable)：
-    - keywords / patterns 为字符串列表（提取不到则为 None）
-    - parseable 表示 triggers.py 是否能被 AST 解析（False 说明文件缺失或语法错误）
-    """
-    triggersPath = os.path.join(_TOOLS_DIR_REL, toolName, "triggers.py")
-    tree = _parseFileAst(triggersPath)
-    if tree is None:
-        return None, None, False
-    keywords = _extractStringList(tree, "KEYWORDS")
-    patterns = _extractStringList(tree, "PATTERNS")
-    return keywords, patterns, True
-
-
-def _hasNestedQuantifier(pattern):
-    """
-    ReDoS 启发式：检测嵌套量词模式（如 (x+)+ / (x*)* / (x+)*）。
-
-    只报 Warning，不阻断——启发式有假阳性，交给开发者自查。
-    """
-    return bool(re.search(r"\([^)]*[+*][^)]*\)[+*]", pattern))
 
 
 
@@ -246,26 +195,12 @@ def cmdList(args):
             _printTool(name, info, "[-]", Color.DIM)
 
     if not args.full:
-        printColor(Color.DIM, "\n提示：使用 show <tool> 查看详细信息，list --full 查看触发词")
+        printColor(Color.DIM, "\n提示：使用 show <tool> 查看详细信息，list --full 查看文件数")
     print()
 
 
 def _printFullDetail(toolName, info):
-    """list --full 的触发词/文件数明细（触发词只显示前 3 个）"""
-    keywords, patterns, parseable = _extractToolTriggers(toolName)
-
-    def _preview(items, label):
-        if items is None:
-            print(f"      {label}：(无法静态解析)")
-            return
-        shown = ", ".join(items[:_PREVIEW_ITEM_COUNT])
-        suffix = f" ... (共 {len(items)} 个)" if len(items) > _PREVIEW_ITEM_COUNT else f" (共 {len(items)} 个)"
-        print(f"      {label}：{shown}{suffix}")
-
-    if parseable:
-        _preview(keywords or [], "关键词")
-        _preview(patterns or [], "正则")
-
+    """list --full 的文件数明细"""
     manifest = info.get("manifest") or {}
     files = manifest.get("files")
     if files:
@@ -318,15 +253,6 @@ def cmdShow(toolName):
         print(f"\n测试：")
         print(f"  - {testFile}")
 
-    keywords, patterns, parseable = _extractToolTriggers(toolName)
-    if parseable:
-        if keywords:
-            print(f"\n触发词（关键词）：")
-            print(f"  - {', '.join(keywords)}")
-        if patterns:
-            print(f"\n触发词（正则）：")
-            print(f"  - {', '.join(patterns)}")
-
     if info.get("source") == "local-draft":
         printColor(Color.YELLOW, "\n提示：此为 local-draft 工具（未登记到 builtin/custom manifest）")
 
@@ -366,25 +292,6 @@ def _checkOneTool(toolName, info):
         asyncFuncs = _findAsyncFunctions(initTree)
         if not asyncFuncs:
             errors.append("__init__.py 未在顶层定义任何 async 入口函数（registry 无法注册工具）")
-
-    # ── triggers.py（硬性：AST 可解析 + KEYWORDS/PATTERNS 至少一个非空 + 正则可编译）
-    keywords, patterns, parseable = _extractToolTriggers(toolName)
-    if not parseable:
-        errors.append("triggers.py 缺失或语法错误")
-    else:
-        hasKeywords = bool(keywords)
-        hasPatterns = bool(patterns)
-        if not hasKeywords and not hasPatterns:
-            errors.append("triggers.py 缺少 KEYWORDS 和 PATTERNS（无法触发工具）")
-        # 正则可编译校验
-        for pat in patterns or []:
-            try:
-                re.compile(pat)
-            except re.error as e:
-                errors.append(f"triggers.py 正则编译失败: \"{pat}\" → {e}")
-            else:
-                if _hasNestedQuantifier(pat):
-                    warnings.append(f"ReDoS 风险：正则 \"{pat}\" 含嵌套量词")
 
     # ── 建议文件（Warning）
     toolDir = os.path.join(PROJECT_ROOT, _TOOLS_DIR_REL, toolName)
@@ -430,12 +337,6 @@ def cmdCheck():
             printColor(Color.YELLOW, f"\n[!] {toolName}")
         else:
             printColor(Color.GREEN, f"\n[OK] {toolName}")
-
-        # 通过项的简要回显
-        if not errors:
-            _, _, parseable = _extractToolTriggers(toolName)
-            if parseable:
-                print(f"  triggers.py 可解析，KEYWORDS 已配置")
 
         for w in warnings:
             print(f"  {Color.YELLOW}⚠{Color.RESET} {w}")
@@ -537,26 +438,6 @@ async def {entryFunc}() -> str:
 __all__ = ["{entryFunc}"]
 '''
 
-_TRIGGERS_TEMPLATE = '''"""
-utils/afc/tools/{tool}/triggers.py
-
-{tool} 工具的 AFC 触发配置。
-
-触发词写得宽松一点没关系——它只是决定"要不要把这个工具的说明书递给
-LLM"，真正用不用还是 LLM 自己拿主意。宁可多递几次，也别漏掉真实意图。
-"""
-
-# L1 关键词召回（倒排索引）：消息里出现任一关键词即命中本工具
-KEYWORDS = [
-    # 示例："触发词1", "trigger",
-]
-
-# L2 正则召回：消息匹配任一正则即命中本工具
-PATTERNS = [
-    # 示例：r"\\d+\\s*[\\+\\-\\*/]",
-]
-'''
-
 _CONFIG_TEMPLATE = '''"""
 utils/afc/tools/{tool}/config.py
 
@@ -596,11 +477,6 @@ _README_TEMPLATE = '''# {tool}
 
 （一句话描述这个工具能做什么）
 
-## 触发方式
-
-- 关键词：（列出 KEYWORDS）
-- 正则：（列出 PATTERNS）
-
 ## 配置
 
 （如需环境变量，在此说明；否则写"无"）
@@ -608,7 +484,7 @@ _README_TEMPLATE = '''# {tool}
 ## 示例
 
 ```
-用户：（一条会触发本工具的消息）
+用户：（一条会用到本工具的消息）
 工具：（预期行为）
 ```
 '''
@@ -639,7 +515,6 @@ _AFCTOOL_JSON_TEMPLATE = '''{{
   "description": "",
   "files": [
     "utils/afc/tools/{tool}/__init__.py",
-    "utils/afc/tools/{tool}/triggers.py",
     "utils/afc/tools/{tool}/config.py",
     "utils/afc/tools/{tool}/core.py",
     "utils/afc/tools/{tool}/README.md"
@@ -666,7 +541,6 @@ def cmdNew(toolName):
     ctx = {"tool": toolName, "entryFunc": entryFunc}
     files = {
         os.path.join(_TOOLS_DIR_REL, toolName, "__init__.py"): _INIT_TEMPLATE.format(**ctx),
-        os.path.join(_TOOLS_DIR_REL, toolName, "triggers.py"): _TRIGGERS_TEMPLATE.format(**ctx),
         os.path.join(_TOOLS_DIR_REL, toolName, "config.py"): _CONFIG_TEMPLATE.format(**ctx),
         os.path.join(_TOOLS_DIR_REL, toolName, "core.py"): _CORE_TEMPLATE.format(**ctx),
         os.path.join(_TOOLS_DIR_REL, toolName, "README.md"): _README_TEMPLATE.format(**ctx),
@@ -684,15 +558,14 @@ def cmdNew(toolName):
 
     printColor(Color.GREEN, f"\n[OK] 工具 {toolName} 创建成功\n")
     print("下一步：")
-    print("  1. 编辑 triggers.py 补充触发词和正则")
-    print("  2. 编辑 config.py 补充工具配置（如需环境变量）")
-    print(f"  3. 实现 core.py 的 {entryFunc}（及拆分的内部逻辑）")
-    print("  4. 补充 tests/utils/afc/tools/test_" + toolName + ".py 的真实断言")
-    print("  5. 编辑 afcTool.json，补充 name/description/author，更新 files（如有新增文件）")
-    print("  6. 选择工具归属：")
+    print("  1. 编辑 config.py 补充工具配置（如需环境变量）")
+    print(f"  2. 实现 core.py 的 {entryFunc}（及拆分的内部逻辑）")
+    print("  3. 补充 tests/utils/afc/tools/test_" + toolName + ".py 的真实断言")
+    print("  4. 编辑 afcTool.json，补充 name/description/author，更新 files（如有新增文件）")
+    print("  5. 选择工具归属：")
     print("     - 作为内置工具：把 manifest 加入 data/afcToolsBuiltin.json")
     print("     - 作为第三方工具：发布到 GitHub，供 install 流程管理")
-    print("  7. 运行 python scripts/afc_tools.py check 验证\n")
+    print("  6. 运行 python scripts/afc_tools.py check 验证\n")
 
 
 
@@ -899,29 +772,6 @@ def _downloadToolFiles(githubUrl, rawBase, files, testFile, tempDir):
     return testDownloaded, None
 
 
-def _validateStagingTriggers(tempDir, toolId, action="安装"):
-    """校验暂存目录里的 triggers.py（AST 静态分析，绝不 import 工具代码）。
-
-    返回错误串；通过返回 None。ReDoS 启发式警告在此打印。
-    """
-    triggersTempPath = os.path.join(tempDir, _TOOLS_DIR_REL, toolId, "triggers.py")
-    tree = _parseFileAst(triggersTempPath)
-    if tree is None:
-        return f"triggers.py 缺失或语法错误（无法静态解析，拒绝{action}）"
-    keywords = _extractStringList(tree, "KEYWORDS")
-    patterns = _extractStringList(tree, "PATTERNS")
-    if not keywords and not patterns:
-        return "triggers.py 缺少 KEYWORDS 和 PATTERNS（无法触发工具）"
-    for pat in patterns or []:
-        try:
-            re.compile(pat)
-        except re.error as e:
-            return f"triggers.py 正则编译失败: \"{pat}\" → {e}"
-        if _hasNestedQuantifier(pat):
-            printColor(Color.YELLOW, f"[!] ReDoS 风险：正则 \"{pat}\" 含嵌套量词")
-    return None
-
-
 def _applyStagedFiles(tempDir, fileList, pendingTmps):
     """把暂存文件原子落盘：先移到 <target>.tmp，再 os.replace 到最终路径。
 
@@ -947,7 +797,7 @@ def cmdInstall(githubUrl, branch, force):
     从 GitHub 仓库安装第三方 AFC 工具。
 
     流程：解析 URL → 按分支下载 afcTool.json → 校验 manifest 与文件路径 →
-    检查依赖 → 下载到同盘临时目录 → AST 校验 triggers.py → 原子落盘 →
+    检查依赖 → 下载到同盘临时目录 → 原子落盘 →
     登记 data/afcToolsCustom.json。任何一步失败都回滚清理，不留半成品。
     """
     from utils.afc.toolManager import (
@@ -1025,11 +875,6 @@ def cmdInstall(githubUrl, branch, force):
 
         rawBase = f"{_RAW_BASE_URL}/{user}/{repo}/{selectedBranch}"
         testDownloaded, err = _downloadToolFiles(githubUrl, rawBase, files, testFile, tempDir)
-        if err:
-            return _fail(err)
-
-        # ── triggers.py 静态校验（AST 解析，绝不 import 工具代码）──
-        err = _validateStagingTriggers(tempDir, toolId)
         if err:
             return _fail(err)
 
@@ -1458,9 +1303,6 @@ def cmdUpdate(toolName, checkOnly=False, assumeYes=False):
         testDownloaded, err = _downloadToolFiles(url, rawBase, files, testFile, tempDir)
         if err:
             return _fail(err)
-        err = _validateStagingTriggers(tempDir, toolName, action="更新")
-        if err:
-            return _fail(err)
 
         # ── H. 字节比对四分类（+manifest 比较）──
         diff = _diffToolFiles(oldManifest, remoteManifest, tempDir, testDownloaded)
@@ -1745,7 +1587,7 @@ def main():
     listParser.add_argument("-a", "--all", action="store_true", help="显示所有工具（默认）")
     listParser.add_argument("-e", "--enabled", action="store_true", help="只显示已启用的工具")
     listParser.add_argument("-d", "--disabled", action="store_true", help="只显示已禁用的工具")
-    listParser.add_argument("--full", action="store_true", help="显示触发词和文件数")
+    listParser.add_argument("--full", action="store_true", help="显示文件数")
 
     showParser = subparsers.add_parser("show", help="显示工具详细信息")
     showParser.add_argument("name", help="工具名")

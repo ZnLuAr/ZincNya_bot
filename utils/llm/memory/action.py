@@ -2,13 +2,14 @@
 utils/llm/memory/action.py
 
 LLM 自主记忆操作：
-    - 解析 <MEMORY_ACTION> 块
+    - 把模型给出的操作参数规范化为 MemoryAction
     - 校验 add/update/delete 合法性
     - 执行对应的 memory 数据库操作
+
+操作从模型输出里怎么取出来不在这里：记忆操作是操作循环的一种能力，
+见 utils/llm/operation/builtin.py。
 """
 
-import re
-import json
 import asyncio
 from typing import Optional
 from dataclasses import dataclass
@@ -17,10 +18,9 @@ from config import (
     LLM_MEMORY_PRIORITY_CAP,
     LLM_MEMORY_MAX_CONTENT_LEN,
     LLM_MEMORY_MAX_TAGS,
-    LLM_MEMORY_MAX_ACTIONS,
 )
 
-from utils.core.logger import logSystemEvent, logAction, LogLevel, LogChildType
+from utils.core.logger import logSystemEvent, LogLevel
 
 # fire-and-forget task 引用持有，避免被 GC 回收
 _backgroundTasks: set[asyncio.Task] = set()
@@ -64,10 +64,6 @@ _VALID_SCOPE_TYPES = {
     MEMORY_SCOPE_CHAT,
     MEMORY_SCOPE_USER,
 }
-MEMORY_ACTION_PATTERN = re.compile(
-    r"<MEMORY_ACTION>(.*?)</MEMORY_ACTION>",
-    re.DOTALL,
-)
 
 
 
@@ -98,7 +94,7 @@ class MemoryAction:
     """LLM 请求的单个 memory 操作的内部表示。
 
     模型输出使用 snake_case JSON，审核队列和数据库调用使用驼峰法；
-    `_parseActionDict` 与 `toDict`/`fromDict` 是这两个边界之间的转换层。
+    `parseActionDict` 与 `toDict`/`fromDict` 是这两个边界之间的转换层。
     类保持可变，是因为校验阶段会把 mode 和 retrievalHint 规范化到最终值。
 
     `mode=None` 表示 add 使用默认 `contextual`、update 保留原值；
@@ -173,22 +169,30 @@ def _normalizeTags(tags) -> Optional[list[str]]:
 
 
 def _optionalInt(raw, field: str) -> Optional[int]:
-    """把模型给的整数字段转为 int；缺省返回 None，布尔值直接拒绝。
+    """把模型给的整数字段转为 int；缺省返回 None，其余不是整数的值一律报 ValueError。
 
     JSON 的 true/false 在 Python 里是 bool，而 int(True) == 1：不拦下来，
-    priority 会被悄悄当成 1，memory_id 会误指 #1。
+    priority 会被悄悄当成 1，memory_id 会误指 #1。带小数的数字同理，
+    int(7.9) == 7 会让 memory_id 误指 #7。
     """
     if raw in (None, ""):
         return None
     if isinstance(raw, bool):
         raise ValueError(f"{field} 必须是整数")
-    return int(raw)
+
+    try:
+        value = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"{field} 必须是整数") from None
+    if isinstance(raw, float) and raw != value:
+        raise ValueError(f"{field} 必须是整数")
+    return value
 
 
-def _parseActionDict(data: dict) -> MemoryAction:
+def parseActionDict(data: dict) -> MemoryAction:
     """将模型的 snake_case JSON 对象规范化为内部的 `MemoryAction`。"""
     if not isinstance(data, dict):
-        raise ValueError("MEMORY_ACTION 必须是 JSON 对象")
+        raise ValueError("记忆操作必须是 JSON 对象")
 
     # 这里是 LLM 不可信输出的第一道边界：先容忍类型差异并转成内部形态，
     # 再由 validateAction 统一检查 action、scope、长度和目标记录。
@@ -246,113 +250,6 @@ def formatActionDetail(act: MemoryAction) -> str:
     if act.mode is not None:
         detail += f" | mode={act.mode}"
     return detail
-
-
-def parseMemoryActions(text: str) -> tuple[str, list[MemoryAction]]:
-    """
-    提取并剥离 LLM 输出中的 <MEMORY_ACTION> 块
-
-    正常路径：
-        - 正则匹配标准格式 <MEMORY_ACTION>...</MEMORY_ACTION>
-        - 逐块解析 JSON 并构造 MemoryAction
-        - 剥离匹配到的块，返回清理后的文本
-
-    回退清理（仅在检测到 MEMORY_ACTION 关键字时启用）：
-        - 清理残留的格式错误标签（大小写不敏感，容忍拼写错误如 ACTI0N）
-        - 清理孤立的 JSON 块（疑似记忆操作但标签缺失，限单行）
-        - 避免误删用户正常对话中的 JSON
-
-    返回:
-        清理后的文本, 即解析成功的 MemoryAction 列表
-    """
-    if not text:
-        return "", []
-
-    actions: list[MemoryAction] = []
-    for match in MEMORY_ACTION_PATTERN.finditer(text):
-        block = match.group(1).strip()
-        if not block:
-            continue
-
-        # 外层 try：仅捕获 JSON 解析失败（整块无法解析）
-        try:
-            raw = json.loads(block)
-        except Exception as e:
-            try:
-                _fireAndForget(
-                    logSystemEvent(
-                        "LLM memory action JSON 解析失败",
-                        f"errorType={type(e).__name__}, inputType=memoryActionBlock",
-                        LogLevel.WARNING,
-                        childType=LogChildType.WITH_ONE_CHILD,
-                    )
-                )
-            except Exception:
-                pass
-            continue
-
-        # 兼容 LLM 在单个块中输出数组 [{...}, {...}] 的情况
-        items = raw if isinstance(raw, list) else [raw]
-        for item in items:
-            # 内层 try：单 item 解析失败时跳过该 item，不影响后续
-            try:
-                act = _parseActionDict(item)
-            except Exception as e:
-                try:
-                    _fireAndForget(
-                        logSystemEvent(
-                            "LLM memory action item 解析失败",
-                            f"errorType={type(e).__name__}, inputType={type(item).__name__}",
-                            LogLevel.WARNING,
-                            childType=LogChildType.WITH_ONE_CHILD,
-                        )
-                    )
-                except Exception:
-                    pass
-                continue
-
-            actions.append(act)
-            try:
-                _fireAndForget(
-                    logAction(
-                        "System",
-                        "LLM 请求操作 Memory",
-                        formatActionDetail(act),
-                        level=LogLevel.INFO,
-                        childType=LogChildType.WITH_ONE_CHILD,
-                    )
-                )
-            except Exception:
-                pass
-
-    cleaned = MEMORY_ACTION_PATTERN.sub("", text).strip()
-
-    # 回退清理：仅在检测到 MEMORY_ACTION 关键字时启用（避免误删用户正常对话）
-    if "MEMORY_ACTION" in text.upper() or "MEMORY_ACTI" in text.upper():
-        # 清理残留的格式错误标签（大小写不敏感，容忍拼写错误）
-        # 匹配 <MEMORY_ACTION 或 <MEMORY_ACTI 开头的标签（容忍常见拼写错误如 ACTI0N）
-        cleaned = re.sub(r"</?MEMORY_ACTI(?:ON|0N)[^>]*>", "", cleaned, flags=re.IGNORECASE)
-        # 清理孤立的 JSON 块（疑似记忆操作但标签缺失）
-        # 同时覆盖两种残留形态：
-        #   1) JSON 独占整行（^...$）
-        #   2) JSON 夹在正常文本中间（如「Reply {"action":...} 谢谢」）——
-        #      标签丢失时若只删整行 JSON，行内残留会把记忆操作负载泄露给用户
-        # 限制 [^}] 匹配长度防止灾难性回溯
-        cleaned = re.sub(
-            r'^\s*\{[^}]{0,500}"action"\s*:\s*"(?:add|update|delete)"[^}]{0,500}\}\s*$',
-            "",
-            cleaned,
-            flags=re.MULTILINE | re.IGNORECASE
-        )
-        cleaned = re.sub(
-            r'\{[^}]{0,500}"action"\s*:\s*"(?:add|update|delete)"[^}]{0,500}\}',
-            "",
-            cleaned,
-            flags=re.IGNORECASE
-        )
-
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    return cleaned, actions
 
 
 def _normalizeScopeID(scopeType: str, scopeID: str) -> str:
@@ -676,41 +573,3 @@ async def buildMemoryActionReviewPayload(act: MemoryAction) -> dict:
             actDict["originalMode"] = target.get("mode", MEMORY_MODE_CONTEXTUAL)
             actDict["targetState"] = buildMemoryStateFingerprint(target)
     return actDict
-
-
-async def extractValidatedMemoryActions(
-    reply: str,
-    *,
-    logLabel: str,
-    chatID=None,
-    userID=None,
-) -> tuple[str, list[MemoryAction], int]:
-    """剥离记忆操作块、限制数量，并按请求的可信身份校验；返回正文、合法操作和失败数。"""
-    cleanedReply, actions = parseMemoryActions(reply)
-    actionContext = MemoryActionContext(chatID=chatID, userID=userID)
-
-    # 截断超限操作
-    if len(actions) > LLM_MEMORY_MAX_ACTIONS:
-        await logSystemEvent(
-            f"LLM 记忆操作数量超限（{logLabel}）",
-            f"请求 {len(actions)} 个，上限 {LLM_MEMORY_MAX_ACTIONS}，截断",
-            LogLevel.WARNING,
-        )
-        actions = actions[:LLM_MEMORY_MAX_ACTIONS]
-
-    # 逐个校验，失败项丢弃并计数
-    validated = []
-    failed = 0
-    for act in actions:
-        err = await validateAction(act, actionContext=actionContext)
-        if err:
-            failed += 1
-            await logSystemEvent(
-                f"LLM 记忆操作校验失败（{logLabel}）",
-                f"{act.action} | {err}",
-                LogLevel.WARNING,
-            )
-        else:
-            validated.append(act)
-
-    return cleanedReply, validated, failed

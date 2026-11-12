@@ -11,7 +11,7 @@ await getCurrentTime("full")     # "2024-03-15 14:30:00 星期五 UTC+8"
 await getCurrentTime("date")     # "2024-03-15"
 await getCurrentTime("time")     # "14:30:00"
 await getCurrentTime("weekday")  # "星期五"
-await getCurrentTime("iso")      # "2024-03-15T14:30:00+08:00"
+await getCurrentTime("iso")      # "2024-03-15T14:30:00.123456+08:00"
 ```
 
 **参数**：
@@ -27,8 +27,8 @@ await getCurrentTime("iso")      # "2024-03-15T14:30:00+08:00"
 
 ```python
 await calculateDateDiff("2024-12-31")           # "距离 2024-12-31 还有 291 天"
-await calculateDateDiff("昨天", "今天")         # "昨天距今 1 天"
-await calculateDateDiff("明天", "2024-12-31")   # "距离 明天 还有 290 天"
+await calculateDateDiff("昨天", "今天")         # "昨天 距今 1 天"
+await calculateDateDiff("明天", "2024-12-31")   # "明天 距今 290 天"
 ```
 
 **参数**：
@@ -40,9 +40,9 @@ await calculateDateDiff("明天", "2024-12-31")   # "距离 明天 还有 290 �
 ### 3. getFutureDate - 计算未来/过去日期
 
 ```python
-await getFutureDate(3)         # "3 天后是 2024-03-18 星期一"
-await getFutureDate(-2)        # "2 天前是 2024-03-13 星期三"
-await getFutureDate(0)         # "今天是 2024-03-15 星期五"
+await getFutureDate(3)         # "3 天后是 2024-03-18"
+await getFutureDate(-2)        # "2 天前是 2024-03-13"
+await getFutureDate(0)         # "今天是 2024-03-15"
 await getFutureDate(7, "full") # "7 天后是 2024-03-22 10:30:00 星期五 UTC+8"
 ```
 
@@ -53,22 +53,18 @@ await getFutureDate(7, "full") # "7 天后是 2024-03-22 10:30:00 星期五 UTC+
   - `0`：今天
 - `fmt` (str, 可选): 输出格式（同 `getCurrentTime`，默认 `"date"`）
 
-## 触发关键词
+## 调用时机
 
-工具通过以下关键词自动触发：
-
-- **当前时间**：`现在几点`, `几点了`, `当前时间`, `今天几号`, `今天星期几`, `what time`
-- **日期差**：`距离`, `还有多久`, `还有几天`, `过去了多久`
-- **相对日期**：`天后`, `天前`, `明天`, `昨天`, `后天`, `前天`
+工具说明对模型全量提供，由模型根据对话内容自行决定是否调用。
 
 ## 错误处理
 
-所有错误统一返回 `"错误：<错误消息>"` 格式（不抛异常）：
+参数不合法时抛 `ToolError`，消息就是交给模型的失败原因：
 
 ```python
-await getCurrentTime("invalid")       # "错误：不支持的格式：invalid"
-await calculateDateDiff("2024-99-99") # "错误：无法解析日期：2024-99-99"
-await calculateDateDiff("")           # "错误：日期不能为空"
+await getCurrentTime("invalid")       # ToolError: 不支持的格式：invalid
+await calculateDateDiff("2024-99-99") # ToolError: 无法解析日期：2024-99-99
+await calculateDateDiff("")           # ToolError: 日期不能为空
 ```
 
 ## 设计特点

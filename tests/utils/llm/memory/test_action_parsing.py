@@ -1,7 +1,7 @@
 """
 tests/utils/llm/memory/test_action_parsing.py
 
-测试 LLM 记忆操作的解析与清理逻辑。
+测试 LLM 记忆操作的参数规范化（parseActionDict）、校验与执行门禁。
 """
 
 import asyncio
@@ -9,153 +9,147 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from config import LLM_MEMORY_MAX_ACTIONS
+from config import LLM_MEMORY_MAX_CONTENT_LEN, LLM_MEMORY_MAX_TAGS
+
 from utils.llm.memory.action import (
     MemoryAction,
     MemoryActionContext,
     executeAction,
-    extractValidatedMemoryActions,
-    parseMemoryActions,
+    parseActionDict,
     validateAction,
 )
 
 
-# ===========================================================================
-# Retry 路径测试（最高优先级）
-# ===========================================================================
-
-def test_retry_strips_memory_action_blocks():
-    """验证 retry 路径能正确清理 <MEMORY_ACTION> 块"""
-    original_reply = "这是回复内容\n\n<MEMORY_ACTION>\n{\"action\":\"add\",\"scope_type\":\"global\",\"scope_id\":\"global\",\"content\":\"测试\"}\n</MEMORY_ACTION>"
-
-    cleaned, actions = parseMemoryActions(original_reply)
-
-    # 验证：块被清除，操作被提取
-    assert "<MEMORY_ACTION>" not in cleaned
-    assert "</MEMORY_ACTION>" not in cleaned
-    assert cleaned.strip() == "这是回复内容"
-    assert len(actions) > 0
-    assert actions[0].action == "add"
-
-
-def test_retry_with_malformed_json():
-    """验证 retry 路径处理格式错误的记忆操作"""
-    malformed_reply = "回复\n\n<MEMORY_ACTION>\n{action:\"add\"}\n</MEMORY_ACTION>"
-    cleaned, actions = parseMemoryActions(malformed_reply)
-
-    # 格式错误的块也应被清理
-    assert "<MEMORY_ACTION>" not in cleaned
-    assert len(actions) == 0  # 格式错误不进入队列
+def _addArgs(**overrides) -> dict:
+    """模型给出的 add 操作参数（snake_case），默认是一条能通过校验的 global 记忆。"""
+    args = {
+        "action": "add",
+        "scope_type": "global",
+        "scope_id": "global",
+        "content": "测试内容",
+    }
+    args.update(overrides)
+    return args
 
 
 # ===========================================================================
-# 回归测试 — 重现用户报告的泄露
+# parseActionDict — 模型参数规范化
 # ===========================================================================
 
-def test_regression_user_reported_leak():
-    """回归测试：重现用户报告的实际泄露格式"""
-    # 用户报告的格式（完全正确的 JSON）
-    leaked_text = '''这是回复内容
+def test_parseActionDictNormalizesModelFields():
+    """snake_case 参数转为内部字段：去首尾空白、枚举值转小写、整数字段转 int。"""
+    action = parseActionDict({
+        "action": " ADD ",
+        "scope_type": " Global ",
+        "scope_id": None,
+        "content": "  记住这件事  ",
+        "tags": ["偏好"],
+        "priority": "2",
+        "mode": " Contextual ",
+        "reason": "  用户明确说过  ",
+    })
 
-<MEMORY_ACTION>
-{"action": "add", "scope_type": "global", "scope_id": "global", "content": "ZincPhos 会用「惩罚」「更重的惩罚」等严肃或壮烈的表达来包装「想和锌酱一起做温柔的事」（如一起吃早餐）。这是她特有的小心思和绕弯子的表达方式。锌酱需要能听懂并温柔地戳穿或配合，同时不要真的当成「惩罚」来理解。", "tags": ["ZincPhos", "辛灵", "互动偏好", "表达方式", "小心思"], "priority": 2, "reason": "记录 ZincPhos 独特的表达习惯：用严肃包装温柔诉求"}
-</MEMORY_ACTION>'''
-
-    cleaned, actions = parseMemoryActions(leaked_text)
-
-    # 验证：块被完全清除
-    assert "<MEMORY_ACTION>" not in cleaned
-    assert "</MEMORY_ACTION>" not in cleaned
-    assert "ZincPhos" not in cleaned  # 内容也被清除
-    assert cleaned.strip() == "这是回复内容"
-
-    # 验证：操作被正确提取
-    assert len(actions) == 1
-    assert actions[0].action == "add"
-    assert actions[0].scopeType == "global"
-
-
-# ===========================================================================
-# 格式错误场景测试
-# ===========================================================================
-
-def test_parse_memory_actions_malformed_tags():
-    """测试各种格式错误的标签"""
-    # 测试缺少 > 的开标签
-    text1 = "正常回复\n<MEMORY_ACTION {\"action\":\"add\"}</MEMORY_ACTION>"
-    cleaned1, actions1 = parseMemoryActions(text1)
-    assert "<MEMORY_ACTION" not in cleaned1
-    assert "{\"action\"" not in cleaned1
-
-    # 测试拼写错误的闭标签
-    text2 = "正常回复\n<MEMORY_ACTION>{\"action\":\"add\",\"scope_type\":\"global\",\"scope_id\":\"global\",\"content\":\"test\"}</MEMORY_ACTI0N>"
-    cleaned2, actions2 = parseMemoryActions(text2)
-    assert "</MEMORY_ACTI0N>" not in cleaned2
-
-    # 测试小写标签
-    text3 = "正常回复\n<memory_action>{\"action\":\"add\",\"scope_type\":\"global\",\"scope_id\":\"global\",\"content\":\"test\"}</memory_action>"
-    cleaned3, actions3 = parseMemoryActions(text3)
-    assert "<memory_action>" not in cleaned3
-
-    # 测试嵌套标签
-    text4 = "<MEMORY_ACTION><MEMORY_ACTION>{\"action\":\"add\",\"scope_type\":\"global\",\"scope_id\":\"global\",\"content\":\"test\"}</MEMORY_ACTION></MEMORY_ACTION>"
-    cleaned4, actions4 = parseMemoryActions(text4)
-    # 孤儿标签也被清除
-    assert cleaned4.count("</MEMORY_ACTION>") == 0
-
-    # 测试复合错误（小写 + 拼写错误）
-    text5 = "<memory_action>{\"action\":\"add\",\"scope_type\":\"global\",\"scope_id\":\"global\",\"content\":\"test\"}</MEMORY_ACTI0N>"
-    cleaned5, actions5 = parseMemoryActions(text5)
-    assert "memory_action" not in cleaned5.lower()
+    assert action.action == "add"
+    assert action.scopeType == "global"
+    assert action.scopeID == ""
+    assert action.content == "记住这件事"
+    assert action.tags == ["偏好"]
+    assert action.priority == 2
+    assert action.memoryID is None
+    assert action.mode == "contextual"
+    assert action.retrievalHint is None
+    assert action.reason == "用户明确说过"
 
 
-def test_parse_memory_actions_preserves_normal_text():
-    """验证回退正则不会误删正常对话"""
-    # 用户正常讨论 <MEMORY_ACTION> 功能
-    text = "你可以用 <MEMORY_ACTION> 来添加记忆，但要注意格式"
-    cleaned, actions = parseMemoryActions(text)
+def test_parseActionDictKeepsMissingOptionalFieldsAsNone():
+    """没给的可选字段保持 None：update 靠它区分「不改」和「改成空」。"""
+    action = parseActionDict({
+        "action": "update",
+        "scope_type": "global",
+        "scope_id": "global",
+        "memory_id": 7,
+    })
 
-    # 因为没有实际的记忆块，回退不应触发
-    assert "添加记忆" in cleaned
-    assert "注意格式" in cleaned
+    assert action.memoryID == 7
+    assert action.content is None
+    assert action.tags is None
+    assert action.priority is None
+    assert action.mode is None
+    assert action.retrievalHint is None
 
 
-def test_parse_memory_actions_json_errors():
-    """测试各种 JSON 语法错误"""
-    # 缺少引号
-    text1 = '<MEMORY_ACTION>{action:"add"}</MEMORY_ACTION>'
-    cleaned1, actions1 = parseMemoryActions(text1)
-    assert len(actions1) == 0
-    assert "<MEMORY_ACTION>" not in cleaned1
+@pytest.mark.parametrize("data", ["add", ["add"], None, 1])
+def test_parseActionDictRejectsNonObject(data):
+    with pytest.raises(ValueError, match="^记忆操作必须是 JSON 对象$"):
+        parseActionDict(data)
 
-    # 多余逗号
-    text2 = '<MEMORY_ACTION>{"action":"add",}</MEMORY_ACTION>'
-    cleaned2, actions2 = parseMemoryActions(text2)
-    assert len(actions2) == 0
-    assert "<MEMORY_ACTION>" not in cleaned2
 
-    # 单引号
-    text3 = "<MEMORY_ACTION>{'action':'add'}</MEMORY_ACTION>"
-    cleaned3, actions3 = parseMemoryActions(text3)
-    assert len(actions3) == 0
-    assert "<MEMORY_ACTION>" not in cleaned3
+@pytest.mark.parametrize("overrides,field", [
+    ({"priority": True}, "priority"),
+    ({"action": "delete", "memory_id": True}, "memory_id"),
+])
+def test_booleanIntegerFieldsAreRejected(overrides, field):
+    """JSON true 不能当作整数 1：priority 会被提级，memory_id 会误指 #1。"""
+    with pytest.raises(ValueError, match=f"^{field} 必须是整数$"):
+        parseActionDict(_addArgs(**overrides))
+
+
+def test_nonNumericPriorityIsRejected():
+    with pytest.raises(ValueError):
+        parseActionDict(_addArgs(priority="not-an-int"))
+
+
+def test_tagsAreDeduplicatedAndCapped():
+    """tags 去空白、去重、丢弃空项，并按单条记忆的标签上限截断。"""
+    action = parseActionDict(_addArgs(tags=[" 偏好 ", "偏好", "", 42]))
+    assert action.tags == ["偏好", "42"]
+
+    manyTags = [f"标签{i}" for i in range(LLM_MEMORY_MAX_TAGS + 3)]
+    capped = parseActionDict(_addArgs(tags=manyTags))
+    assert capped.tags == manyTags[:LLM_MEMORY_MAX_TAGS]
+
+
+def test_emptyTagsListIsKeptDistinctFromMissing():
+    """空数组表示清空标签，不能和「没给 tags」合并成 None。"""
+    assert parseActionDict(_addArgs(tags=[])).tags == []
+
+
+def test_nonListTagsAreRejected():
+    with pytest.raises(ValueError, match="^tags 必须是数组$"):
+        parseActionDict(_addArgs(tags="偏好"))
+
+
+def test_modeAndRetrievalHintRoundTrip():
+    action = parseActionDict(_addArgs(mode="pinned", retrieval_hint="讨论测试安排时"))
+    restored = MemoryAction.fromDict(action.toDict())
+
+    assert restored.mode == "pinned"
+    assert restored.retrievalHint == "讨论测试安排时"
+
+
+@pytest.mark.parametrize("hint", ["", "   "])
+def test_blankRetrievalHintMeansExplicitClear(hint):
+    """空白 hint 是「清除旧说明」，保留为空字符串，不与未提供（None）混同。"""
+    assert parseActionDict(_addArgs(retrieval_hint=hint)).retrievalHint == ""
 
 
 @pytest.mark.asyncio
 @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
-async def test_parse_errors_do_not_logMemoryBody(mockLog):
-    secret = "绝密事实 secret-hint-42"
-    malformed = (
-        f'<MEMORY_ACTION>{{"action":"add","content":"{secret}"'
-        f'</MEMORY_ACTION>'
-    )
-    malformedItem = (
-        '<MEMORY_ACTION>[{"action":"add","priority":"not-an-int",'
-        '"content":"' + secret + '"}]</MEMORY_ACTION>'
-    )
+async def test_invalidHintDoesNotDiscardOtherwiseValidAdd(mockLog):
+    """不合规的检索说明只丢弃说明本身，记忆操作仍然有效。"""
+    action = parseActionDict(_addArgs(content="合法事实", retrieval_hint="第一行\n第二行"))
 
-    parseMemoryActions(malformed)
-    parseMemoryActions(malformedItem)
+    assert action.retrievalHint is None
+    assert await validateAction(action) is None
+
+
+@pytest.mark.asyncio
+@patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
+async def test_discardedHintLogDoesNotContainMemoryBody(mockLog):
+    """丢弃检索说明时只记原因码，不把记忆正文或说明原文写进日志。"""
+    secret = "绝密事实 secret-hint-42"
+
+    parseActionDict(_addArgs(content=secret, retrieval_hint=f"{secret}\n第二行"))
     await asyncio.sleep(0)
 
     loggedText = " ".join(
@@ -164,62 +158,60 @@ async def test_parse_errors_do_not_logMemoryBody(mockLog):
         for argument in call.args
     )
     assert secret not in loggedText
-    assert "errorType=" in loggedText
-    assert "inputType=" in loggedText
+    assert "action=add" in loggedText
+    assert "reason=hintMultiline" in loggedText
 
 
 # ===========================================================================
-# 基线测试 — 正常路径
+# validateAction — 字段合法性
 # ===========================================================================
 
-@pytest.mark.parametrize("payload", [
-    '{"action": "add", "scope_type": "global", "scope_id": "global", "content": "x", "priority": true}',
-    '{"action": "delete", "scope_type": "global", "scope_id": "global", "memory_id": true}',
-])
-def test_booleanIntegerFieldsAreRejected(payload):
-    """JSON true 不能当作整数 1：priority 会被提级，memory_id 会误指 #1。"""
-    cleaned, actions = parseMemoryActions(f"<MEMORY_ACTION>{payload}</MEMORY_ACTION>")
-    assert actions == []
-    assert "<MEMORY_ACTION>" not in cleaned
+@pytest.mark.asyncio
+async def test_unsupportedActionIsRejected():
+    """parseActionDict 不判断 action 是否受支持，这一步由 validateAction 拒绝。"""
+    action = parseActionDict(_addArgs(action="frobnicate"))
 
-
-def test_normal_path_strips_memory_blocks():
-    """验证正常路径（非 retry）能正确清理"""
-    text = "回复内容\n\n<MEMORY_ACTION>\n{\"action\":\"add\",\"scope_type\":\"global\",\"scope_id\":\"global\",\"content\":\"测试\"}\n</MEMORY_ACTION>"
-    cleaned, actions = parseMemoryActions(text)
-
-    assert "<MEMORY_ACTION>" not in cleaned
-    assert len(actions) == 1
-    assert actions[0].content == "测试"
-
-
-def test_modeAndRetrievalHintRoundTrip():
-    text = (
-        '<MEMORY_ACTION>{"action":"add","scope_type":"global",'
-        '"scope_id":"global","content":"测试","mode":"pinned",'
-        '"retrieval_hint":"讨论测试安排时"}</MEMORY_ACTION>'
-    )
-
-    _, actions = parseMemoryActions(text)
-    restored = MemoryAction.fromDict(actions[0].toDict())
-
-    assert restored.mode == "pinned"
-    assert restored.retrievalHint == "讨论测试安排时"
+    assert await validateAction(action) == "不支持的 action：frobnicate"
 
 
 @pytest.mark.asyncio
-async def test_invalidHintDoesNotDiscardOtherwiseValidAdd():
-    text = (
-        '<MEMORY_ACTION>{"action":"add","scope_type":"global",'
-        '"scope_id":"global","content":"合法事实",'
-        '"retrieval_hint":"第一行\\n第二行"}</MEMORY_ACTION>'
-    )
+async def test_unsupportedScopeTypeIsRejected():
+    action = parseActionDict(_addArgs(scope_type="session"))
 
-    _, actions = parseMemoryActions(text)
+    assert await validateAction(action) == "不支持的 scope_type：session"
 
-    assert len(actions) == 1
-    assert actions[0].retrievalHint is None
-    assert await validateAction(actions[0]) is None
+
+@pytest.mark.asyncio
+async def test_addWithoutContentIsRejected():
+    args = _addArgs()
+    del args["content"]
+
+    assert await validateAction(parseActionDict(args)) == "add 必须提供 content"
+
+
+@pytest.mark.asyncio
+async def test_contentLengthLimit():
+    """content 恰好到上限可以通过，多一个字就拒绝。"""
+    atLimit = parseActionDict(_addArgs(content="A" * LLM_MEMORY_MAX_CONTENT_LEN))
+    overLimit = parseActionDict(_addArgs(content="A" * (LLM_MEMORY_MAX_CONTENT_LEN + 1)))
+
+    assert await validateAction(atLimit) is None
+    assert await validateAction(overLimit) == f"content 不能超过 {LLM_MEMORY_MAX_CONTENT_LEN} 字"
+
+
+# ===========================================================================
+# scope 授权与执行门禁
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_modelDeclaredPrivateScopeIsCheckedAgainstRequestIdentity():
+    """模型参数里自报的 user scope 必须与请求身份一致，否则在入队前就被拒绝。"""
+    context = MemoryActionContext(chatID="chat-1", userID="user-1")
+    forged = parseActionDict(_addArgs(scope_type="user", scope_id="other-user"))
+    matching = parseActionDict(_addArgs(scope_type="user", scope_id="user-1"))
+
+    assert "不属于当前请求" in await validateAction(forged, actionContext=context)
+    assert await validateAction(matching, actionContext=context) is None
 
 
 @pytest.mark.asyncio
@@ -330,7 +322,7 @@ async def test_privateContextualAddStillRequiresHumanApproval(mockAdd, mockLog):
 @pytest.mark.asyncio
 @patch("utils.llm.memory.action.addMemory", new_callable=AsyncMock)
 async def test_crossScopeExecuteIsRejectedBeforeWrite(mockAdd):
-    """执行层再次校验 scope，避免绕过解析层直接调用时跨 chat 写入。"""
+    """执行层再次校验 scope，避免绕过校验层直接调用时跨 chat 写入。"""
     action = MemoryAction(
         action="add",
         scopeType="chat",
@@ -401,283 +393,3 @@ async def test_pinnedAddRequiresTrustedApproval(mockAdd, mockLog):
 
     assert await executeAction(action) is False
     mockAdd.assert_not_awaited()
-
-
-def test_multiple_memory_blocks():
-    """测试多个记忆块"""
-    text = '''回复
-
-<MEMORY_ACTION>
-{"action":"add","scope_type":"global","scope_id":"global","content":"第一条"}
-</MEMORY_ACTION>
-
-<MEMORY_ACTION>
-{"action":"add","scope_type":"global","scope_id":"global","content":"第二条"}
-</MEMORY_ACTION>'''
-
-    cleaned, actions = parseMemoryActions(text)
-
-    assert "<MEMORY_ACTION>" not in cleaned
-    assert len(actions) == 2
-    assert actions[0].content == "第一条"
-    assert actions[1].content == "第二条"
-
-
-def test_idempotent_parsing():
-    """验证重复调用 parseMemoryActions 的幂等性"""
-    text = "回复\n\n<MEMORY_ACTION>\n{\"action\":\"add\",\"scope_type\":\"global\",\"scope_id\":\"global\",\"content\":\"测试\"}\n</MEMORY_ACTION>"
-
-    cleaned1, actions1 = parseMemoryActions(text)
-    cleaned2, actions2 = parseMemoryActions(cleaned1)
-
-    # 第二次调用应该不再有变化
-    assert cleaned1 == cleaned2
-    assert len(actions2) == 0  # 已经清理过，不再有操作
-
-
-def test_empty_input():
-    """测试空输入"""
-    cleaned, actions = parseMemoryActions("")
-    assert cleaned == ""
-    assert len(actions) == 0
-
-
-def test_no_memory_blocks():
-    """测试没有记忆块的正常回复"""
-    text = "这是一条正常的回复，没有任何记忆操作"
-    cleaned, actions = parseMemoryActions(text)
-
-    assert cleaned == text
-    assert len(actions) == 0
-
-
-# ===========================================================================
-# 边界测试
-# ===========================================================================
-
-def test_large_content():
-    """测试大文本内容"""
-    large_content = "A" * 500  # 接近上限
-    text = f'<MEMORY_ACTION>{{"action":"add","scope_type":"global","scope_id":"global","content":"{large_content}"}}</MEMORY_ACTION>'
-    cleaned, actions = parseMemoryActions(text)
-
-    assert "<MEMORY_ACTION>" not in cleaned
-    assert len(actions) == 1
-    assert len(actions[0].content) == 500
-
-
-def test_special_characters_in_content():
-    """测试特殊字符"""
-    text = '<MEMORY_ACTION>{"action":"add","scope_type":"global","scope_id":"global","content":"包含\\"双引号\\"和\\n换行符"}</MEMORY_ACTION>'
-    cleaned, actions = parseMemoryActions(text)
-
-    assert "<MEMORY_ACTION>" not in cleaned
-    assert len(actions) == 1
-
-
-# ===========================================================================
-# 回退清理测试 — 标签缺失的孤立 JSON 块
-# ===========================================================================
-
-def test_fallback_strips_orphan_json_block():
-    """回退：标签缺失但含 action 字段的单行 JSON 块被清理
-
-    LLM 偶尔会漏掉 <MEMORY_ACTION> 标签直接吐 JSON。
-    只要文本里别处出现过 MEMORY_ACTION 关键字（触发回退），
-    这类孤立 JSON 行应被清理，避免泄露给用户。
-    """
-    text = (
-        "这是正常回复\n"
-        '{"action": "add", "scope_type": "global", "scope_id": "global", "content": "x"}\n'
-        "<MEMORY_ACTION>触发关键字</MEMORY_ACTION>"
-    )
-    cleaned, actions = parseMemoryActions(text)
-
-    assert "这是正常回复" in cleaned
-    # 孤立 JSON 行被清除
-    assert '"action"' not in cleaned
-
-
-def test_fallback_only_triggers_with_keyword():
-    """回退：文本不含 MEMORY_ACTION 关键字时，孤立 JSON 不被误删
-
-    避免把用户正常对话里的 JSON（恰好含 action 字段）当成记忆操作清掉。
-    """
-    text = '{"action": "add", "value": 1}'
-    cleaned, actions = parseMemoryActions(text)
-
-    # 没有任何 MEMORY_ACTION 关键字，回退不触发，原样保留
-    assert cleaned == text
-    assert len(actions) == 0
-
-
-def test_fallback_strips_inline_orphan_json():
-    """回退：行内（非独占整行）的孤立记忆 JSON 也应被清理
-
-    复现 H4：LLM 把畸形标签 <MEMORY_ACTI0N> 与 JSON 混在正文同一行，
-    标签被清掉后 JSON 负载残留，会泄露给用户（如提示词注入式内容）。
-    """
-    text = (
-        '回复正文 <MEMORY_ACTI0N>{"action": "add", "scope_type": "global", '
-        '"scope_id": "global", "content": "secret"}</MEMORY_ACTI0N> 后续文字'
-    )
-    cleaned, actions = parseMemoryActions(text)
-
-    assert "回复正文" in cleaned
-    assert "后续文字" in cleaned
-    # 标签与行内 JSON 负载都应被清除，不得泄露
-    assert '"action"' not in cleaned
-    assert "secret" not in cleaned
-    assert "MEMORY_ACTI" not in cleaned.upper()
-
-
-def test_fallback_inline_json_only_with_action_verbs():
-    """回退：行内 JSON 仅当 action 值是 add/update/delete 才清理
-
-    避免误删用户正常对话里恰好含 "action" 键、但值不是记忆动词的 JSON。
-    """
-    text = '说明 {"action": "click", "x": 1} 这是普通内容 <MEMORY_ACTION>x</MEMORY_ACTION>'
-    cleaned, actions = parseMemoryActions(text)
-
-    # action 值为 click，不是记忆动词，行内 JSON 保留
-    assert '"action": "click"' in cleaned
-
-
-def _addBlock(content: str = "测试内容") -> str:
-    """构造一个语法合法、校验通过的 add 记忆块。"""
-    return (
-        '<MEMORY_ACTION>'
-        f'{{"action":"add","scope_type":"global","scope_id":"global","content":"{content}"}}'
-        '</MEMORY_ACTION>'
-    )
-
-
-def _invalidActionBlock() -> str:
-    """构造一个 JSON 合法、但 action 类型非法（校验失败）的块。
-
-    parseMemoryActions 不校验 action 合法性，会成功解析；
-    validateAction 才返回 "不支持的 action"。
-    """
-    return (
-        '<MEMORY_ACTION>'
-        '{"action":"frobnicate","scope_type":"global","scope_id":"global","content":"X"}'
-        '</MEMORY_ACTION>'
-    )
-
-
-def _userAddBlock(scopeID: str = "other-user") -> str:
-    """构造一个需要当前请求 user 身份授权的 action。"""
-    return (
-        '<MEMORY_ACTION>'
-        f'{{"action":"add","scope_type":"user","scope_id":"{scopeID}","content":"用户事实"}}'
-        '</MEMORY_ACTION>'
-    )
-
-
-# ===========================================================================
-
-class TestExtractValidatedMemoryActions:
-    """extractValidatedMemoryActions：解析 + 截断 + 校验编排"""
-
-    @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
-    async def test_no_memory_block(self, mockLog):
-        """无记忆块：返回原文本、空列表、0 失败，不记日志"""
-        reply = "这是一条没有任何记忆操作的普通回复"
-        cleaned, validated, failed = await extractValidatedMemoryActions(reply, logLabel="test")
-
-        assert cleaned == reply
-        assert validated == []
-        assert failed == 0
-        mockLog.assert_not_called()
-
-    @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
-    async def test_single_valid_action(self, mockLog):
-        """单个合法 add：块被剥离、validated 含 1 项、0 失败"""
-        reply = f"回复正文\n\n{_addBlock('记住这件事')}"
-        cleaned, validated, failed = await extractValidatedMemoryActions(reply, logLabel="test")
-
-        assert "<MEMORY_ACTION>" not in cleaned
-        assert cleaned.strip() == "回复正文"
-        assert len(validated) == 1
-        assert validated[0].action == "add"
-        assert validated[0].content == "记住这件事"
-        assert failed == 0
-
-    @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
-    async def test_validation_failure_counted(self, mockLog):
-        """校验失败：failed=1、validated 不含该项、记录失败日志"""
-        reply = f"回复\n\n{_invalidActionBlock()}"
-        cleaned, validated, failed = await extractValidatedMemoryActions(reply, logLabel="test")
-
-        assert "<MEMORY_ACTION>" not in cleaned
-        assert validated == []
-        assert failed == 1
-        # 至少有一次校验失败日志
-        assert mockLog.await_count >= 1
-
-    @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
-    async def test_valid_and_invalid_mixed(self, mockLog):
-        """合法 + 非法混合：validated 只留合法项，failed 计数正确"""
-        reply = f"回复\n\n{_addBlock('好的记忆')}\n\n{_invalidActionBlock()}"
-        cleaned, validated, failed = await extractValidatedMemoryActions(reply, logLabel="test")
-
-        assert len(validated) == 1
-        assert validated[0].content == "好的记忆"
-        assert failed == 1
-
-    @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
-    async def test_truncation_over_limit(self, mockLog):
-        """超过 LLM_MEMORY_MAX_ACTIONS：截断到上限，并记录超限日志"""
-        # 构造 上限+2 个合法块
-        blocks = "\n\n".join(_addBlock(f"内容{i}") for i in range(LLM_MEMORY_MAX_ACTIONS + 2))
-        reply = f"回复\n\n{blocks}"
-        cleaned, validated, failed = await extractValidatedMemoryActions(reply, logLabel="test")
-
-        assert len(validated) == LLM_MEMORY_MAX_ACTIONS
-        # 截断日志被触发（首条 await 即为超限告警）
-        assert mockLog.await_count >= 1
-        firstCallEvent = mockLog.await_args_list[0].args[0]
-        assert "超限" in firstCallEvent
-
-    @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
-    async def test_loglabel_propagated(self, mockLog):
-        """logLabel 透传到日志事件文案"""
-        reply = f"回复\n\n{_invalidActionBlock()}"
-        await extractValidatedMemoryActions(reply, logLabel="feedback retry")
-
-        # 校验失败日志的 event 文案应包含 logLabel
-        events = [c.args[0] for c in mockLog.await_args_list]
-        assert any("feedback retry" in e for e in events)
-
-    @patch("utils.llm.memory.action.logSystemEvent", new_callable=AsyncMock)
-    async def test_privateScopeRequiresTrustedIdentity(self, mockLog):
-        """审核编排在入队前就拒绝模型伪造的 user scope。"""
-        reply = f"回复\n\n{_userAddBlock()}"
-
-        _, validated, failed = await extractValidatedMemoryActions(
-            reply,
-            logLabel="test",
-            chatID="chat-1",
-            userID="user-1",
-        )
-
-        assert validated == []
-        assert failed == 1
-        assert mockLog.await_count >= 1
-
-    async def test_privateScopeWithMatchingIdentityIsAccepted(self):
-        """可信 user ID 匹配时，合法 user action 正常进入后续分流。"""
-        reply = f"回复\n\n{_userAddBlock('user-1')}"
-
-        _, validated, failed = await extractValidatedMemoryActions(
-            reply,
-            logLabel="test",
-            chatID="chat-1",
-            userID="user-1",
-        )
-
-        assert len(validated) == 1
-        assert failed == 0
-
-
-# ===========================================================================

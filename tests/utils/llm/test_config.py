@@ -11,17 +11,11 @@ from utils.llm.config import (
     getMemorySelectorSettings,
     loadLLMConfig,
     saveLLMConfig,
-    _boundedInt,
-    _boundedFloat,
-    _normalizeBlockedHost,
     _normalizeGroupTriggerKeyword,
     setAutoMode,
     setGroupTriggerKeywords,
     addGroupTriggerKeyword,
     removeGroupTriggerKeyword,
-    setURLReadBlockedHosts,
-    addURLReadBlockedHost,
-    removeURLReadBlockedHost,
     setKnowledgeMaxResults,
     setKnowledgeMinScore,
 )
@@ -149,112 +143,6 @@ def test_save_llm_config_atomic_write(tmp_path):
 
 
 # ============================================================================
-# _boundedInt() 测试
-# ============================================================================
-
-def test_bounded_int_within_range():
-    """值在范围内"""
-    assert _boundedInt(5, default=10, minValue=1, maxValue=10) == 5
-
-
-def test_bounded_int_below_min():
-    """值低于最小值"""
-    assert _boundedInt(0, default=10, minValue=1, maxValue=10) == 1
-
-
-def test_bounded_int_above_max():
-    """值高于最大值"""
-    assert _boundedInt(20, default=10, minValue=1, maxValue=10) == 10
-
-
-def test_bounded_int_invalid_type():
-    """无效类型返回默认值"""
-    assert _boundedInt("invalid", default=10, minValue=1, maxValue=10) == 10
-    assert _boundedInt(None, default=10, minValue=1, maxValue=10) == 10
-
-
-def test_bounded_int_string_number():
-    """字符串数字可转换"""
-    assert _boundedInt("5", default=10, minValue=1, maxValue=10) == 5
-
-
-# ============================================================================
-# _boundedFloat() 测试
-# ============================================================================
-
-def test_bounded_float_within_range():
-    """值在范围内"""
-    assert _boundedFloat(5.5, default=10.0, minValue=1.0, maxValue=10.0) == 5.5
-
-
-def test_bounded_float_below_min():
-    """值低于最小值"""
-    assert _boundedFloat(0.5, default=10.0, minValue=1.0, maxValue=10.0) == 1.0
-
-
-def test_bounded_float_above_max():
-    """值高于最大值"""
-    assert _boundedFloat(20.0, default=10.0, minValue=1.0, maxValue=10.0) == 10.0
-
-
-def test_bounded_float_invalid_type():
-    """无效类型返回默认值"""
-    assert _boundedFloat("invalid", default=10.0, minValue=1.0, maxValue=10.0) == 10.0
-
-
-# ============================================================================
-# _normalizeBlockedHost() 测试
-# ============================================================================
-
-def test_normalize_blocked_host_basic():
-    """基本域名规范化"""
-    assert _normalizeBlockedHost("Example.COM") == "example.com"
-
-
-def test_normalize_blocked_host_with_scheme():
-    """包含 scheme 时提取 host"""
-    assert _normalizeBlockedHost("https://example.com/path") == "example.com"
-    assert _normalizeBlockedHost("http://example.com") == "example.com"
-
-
-def test_normalize_blocked_host_with_port():
-    """包含端口时去除"""
-    assert _normalizeBlockedHost("example.com:8080") == "example.com"
-
-
-def test_normalize_blocked_host_trailing_dot():
-    """去除尾随点"""
-    assert _normalizeBlockedHost("example.com.") == "example.com"
-
-
-def test_normalize_blocked_host_ipv6():
-    """IPv6 地址处理（方括号会被去除）"""
-    assert _normalizeBlockedHost("[::1]") == "::1"
-    assert _normalizeBlockedHost("[::1]:8080") == "::1"
-
-
-def test_normalize_blocked_host_empty():
-    """空字符串抛出异常"""
-    with pytest.raises(ValueError, match="不能为空"):
-        _normalizeBlockedHost("")
-
-
-def test_normalize_blocked_host_forbidden_tld():
-    """禁止单独使用常见 TLD"""
-    with pytest.raises(ValueError, match="常见公共后缀"):
-        _normalizeBlockedHost("com")
-
-    with pytest.raises(ValueError, match="常见公共后缀"):
-        _normalizeBlockedHost("org")
-
-
-def test_normalize_blocked_host_subdomain_allowed():
-    """子域名允许"""
-    assert _normalizeBlockedHost("evil.com") == "evil.com"
-    assert _normalizeBlockedHost("sub.example.org") == "sub.example.org"
-
-
-# ============================================================================
 # _normalizeGroupTriggerKeyword() 测试
 # ============================================================================
 
@@ -346,36 +234,6 @@ def test_remove_group_trigger_keyword():
             call_args = mock_set.call_args[1]
             assert "hello" not in call_args["groupTriggerKeywords"]
             assert "world" in call_args["groupTriggerKeywords"]
-
-
-# ============================================================================
-# URL Blocked Hosts 测试
-# ============================================================================
-
-def test_set_url_read_blocked_hosts_deduplication():
-    """blocked hosts 去重"""
-    with patch("utils.llm.config._setConfig") as mock_set:
-        setURLReadBlockedHosts(["evil.com", "EVIL.COM", "bad.org"])
-        call_args = mock_set.call_args[1]
-        assert call_args["urlReadBlockedHosts"] == ["evil.com", "bad.org"]
-
-
-def test_add_url_read_blocked_host():
-    """添加 blocked host"""
-    with patch("utils.llm.config.getURLReadBlockedHosts", return_value=["evil.com"]):
-        with patch("utils.llm.config._setConfig") as mock_set:
-            addURLReadBlockedHost("bad.org")
-            call_args = mock_set.call_args[1]
-            assert "bad.org" in call_args["urlReadBlockedHosts"]
-
-
-def test_remove_url_read_blocked_host():
-    """移除 blocked host"""
-    with patch("utils.llm.config.getURLReadBlockedHosts", return_value=["evil.com", "bad.org"]):
-        with patch("utils.llm.config._setConfig") as mock_set:
-            removeURLReadBlockedHost("evil.com")
-            call_args = mock_set.call_args[1]
-            assert "evil.com" not in call_args["urlReadBlockedHosts"]
 
 
 # ============================================================================

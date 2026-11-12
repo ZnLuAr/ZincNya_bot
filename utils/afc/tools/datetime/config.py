@@ -34,8 +34,8 @@ RELATIVE_DATE_MAP = {
 
 # 错误消息模板
 ERROR_MESSAGES = {
-    "invalid_format": "错误：不支持的格式：{fmt}",
-    "parse_failed": "错误：无法解析日期：{date_str}",
-    "invalid_date_format": "错误：日期格式错误，请使用 YYYY-MM-DD",
-    "empty_input": "错误：日期不能为空",
+    "invalid_format": "不支持的格式：{fmt}",
+    "parse_failed": "无法解析日期：{date_str}",
+    "invalid_date_format": "日期格式错误，请使用 YYYY-MM-DD",
+    "empty_input": "日期不能为空",
 }

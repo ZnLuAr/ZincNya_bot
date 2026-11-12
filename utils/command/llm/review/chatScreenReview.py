@@ -15,15 +15,14 @@ chatScreen 内的 LLM 审核命令处理（:ra/:re/:rr/:rf/:rc/:rq）与编辑�
 
 from utils.chatScreen.statusBar import getEditModeStatus
 
-from utils.llm.review import (
-    canEditReviewItem,
-    canRetryReviewItem,
+from utils.llm.review.actions import (
     reviewCancel,
     reviewEditSubmit,
     reviewRetry,
     reviewRetryWithFeedback,
     reviewSend,
 )
+from utils.llm.review.items import canEditReviewItem, canRetryReviewItem
 from utils.llm.state import getReviewQueue
 
 

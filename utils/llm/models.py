@@ -1,4 +1,4 @@
-"""LLM 消息、生成请求和结果共用的数据对象。"""
+"""LLM 消息、任务请求和收集结果共用的数据对象。"""
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypedDict
@@ -20,7 +20,7 @@ class DisplayPair(TypedDict):
 
 @dataclass(frozen=True, kw_only=True)
 class DisplayBlocks:
-    """审核展示快照：图片、URL 标注前缀，以及按消息顺序排列的引用与正文。"""
+    """审核展示快照：图片标注前缀，以及按消息顺序排列的引用与正文。"""
 
     prefix: str = ""
     pairs: list[DisplayPair] = field(default_factory=list)
@@ -52,12 +52,11 @@ class MessageInput:
 
 
 @dataclass(frozen=True, kw_only=True)
-class GenerationRequest:
-    """首次生成或审核重试使用的完整输入。"""
+class TaskRequest:
+    """一个任务的完整输入；首次生成和审核重试都从它出发。"""
 
     messages: tuple[MessageInput, ...]
     includeContext: bool = False
-    urlContexts: tuple[dict, ...] = ()
 
     @property
     def origin(self) -> MessageOrigin:
@@ -102,19 +101,6 @@ class GenerationRequest:
         return self.origin.sender or str(self.userID)
 
     @property
-    def urlIntentText(self) -> str:
-        """用于判断 URL 读取意图的当前正文；引用内容不参与意图判断。"""
-        return "\n".join(message.text for message in self.messages if message.text)
-
-    @property
-    def urlCandidateText(self) -> str:
-        """返回 URL 提取候选文本，包含正文和引用正文。"""
-        return "\n".join(
-            text for message in self.messages
-            if (text := "\n".join(part for part in (message.text, message.replyText) if part))
-        )
-
-    @property
     def displayOriginalMsg(self) -> str:
         images = self.images
         heading = f"@{self.username}："
@@ -133,28 +119,22 @@ class GenerationRequest:
             for message in self.messages
         ]
 
+    @property
+    def displayBlocks(self) -> DisplayBlocks:
+        """审核展示快照：前缀只放图片标注，引用与正文按消息配对。"""
+        images = self.images
+        return DisplayBlocks(
+            prefix=f"[附带 {len(images)} 张图片]" if images else "",
+            pairs=self.displayPairs,
+        )
+
 
 @dataclass(frozen=True, kw_only=True)
-class GenerationResult:
-    """生成后的正文、校验通过的记忆操作及失败数。"""
+class CollectedOutput:
+    """只收集不送出的任务结果：合并后的发言正文与校验通过的记忆操作。"""
 
     reply: str
     memoryActions: list["MemoryAction"] = field(default_factory=list)
-    memoryFailedCount: int = 0
-
-
-@dataclass(frozen=True, kw_only=True)
-class GeneratedOutput:
-    """提交分发的回复、记忆操作及审核快照；generationRequest 供重试复用。"""
-
-    reply: str
-    memoryActions: list["MemoryAction"]
-    displayOriginalMsg: str
-    includeContext: bool
-    urlContexts: list[dict] | None = None
-    displayBlocks: DisplayBlocks | None = None
-    memoryQuery: MemoryQuery | None = None
-    generationRequest: GenerationRequest | None = None
 
 
 def _replyLine(message: MessageInput) -> str:

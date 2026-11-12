@@ -2,7 +2,7 @@
 tests/scripts/test_afc_tools_install.py
 
 install 输出钉扎测试：patch 网络接缝（_fetchRemoteManifest / _downloadWithLimit），
-保留 _downloadToolFiles / _validateStagingTriggers / _applyStagedFiles 为真实实现，
+保留 _downloadToolFiles / _applyStagedFiles 为真实实现，
 capsys 逐字断言 happy path 输出序列（对照 docs/afc-tool-management.md 的 install 示例）。
 
 Phase 1 抽取重构的安全网：重构后 install 的输出与行为必须逐字不变。
@@ -29,7 +29,7 @@ _MANIFEST = {
     "version": "1.0.0",
     "files": [
         "utils/afc/tools/mytool/__init__.py",
-        "utils/afc/tools/mytool/triggers.py",
+        "utils/afc/tools/mytool/core.py",
     ],
     "testFile": "tests/utils/afc/tools/test_mytool.py",
 }
@@ -38,7 +38,7 @@ _MANIFEST = {
 @pytest.fixture
 def installEnv(tmp_path, monkeypatch):
     """隔离 install 的文件系统与网络：PROJECT_ROOT 重定向到 tmp_path，
-    网络层 patch 接缝函数（triggers.py 写入合法内容，供真实的 AST 校验通过）。
+    网络层 patch 接缝函数。
     """
     env = {"saveOk": True, "savedCustom": {}}
 
@@ -47,12 +47,8 @@ def installEnv(tmp_path, monkeypatch):
 
     def fakeDownloadWithLimit(url, destPath, maxBytes):
         os.makedirs(os.path.dirname(destPath), exist_ok=True)
-        if url.endswith("triggers.py"):
-            content = b"KEYWORDS = ['x']\nPATTERNS = []\n"
-        else:
-            content = b"# file\n"
         with open(destPath, "wb") as f:
-            f.write(content)
+            f.write(b"# file\n")
         return True
 
     def fakeSave(config):
@@ -85,11 +81,11 @@ class TestInstallHappyPath:
         expected = (
             "正在从 https://github.com/user/repo (分支: main) 下载 2 个文件...\n"
             "  [OK] utils/afc/tools/mytool/__init__.py\n"
-            "  [OK] utils/afc/tools/mytool/triggers.py\n"
+            "  [OK] utils/afc/tools/mytool/core.py\n"
             "  [OK] tests/utils/afc/tools/test_mytool.py\n"
             "安装文件...\n"
             "  [OK] utils/afc/tools/mytool/__init__.py\n"
-            "  [OK] utils/afc/tools/mytool/triggers.py\n"
+            "  [OK] utils/afc/tools/mytool/core.py\n"
             "  [OK] tests/utils/afc/tools/test_mytool.py\n"
             "\n"
             "[OK] 工具 mytool 安装成功\n"
@@ -102,7 +98,7 @@ class TestInstallHappyPath:
         # 文件真实落盘
         tmpPath = installEnv["tmpPath"]
         assert (tmpPath / "utils" / "afc" / "tools" / "mytool" / "__init__.py").exists()
-        assert (tmpPath / "utils" / "afc" / "tools" / "mytool" / "triggers.py").exists()
+        assert (tmpPath / "utils" / "afc" / "tools" / "mytool" / "core.py").exists()
         assert (tmpPath / "tests" / "utils" / "afc" / "tools" / "test_mytool.py").exists()
 
         # 暂存目录与 .tmp 无残留（finally 清理）

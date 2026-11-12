@@ -7,7 +7,6 @@
     "description": "查询指定城市的天气信息（当天/明天/后天）",
     "files": [
       "utils/afc/tools/weather/__init__.py",
-      "utils/afc/tools/weather/triggers.py",
       "utils/afc/tools/weather/config.py",
       "utils/afc/tools/weather/cache.py",
       "utils/afc/tools/weather/client.py",
@@ -26,7 +25,6 @@
     "description": "安全的数学表达式计算（AST 白名单求值，支持函数与常量）",
     "files": [
       "utils/afc/tools/calc/__init__.py",
-      "utils/afc/tools/calc/triggers.py",
       "utils/afc/tools/calc/config.py",
       "utils/afc/tools/calc/calculator.py",
       "utils/afc/tools/calc/operators.py",
@@ -44,12 +42,27 @@
     "description": "获取当前时间、计算日期差、计算未来/过去日期",
     "files": [
       "utils/afc/tools/datetime/__init__.py",
-      "utils/afc/tools/datetime/triggers.py",
       "utils/afc/tools/datetime/config.py",
       "utils/afc/tools/datetime/core.py",
       "utils/afc/tools/datetime/README.md"
     ],
     "testFile": "tests/utils/afc/tools/test_datetime.py",
     "source": "builtin"
+  },
+  "web": {
+    "id": "web",
+    "name": "网页读取",
+    "version": "1.0.0",
+    "author": "ZincPhos",
+    "description": "读取一个公开网页或文本文件的文字内容（带 SSRF 防护与长度上限）",
+    "files": [
+      "utils/afc/tools/web/__init__.py",
+      "utils/afc/tools/web/config.py",
+      "utils/afc/tools/web/fetcher.py",
+      "utils/afc/tools/web/README.md"
+    ],
+    "testFile": "tests/utils/afc/tools/test_web.py",
+    "source": "builtin",
+    "defaultEnabled": false
   }
 }

@@ -39,7 +39,8 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from config import DATA_DIR
 from utils.llm.knowledge import initDatabase as initKnowledgeDB, getKnowledgeEntries, retrieveKnowledge
-from utils.llm.client import generateReply
+from utils.llm.models import MessageInput, MessageOrigin, TaskRequest
+from utils.llm.task import collectOutput
 from utils.llm.client._router import getProvider
 from utils.llm.client._request import requestWithRetry
 from utils.llm.config import getModel
@@ -119,7 +120,15 @@ async def evalRelevance(query: str, reply: str, *, judgeModel: str) -> dict:
 
 async def evalQuery(query: str, chatID: str, evalCtx: dict, *, judgeModel: str) -> dict:
     """对单条 query 完整评估（生成回复 + 3 个维度并发 judge）。"""
-    reply = await generateReply(query, chatID, includeContext=True)
+    # 收集式生成：模型的发言只收集成文字，不向任何聊天发送
+    request = TaskRequest(
+        messages=(MessageInput(
+            origin=MessageOrigin(chatID=str(chatID), messageID=0, userID=0),
+            text=query,
+        ),),
+        includeContext=True,
+    )
+    reply = (await collectOutput(request, logLabel="quality eval")).reply
 
     hitResult, personaResult, relevanceResult = await asyncio.gather(
         evalContextHit(query, reply, judgeModel=judgeModel),

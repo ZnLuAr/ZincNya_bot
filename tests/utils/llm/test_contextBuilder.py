@@ -268,6 +268,25 @@ async def test_build_conversation_context_minimal():
 
 
 @pytest.mark.asyncio
+async def test_task_synthesis_points_reply_to_message_operation():
+    """任务合成段要求把对用户说的话写进 message 操作，并回显当前消息"""
+    with patch("utils.llm.contextBuilder.buildKnowledgeContext", new_callable=AsyncMock) as mock_knowledge:
+        mock_knowledge.return_value = ""
+
+        result = await buildConversationContext(
+            userMessage="Hello",
+            chatID="test_chat",
+            includeContext=False,
+        )
+
+    synthesis = result[result.index("<TASK_SYNTHESIS>"):result.index("</TASK_SYNTHESIS>")]
+    assert '用户当前消息：\n"Hello"' in synthesis
+    assert "- 按系统说明的操作协议输出，要对用户说的话写在 message 操作里" in synthesis
+    # 合成段是整个用户内容的最后一块
+    assert result.endswith("</TASK_SYNTHESIS>")
+
+
+@pytest.mark.asyncio
 async def test_build_conversation_context_with_knowledge():
     """包含知识库上下文"""
     with patch("utils.llm.contextBuilder.buildKnowledgeContext", new_callable=AsyncMock) as mock_knowledge:
@@ -408,27 +427,6 @@ async def test_build_conversation_context_exclude_context():
     mockHistory.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_build_conversation_context_with_url_contexts():
-    """包含 URL 上下文"""
-    with patch("utils.llm.contextBuilder.buildKnowledgeContext", new_callable=AsyncMock) as mock_knowledge:
-        with patch("utils.llm.urlReader.buildURLContextBlock") as mock_url:
-            mock_knowledge.return_value = ""
-            mock_url.return_value = "<UNTRUSTED_URL_CONTENT>\nURL content\n</UNTRUSTED_URL_CONTENT>"
-
-            url_contexts = [{"requestedUrl": "https://example.com", "ok": True}]
-
-            result = await buildConversationContext(
-                userMessage="Hello",
-                chatID="test_chat",
-                includeContext=False,
-                urlContexts=url_contexts,
-            )
-
-            assert "<UNTRUSTED_URL_CONTENT>" in result
-            assert "URL content" in result
-
-
 async def test_extra_blocks_are_sorted_with_core_blocks_without_mutating_input():
     """普通扩展块和知识库按层级统一排序，相同层级保持原顺序。"""
     extraBlocks = [(400, "补充", "补充内容"), (200, "工具一", "工具一内容"), (200, "工具二", "工具二内容")]
@@ -484,52 +482,46 @@ def test_format_history_neutralizes_content():
 
 @pytest.mark.asyncio
 async def test_build_conversation_context_block_order():
-    """验证块的顺序（ContextTier 排序）：核心任务 → RETRIEVED_CONTEXT(knowledge < memory/history/url) → CURRENT_USER_MESSAGE → TASK_SYNTHESIS"""
+    """验证块的顺序（ContextTier 排序）：核心任务 → RETRIEVED_CONTEXT(knowledge < memory/history) → CURRENT_USER_MESSAGE → TASK_SYNTHESIS"""
     with patch("utils.llm.contextBuilder.buildKnowledgeContext", new_callable=AsyncMock) as mock_knowledge:
         with patch("utils.llm.contextBuilder.buildStructuredMemoryContext", new_callable=AsyncMock) as mock_memory:
             with patch("utils.llm.contextBuilder.buildHistoryContext", new_callable=AsyncMock) as mock_history:
-                with patch("utils.llm.urlReader.buildURLContextBlock") as mock_url:
-                    mock_knowledge.return_value = "KNOWLEDGE_BLOCK"
-                    mock_memory.return_value = "MEMORY_BLOCK"
-                    mock_history.return_value = "HISTORY_BLOCK"
-                    mock_url.return_value = "URL_BLOCK"
+                mock_knowledge.return_value = "KNOWLEDGE_BLOCK"
+                mock_memory.return_value = "MEMORY_BLOCK"
+                mock_history.return_value = "HISTORY_BLOCK"
 
-                    result = await buildConversationContext(
-                        userMessage="USER_MESSAGE",
-                        chatID="test_chat",
-                        includeContext=True,
-                        urlContexts=[{}],
-                    )
+                result = await buildConversationContext(
+                    userMessage="USER_MESSAGE",
+                    chatID="test_chat",
+                    includeContext=True,
+                )
 
-                    # ContextTier 排序：KNOWLEDGE (300) < LOW_TRUST (500)
-                    task_pos = result.find("[核心任务]")
-                    retrieved_start_pos = result.find("<RETRIEVED_CONTEXT>")
-                    knowledge_pos = result.find("KNOWLEDGE_BLOCK")
-                    memory_pos = result.find("MEMORY_BLOCK")
-                    history_pos = result.find("HISTORY_BLOCK")
-                    url_pos = result.find("URL_BLOCK")
-                    retrieved_end_pos = result.find("</RETRIEVED_CONTEXT>")
-                    current_msg_tag_pos = result.find("<CURRENT_USER_MESSAGE>", retrieved_end_pos)  # 跳过说明中的引用
-                    synthesis_pos = result.find("<TASK_SYNTHESIS>")
+                # ContextTier 排序：KNOWLEDGE (300) < LOW_TRUST (500)
+                task_pos = result.find("[核心任务]")
+                retrieved_start_pos = result.find("<RETRIEVED_CONTEXT>")
+                knowledge_pos = result.find("KNOWLEDGE_BLOCK")
+                memory_pos = result.find("MEMORY_BLOCK")
+                history_pos = result.find("HISTORY_BLOCK")
+                retrieved_end_pos = result.find("</RETRIEVED_CONTEXT>")
+                current_msg_tag_pos = result.find("<CURRENT_USER_MESSAGE>", retrieved_end_pos)  # 跳过说明中的引用
+                synthesis_pos = result.find("<TASK_SYNTHESIS>")
 
-                    # 验证所有块都存在
-                    assert task_pos != -1
-                    assert retrieved_start_pos != -1
-                    assert knowledge_pos != -1
-                    assert memory_pos != -1
-                    assert history_pos != -1
-                    assert url_pos != -1
-                    assert retrieved_end_pos != -1
-                    assert current_msg_tag_pos != -1
-                    assert synthesis_pos != -1
+                # 验证所有块都存在
+                assert task_pos != -1
+                assert retrieved_start_pos != -1
+                assert knowledge_pos != -1
+                assert memory_pos != -1
+                assert history_pos != -1
+                assert retrieved_end_pos != -1
+                assert current_msg_tag_pos != -1
+                assert synthesis_pos != -1
 
-                    # 验证顺序：核心任务 → RETRIEVED_CONTEXT(knowledge → memory → history → url) → </RETRIEVED_CONTEXT> → CURRENT_USER_MESSAGE → TASK_SYNTHESIS
-                    # ContextTier: KNOWLEDGE (300) 在 LOW_TRUST (500) 之前
-                    assert task_pos < retrieved_start_pos
-                    assert retrieved_start_pos < knowledge_pos
-                    assert knowledge_pos < memory_pos
-                    assert memory_pos < history_pos
-                    assert history_pos < url_pos
-                    assert url_pos < retrieved_end_pos
-                    assert retrieved_end_pos < current_msg_tag_pos
-                    assert current_msg_tag_pos < synthesis_pos
+                # 验证顺序：核心任务 → RETRIEVED_CONTEXT(knowledge → memory → history) → </RETRIEVED_CONTEXT> → CURRENT_USER_MESSAGE → TASK_SYNTHESIS
+                # ContextTier: KNOWLEDGE (300) 在 LOW_TRUST (500) 之前
+                assert task_pos < retrieved_start_pos
+                assert retrieved_start_pos < knowledge_pos
+                assert knowledge_pos < memory_pos
+                assert memory_pos < history_pos
+                assert history_pos < retrieved_end_pos
+                assert retrieved_end_pos < current_msg_tag_pos
+                assert current_msg_tag_pos < synthesis_pos

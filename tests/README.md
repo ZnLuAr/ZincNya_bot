@@ -36,7 +36,6 @@ tests/
 ├── conftest.py              # 全局 fixture（数据库、Telegram mock、时间冻结）
 ├── test_module_system.py    # 模块系统测试（注册表、配置管理、CLI）
 ├── handlers/                # Telegram handler 层测试
-│   ├── test_afc.py          # AFC 意图检测 handler 测试
 │   ├── test_book.py         # /book 书籍搜索测试
 │   ├── test_llmCommand.py   # /llm 命令测试
 │   ├── test_nya.py          # /nya 语录测试
@@ -46,9 +45,9 @@ tests/
 │   ├── test_stickers.py     # 表情包 handler 测试
 │   └── test_todos.py        # /todos 待办事项测试
 ├── utils/
-│   ├── afc/                 # AFC 框架（afcIntent/registry/executor/contextBuilder + tools）
+│   ├── afc/                 # AFC 框架（registry/executor/contextBuilder/capability/toolManager + tools）
 │   ├── core/                # 基础设施（logger/errorHandler/database/resourceManager）
-│   ├── llm/                 # LLM 模块（tokenizer/loader/urlReader/contextBuilder/config）
+│   ├── llm/                 # LLM 模块（client/operation/capability/review/memory/knowledge/contextBuilder/config 等）
 │   ├── todos/               # 待办事项（database/reminder/tgRender/utils）
 │   ├── nyaQuoteManager/     # 语录管理
 │   ├── whitelistManager/    # 白名单管理
@@ -71,7 +70,7 @@ tests/
 |--------|--------|-----------|
 | Core 基础设施 | 114 | 94% |
 | LLM 模块（含 /llm 命令） | 211 | 60-100% |
-| AFC 框架与工具（intent/registry/executor/weather/calc） | 140 | 86% |
+| AFC 框架与工具（registry/executor/weather/calc） | 140 | 86% |
 | 业务模块（todos/nya/whitelist/book） | 220 | 80-100% |
 | Handler 层（reaction/shutdown/start/stickers） | 41 | 68% |
 | 工具模块（chatUI/chatScreen/stickerDownloader/archiver/fileSender/news/markdownToHtml/memoryMonitor） | 135 | 85-99% |

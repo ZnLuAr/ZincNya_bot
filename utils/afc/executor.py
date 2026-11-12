@@ -3,115 +3,160 @@ utils/afc/executor.py
 
 AFC 工具执行器
 
-解析 LLM 输出的 <AFC_ACTION> JSON，校验后调用对应工具函数。
-执行结果包裹为 <FUNCTION_RESULT> / <FUNCTION_ERROR>，回灌给 LLM 二次合成。
+对一次工具调用做两件事：
+    - validateCall：不运行工具，判断这次调用能不能执行
+    - runTool：带保护地运行，交回明确的成功或失败
+
+保护包括：执行前再查一次启用状态、超时、异常兜底、返回值类型与长度检查。
+工具用抛 ToolError / ToolDependencyError 表示失败，消息交给模型；其他异常
+只进日志。调用格式与结果怎么呈现给模型由 LLM 公共层决定，这里不涉及。
 """
 
-import json
 import asyncio
 import inspect
 
-from config import AFC_TOOL_TIMEOUT_SECONDS
+from config import AFC_TOOL_TIMEOUT_SECONDS, AFC_TOOL_RESULT_MAX_CHARS
 
 from utils.core.logger import logSystemEvent, LogLevel
+from utils.llm.operation.types import OperationResult, OperationStatus
 
-from utils.afc.registry import getToolsSchema, getToolCallable, getAllToolNames
+from utils.afc.errors import ToolError, ToolDependencyError
+from utils.afc.registry import getAllToolNames, getFunctionSchema, getToolCallable
+from utils.afc.toolManager import isAfcToolEnabled
 
 
 
 
-def _resolveFuncName(toolName: str, action: dict) -> str:
+_NAME_SEPARATOR = "."
+
+# JSON Schema 类型 → 判断函数；bool 是 int 的子类，整数与数字要单独排除它
+_JSON_TYPE_CHECKS = {
+    "string": lambda value: isinstance(value, str),
+    "integer": lambda value: isinstance(value, int) and not isinstance(value, bool),
+    "number": lambda value: isinstance(value, (int, float)) and not isinstance(value, bool),
+    "boolean": lambda value: isinstance(value, bool),
+    "array": lambda value: isinstance(value, list),
+    "object": lambda value: isinstance(value, dict),
+}
+
+_TRUNCATED_NOTE = "\n……（工具返回内容过长，已截断）"
+
+
+
+
+def splitToolName(name) -> tuple[str, str] | None:
+    """把「工具名.函数名」拆成两段；格式不对时返回 None。"""
+    if not isinstance(name, str):
+        return None
+    toolName, separator, funcName = name.strip().partition(_NAME_SEPARATOR)
+    if not separator or not toolName or not funcName:
+        return None
+    return toolName, funcName
+
+
+def validateCall(name, parameters) -> str | None:
     """
-    解析本次调用要执行的函数名。
-
-    优先级：
-        1. action 里显式给出的 "function" 字段
-        2. 工具只有单个函数时，自动取那个唯一函数
-        3. 否则返回空串（交由上层报错）
-    """
-    explicit = action.get("function")
-    if explicit:
-        return str(explicit)
-
-    schemas = getToolsSchema({toolName})
-    if len(schemas) == 1:
-        return schemas[0]["name"]
-
-    return ""
-
-
-def _coerceParameters(action: dict) -> dict:
-    """从 action 中取出参数字典；容忍 parameters / arguments 两种键名。"""
-    params = action.get("parameters")
-    if params is None:
-        params = action.get("arguments")
-    if not isinstance(params, dict):
-        return {}
-    return params
-
-
-async def execute(actionJSON: str) -> str:
-    """
-    执行单次工具调用。
+    判断一次工具调用能不能执行，不运行工具。
 
     参数:
-        actionJSON: <AFC_ACTION> 中提取出的 JSON 字符串
+        name: 「工具名.函数名」
+        parameters: 参数字典；None 视为没有参数
 
     返回:
-        "<FUNCTION_RESULT>结果</FUNCTION_RESULT>"
-        或 "<FUNCTION_ERROR>错误信息</FUNCTION_ERROR>"
+        None 表示可以执行，否则是给模型看的原因
     """
-    # ── 1. 解析 JSON ──
-    try:
-        action = json.loads(actionJSON)
-    except (json.JSONDecodeError, TypeError) as e:
-        await logSystemEvent("AFC 执行失败", f"JSON 解析失败：{e}")
-        return f"<FUNCTION_ERROR>无法解析工具调用 JSON：{e}</FUNCTION_ERROR>"
-
-    if not isinstance(action, dict):
-        return "<FUNCTION_ERROR>工具调用必须是 JSON 对象</FUNCTION_ERROR>"
-
-    # ── 2. 校验 tool ──
-    toolName = action.get("tool")
-    if not toolName:
-        return "<FUNCTION_ERROR>缺少 tool 字段</FUNCTION_ERROR>"
+    parts = splitToolName(name)
+    if parts is None:
+        return "name 必须写成「工具名.函数名」"
+    toolName, funcName = parts
 
     if toolName not in getAllToolNames():
-        return f"<FUNCTION_ERROR>未知工具：{toolName}</FUNCTION_ERROR>"
-
-    # ── 3. 解析函数名 ──
-    funcName = _resolveFuncName(toolName, action)
-    if not funcName:
-        return f"<FUNCTION_ERROR>工具 {toolName} 有多个函数，请在 function 字段指定</FUNCTION_ERROR>"
+        return f"未知工具：{toolName}"
+    if not isAfcToolEnabled(toolName):
+        return f"工具 {toolName} 当前未启用"
 
     func = getToolCallable(toolName, funcName)
     if func is None:
-        return f"<FUNCTION_ERROR>工具 {toolName} 不存在函数 {funcName}</FUNCTION_ERROR>"
+        return f"工具 {toolName} 没有函数 {funcName}"
 
-    # ── 4. 取参数 + 校验签名 ──
-    params = _coerceParameters(action)
+    if parameters is None:
+        parameters = {}
+    if not isinstance(parameters, dict):
+        return "parameters 必须是 JSON 对象"
+
     try:
-        sig = inspect.signature(func)
-        sig.bind(**params)
+        inspect.signature(func).bind(**parameters)
     except TypeError as e:
-        return f"<FUNCTION_ERROR>参数不匹配：{e}</FUNCTION_ERROR>"
+        return f"参数不匹配：{e}"
 
-    # ── 5. 执行（带超时）──
+    schema = getFunctionSchema(toolName, funcName) or {}
+    properties = (schema.get("parameters") or {}).get("properties") or {}
+    for paramName, value in parameters.items():
+        jsonType = (properties.get(paramName) or {}).get("type")
+        check = _JSON_TYPE_CHECKS.get(jsonType)
+        if check is not None and not check(value):
+            return f"参数 {paramName} 的类型应为 {jsonType}"
+
+    return None
+
+
+
+
+async def runTool(name: str, parameters: dict | None) -> OperationResult:
+    """
+    运行一次已通过 validateCall 的工具调用，交回实际结果。
+
+    工具中途被取消时照常抛出 CancelledError（记日志）；其余情况都返回结果：
+    成功记已完成，超时、工具报告的失败、意外异常、返回值不合要求都记失败。
+    """
+    toolName, funcName = splitToolName(name)
+    label = f"{toolName}.{funcName}"
+
+    # 校验与执行之间工具可能被停用，执行前再查一次
+    if not isAfcToolEnabled(toolName):
+        return _failed(f"工具 {toolName} 当前未启用")
+
+    func = getToolCallable(toolName, funcName)
+    if func is None:
+        return _failed(f"工具 {toolName} 没有函数 {funcName}")
+
+    params = parameters or {}
     try:
         if inspect.iscoroutinefunction(func):
             result = await asyncio.wait_for(func(**params), timeout=AFC_TOOL_TIMEOUT_SECONDS)
         else:
-            # 同步函数丢到线程池，避免阻塞事件循环
+            # 同步函数丢到线程池，避免阻塞事件循环；超时只能放弃等待，线程本身停不下来
             result = await asyncio.wait_for(
                 asyncio.to_thread(func, **params),
                 timeout=AFC_TOOL_TIMEOUT_SECONDS,
             )
     except asyncio.TimeoutError:
-        await logSystemEvent("AFC 执行超时", f"{toolName}.{funcName}", LogLevel.WARNING)
-        return f"<FUNCTION_ERROR>工具 {toolName}.{funcName} 执行超时</FUNCTION_ERROR>"
+        await logSystemEvent("AFC 执行超时", label, LogLevel.WARNING)
+        return _failed(f"工具 {label} 执行超时（{AFC_TOOL_TIMEOUT_SECONDS} 秒）")
+    except asyncio.CancelledError:
+        await logSystemEvent("AFC 执行被取消", label, LogLevel.WARNING)
+        raise
+    except (ToolError, ToolDependencyError) as e:
+        await logSystemEvent("AFC 工具报告失败", f"{label}：{e}", LogLevel.INFO)
+        return _failed(str(e) or "工具没有给出失败原因")
     except Exception as e:
-        await logSystemEvent("AFC 执行异常", f"{toolName}.{funcName}：{e}", LogLevel.ERROR)
-        return f"<FUNCTION_ERROR>{e}</FUNCTION_ERROR>"
+        await logSystemEvent("AFC 执行异常", label, LogLevel.ERROR, exception=e)
+        return _failed(f"工具 {label} 内部出错（{type(e).__name__}）")
 
-    await logSystemEvent("AFC 执行成功", f"{toolName}.{funcName}")
-    return f"<FUNCTION_RESULT>{result}</FUNCTION_RESULT>"
+    if not isinstance(result, str):
+        await logSystemEvent(
+            "AFC 返回值类型不符", f"{label} 返回 {type(result).__name__}，应为 str", LogLevel.ERROR,
+        )
+        return _failed(f"工具 {label} 的返回值不是文字")
+
+    if len(result) > AFC_TOOL_RESULT_MAX_CHARS:
+        result = result[:AFC_TOOL_RESULT_MAX_CHARS] + _TRUNCATED_NOTE
+
+    await logSystemEvent("AFC 执行成功", label)
+    return OperationResult(status=OperationStatus.DONE, modelText=result)
+
+
+
+
+def _failed(reason: str) -> OperationResult:
+    return OperationResult(status=OperationStatus.FAILED, modelText=reason)

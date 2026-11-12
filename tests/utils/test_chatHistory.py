@@ -26,6 +26,7 @@ from utils.chatHistory import (
     iterMessagesWithDateMarkers,
     loadHistory,
     recordBotMessage,
+    recordBotReaction,
     recordIncomingMessage,
     saveMessage,
 )
@@ -123,6 +124,15 @@ class TestRecordBotMessage:
         assert history[0]["direction"] == "outgoing"
         assert history[0]["sender"] == BOT_DISPLAY_NAME
         assert history[0]["content"] == "锌酱的回复"
+
+    async def test_bot_reaction_roundtrip(self, db):
+        """recordBotReaction 落盘为 reaction + BOT_DISPLAY_NAME，写法同用户的 reaction"""
+        assert await recordBotReaction("888", "👍") is True
+        history = await loadHistory("888")
+        assert len(history) == 1
+        assert history[0]["direction"] == "reaction"
+        assert history[0]["sender"] == BOT_DISPLAY_NAME
+        assert history[0]["content"] == "回应了 👍"
 
 
 class TestIncomingMessageIdentity:

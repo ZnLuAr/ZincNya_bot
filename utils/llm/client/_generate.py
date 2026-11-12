@@ -1,11 +1,16 @@
 """
 utils/llm/client/_generate.py
 
-LLM 回复生成编排逻辑：
-    - 构建 system messages（人设 + guardrails，按 includeContext 决定是否追加记忆操作指令）
-    - 可选双调用架构：visionModel != model 时分离描述与回复，否则单次调用
-    - 通过 urlContexts 透传低信任 URL 内容到 contextBuilder
+一个任务的模型输入准备与单次模型请求：
+    - prepareModelInput：构建 system messages（人设 + guardrails）与 user content
+      （上下文块 + 图片），每个任务只做一次
+    - requestModelOutput：在准备好的输入上附加操作说明和操作记录，请求一次模型
+    - 可选双调用架构：visionModel != model 时先由视觉模型把图片描述成文字
+
+操作循环（utils/llm/operation）每一轮都调用 requestModelOutput；循环本身不在这里。
 """
+
+from dataclasses import dataclass
 
 import config
 
@@ -15,7 +20,7 @@ from ..config import ContextTier, getForceFallbackPrompt, loadPrompts, loadLLMCo
 from ..contextBuilder import buildConversationContext
 from ..memory.types import MemoryQuery
 from ..promptSafety import neutralizePromptDelimiters
-from ._guardrails import SYSTEM_GUARDRAILS, MEMORY_ACTION_INSTRUCTIONS, VISION_DESCRIBE_PROMPT, OPS_FEEDBACK_INSTRUCTIONS
+from ._guardrails import SYSTEM_GUARDRAILS, VISION_DESCRIBE_PROMPT, OPS_FEEDBACK_INSTRUCTIONS
 from ._request import requestWithRetry
 from ._router import getProvider
 
@@ -31,7 +36,9 @@ _LOG_DESC_DETAIL = 1024
 def _buildSystemMessages(prompts: dict, *, includeContext: bool = False) -> list[str]:
     """
     将 prompts.json 的 system_prompt + guardrails 合并为 list[str]
-    如果 includeContext=True，再拼上 MEMORY_ACTION_INSTRUCTIONS 和 OPS_FEEDBACK_INSTRUCTIONS
+    如果 includeContext=True，再拼上 OPS_FEEDBACK_INSTRUCTIONS
+
+    各能力（发言、记忆操作、工具）的说明不在这里，由操作循环在请求时附加。
     """
     source = _FALLBACK_PROMPTS if getForceFallbackPrompt() else prompts
     raw = source.get("system_prompt", "")
@@ -44,7 +51,6 @@ def _buildSystemMessages(prompts: dict, *, includeContext: bool = False) -> list
 
     parts.extend(SYSTEM_GUARDRAILS)
     if includeContext:
-        parts.extend(MEMORY_ACTION_INSTRUCTIONS)
         parts.extend(OPS_FEEDBACK_INSTRUCTIONS)
     return parts
 
@@ -67,7 +73,7 @@ async def _describeImages(
     失败时返回空字符串，不阻断主调用
 
     参数:
-        model: 视觉模型名。由调用方从请求级配置快照传入（generateReply 已读
+        model: 视觉模型名。由调用方从请求级配置快照传入（prepareModelInput 已读
                过一次 llmConfig），避免此处再 getVisionModel() 重复读盘。
     """
     provider = getProvider(model)
@@ -147,7 +153,19 @@ _IMAGE_FAILED_BLOCK = (
     "</IMAGE_DESCRIPTION>"
 )
 
-async def generateReply(
+
+@dataclass(frozen=True, kw_only=True)
+class ModelInput:
+    """一个任务内每次模型请求共用的输入；userContent 是字符串，或带图片的内容列表。"""
+
+    systemMessages: list[str]
+    userContent: str | list
+    model: str
+    maxTokens: int
+    temperature: float
+
+
+async def prepareModelInput(
     userMessage: str,
     chatID: str,
     includeContext: bool = False,
@@ -155,47 +173,45 @@ async def generateReply(
     userID: str | int | None = None,
     sessionID: str | int | None = None,
     images: list[dict] | None = None,
-    urlContexts: list[dict] | None = None,
     memoryQuery: MemoryQuery | None = None,
     extraBlocks: list[tuple[ContextTier, str, str]] | None = None,
-) -> str:
+) -> ModelInput:
     """
-    调用 LLM 生成回复
+    准备一个任务的模型输入；上下文检索和图片描述只在这里做一次，续跑时复用。
 
     参数:
         images: 图片列表 [{"data": b64_str, "mimeType": "image/jpeg"}, ...]
                 为 None 或空列表时表示纯文本
-        urlContexts: URL 抓取结果列表
         extraBlocks: 入口提取的扩展上下文块，格式为 (层级, 来源, 内容)
         memoryQuery: 防抖阶段捕获的结构化当前轮次，供 memory 检索及审核重试复用；
                      None 时由 contextBuilder 从 userMessage 构造兼容查询
 
     图片处理策略（由 visionModel 配置决定）：
         - visionModel == model → 单调用：图片直接传给主模型
-        - visionModel != model → 双调用：轻量模型描述 + 主模型回复
+        - visionModel != model → 双调用：轻量模型描述 + 主模型处理
     """
     prompts = loadPrompts()
     systemMessages = _buildSystemMessages(prompts, includeContext=includeContext)
     maxTokens = prompts.get("max_tokens", 1024)
     temperature = prompts.get("temperature", 0.8)
 
-    # 使用请求级配置快照，在每次回复生成的全过程只读一次 llmConfig.json，
+    # 使用任务级配置快照，一个任务的全过程只读一次 llmConfig.json，
     # 把 dict 沿调用链往下传，避免每个 getter（getModel / getVisionModel / getKnowledge* 等）
     # 各自重复 open()、json.load() 读盘。
     #
-    # 这里不使用模块级缓存，是考虑到 LLM 回复在 debounce + create_task 下多协程并发，
-    # 运维若在生成途中改配置文件，模块级缓存的 mtime 检查可能读到半新半旧的
-    # 混合状态。请求级快照保证"一条用户消息的完整处理过程，使用的配置一致"。
+    # 这里不使用模块级缓存，是考虑到 LLM 任务在 debounce + create_task 下多协程并发，
+    # 运维若在任务途中改配置文件，模块级缓存的 mtime 检查可能读到半新半旧的
+    # 混合状态。任务级快照保证"一条用户消息的完整处理过程，使用的配置一致"。
     #
-    # 本快照覆盖的读盘调用点（原先每处独立 loadLLMConfig）：
-    #   - 此处 model / visionModel（原 getModel + getVisionModel）
+    # 本快照覆盖的读盘调用点：
+    #   - 此处 model / visionModel
     #   - buildConversationContext → buildKnowledgeContext 的
     #     knowledgeEnabled / knowledgeMaxResults / knowledgeMinScore
     # 未覆盖（有意保持独立读取，见各自说明）：
     #   - _request.requestWithRetry 内的 getModel()：仅 fallback 重决策时用，
     #     此刻重读反而能拿到运维刚改的救场配置，故不传快照。
-    #   - handlers/llm.py _runLLMPipeline 的 getAutoMode()：属回复
-    #     已生成后的分发阶段，与生成逻辑解耦，单独读一次即可。
+    #   - handlers/llm.py _runLLMPipeline 的 getAutoMode()：决定发言怎么送出，
+    #     与模型输入无关，单独读一次即可。
     cfg = loadLLMConfig()
     model = cfg["model"]
     visionModel = cfg["visionModel"]
@@ -206,7 +222,6 @@ async def generateReply(
         userID=userID,
         sessionID=sessionID,
         includeContext=includeContext,
-        urlContexts=urlContexts,
         llmConfig=cfg,
         memoryQuery=memoryQuery,
         extraBlocks=extraBlocks,
@@ -241,9 +256,7 @@ async def generateReply(
     else:
         userContent = textContent
 
-    provider = getProvider(model)
-    llmResponse = await requestWithRetry(
-        provider,
+    return ModelInput(
         systemMessages=systemMessages,
         userContent=userContent,
         model=model,
@@ -251,27 +264,47 @@ async def generateReply(
         temperature=temperature,
     )
 
-    # ========== AFC 执行循环 ==========
-    # AFC 调用链透传：
-    # handlers/llm.py → utils/llm/client/_generate.py (此处) → utils/llm/contextBuilder.py
-    # 目的：把 handler 消费后的普通扩展块传给 buildConversationContext。
-    #
-    # 从 LLM 回复中提取 <AFC_ACTION>，执行工具，携带结果二次调用 LLM，
-    # 直到无工具调用或达到迭代上限。
-    #
-    # 插入点选择：在 LLM client 层处理，对所有调用方（Telegram / console / 未来 API）生效。
-    # 调用链：此处 → utils/llm/afcApi/responseHandler.py:handleAFCInLLMResponse
-    #       → utils/afc/executor.py:execute (工具执行)
-    #       → 二次调用 utils/llm/client/_generate.py:generateReply（携带工具结果）
-    from utils.llm.afcApi import handleAFCInLLMResponse
 
-    llmResponse = await handleAFCInLLMResponse(
-        llmResponse=llmResponse,
-        userMessage=userMessage,
-        chatID=chatID,
-        userID=userID,
-        sessionID=sessionID,
-        includeContext=includeContext,
+async def requestModelOutput(
+    modelInput: ModelInput,
+    *,
+    instructions: list[str],
+    appendix: str = "",
+) -> str:
+    """
+    在准备好的输入上请求一次模型，返回原始输出文字。
+
+    参数:
+        instructions: 操作说明（输出协议与各能力说明），接在 system messages 之后
+        appendix: 任务内的操作记录与未执行原因，接在 user 文字之后；首次请求为空串
+
+    provider 接口是单轮的 systemMessages + userContent，所以续跑不追加对话轮次，
+    而是每次带上完整的原始输入和到目前为止的操作记录。
+    """
+    provider = getProvider(modelInput.model)
+    return await requestWithRetry(
+        provider,
+        systemMessages=[*modelInput.systemMessages, *instructions],
+        userContent=_appendToUserContent(modelInput.userContent, appendix),
+        model=modelInput.model,
+        maxTokens=modelInput.maxTokens,
+        temperature=modelInput.temperature,
     )
 
-    return llmResponse
+
+def _appendToUserContent(userContent: str | list, appendix: str) -> str | list:
+    """把附加文字接到 user 内容的文字部分之后；不修改传入的对象。"""
+    if not appendix:
+        return userContent
+    if isinstance(userContent, str):
+        return f"{userContent}\n\n{appendix}"
+
+    # 带图片的内容列表：文字项在最后，只替换它
+    items = list(userContent)
+    for index in range(len(items) - 1, -1, -1):
+        item = items[index]
+        if isinstance(item, dict) and item.get("type") == "text":
+            items[index] = {**item, "text": f"{item['text']}\n\n{appendix}"}
+            return items
+    items.append({"type": "text", "text": appendix})
+    return items

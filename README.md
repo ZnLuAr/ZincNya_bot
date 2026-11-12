@@ -14,7 +14,7 @@
 - [想加点东西](#想加点东西) —— 模块系统、加命令、跑测试；
 - [数据加密](#数据加密) —— 隐私内容怎么落盘、密钥怎么管；
 - [数据合并](#数据合并) —— 本地和服务器的数据怎么对齐；
-- [LLM 功能](#llm-功能) —— 支持的模型、图片、记忆、URL 读取；
+- [LLM 功能](#llm-功能) —— 支持的模型、图片、工具调用、记忆、网页读取；
 - [文档索引](#文档索引) —— 架构设计、开发规范、测试指南；
 - [出了岔子的话](#出了岔子的话) —— 跑不起来、没反应时翻这里。
 
@@ -150,9 +150,8 @@ ZincNya_bot/
 │   ├── book.py                     # /book 书籍搜索
 │   ├── todos.py                    # /todos 待办事项管理
 │   ├── reaction.py                 # 消息 reaction 记录到聊天历史
-│   ├── afc.py                      # AFC 工具意图检测（group=1，先于 llm）
-│   ├── llm.py                      # LLM 自动回复（文字 + 图片 + URL 读取）、记忆操作解析与审核分发
-│   ├── llmReview.py                # Telegram 端 LLM 审核回调：卡片发送、按钮、:edit / :fb（渲染在 utils/llm/review.py）
+│   ├── llm.py                      # LLM 自动回复入口（门禁、消息提取、防抖调度；为每个任务提供发言与记忆操作的送出方式）
+│   ├── llmReview.py                # Telegram 端 LLM 审核回调：按钮、:edit / :fb（审核卡由 utils/llm/capability/ 发出）
 │   ├── llmCommand.py               # Telegram 端 /llm 命令（ops 控制）
 │   └── shutdown.py                 # 远程关机/重启/状态（仅 ops）
 │
@@ -209,22 +208,19 @@ ZincNya_bot/
 │   ├── llm/                        # LLM 集成模块
 │   │   ├── config.py               # 配置管理
 │   │   ├── state.py                # 运行时状态容器（审核队列、速率限制、防抖消息缓冲）
-│   │   ├── models.py               # 消息、生成请求、结果和审核展示的数据对象
-│   │   ├── generation.py           # 首次生成与审核重试共用的生成入口
-│   │   ├── review.py               # 审核域（首生成分发三分流 + 审核队列 item 契约 + 三入口共用原语 + TG 审核卡片渲染）
-│   │   ├── contextBuilder.py       # 上下文组装（memory / history / URL / 扩展块）
+│   │   ├── models.py               # 消息、任务请求、收集结果和审核展示的数据对象
+│   │   ├── task.py                 # 首次生成与审核重试共用的任务入口（准备模型输入，运行操作循环）
+│   │   ├── contextBuilder.py       # 上下文组装（memory / knowledge / history / 扩展块）
 │   │   ├── messagePrep.py          # Telegram 消息正文、引用和身份提取
 │   │   ├── trigger.py              # 群聊触发判断（私聊 / @entity / 关键词）
 │   │   ├── promptSafety.py         # 提示注入防护（统一中和结构分隔符）
 │   │   ├── vision.py               # 图片提取（含 prompt 回退）与下载编码
-│   │   ├── urlIntent.py            # URL 读取意图判断（关键词 / 正则 / 全局抑制 / 近邻否定）
-│   │   ├── urlReader.py            # 受控 URL 抓取（SSRF 防护、redirect、byte cap、HTML/text 提取）
 │   │   ├── client/                 # 多模型 API 客户端（双调用视觉架构）
 │   │   │   ├── _base.py            # LLMProvider 抽象基类（支持纯文本与多模态）
 │   │   │   ├── _router.py          # 模型前缀路由 + 模糊匹配纠错
-│   │   │   ├── _guardrails.py      # 安全防护提示词、视觉描述 prompt 与记忆操作指令
+│   │   │   ├── _guardrails.py      # 安全防护提示词、视觉描述 prompt 与审核反馈标记的处理规则
 │   │   │   ├── _request.py         # 请求发送与自动重试
-│   │   │   ├── _generate.py        # 回复生成编排（system prompt 构建 + 双调用视觉）
+│   │   │   ├── _generate.py        # 模型输入准备与单次模型请求（system prompt 构建 + 双调用视觉）
 │   │   │   ├── anthropic.py        # Anthropic Claude API
 │   │   │   ├── gemini.py           # Google Gemini API
 │   │   │   └── openaiCompat.py     # OpenAI 兼容接口（OpenAI / DeepSeek / 豆包）
@@ -244,18 +240,30 @@ ZincNya_bot/
 │   │   │   ├── retriever.py        # BM25 检索（分词、评分、排序、过滤）
 │   │   │   ├── loader.py           # Markdown 解析、增量索引
 │   │   │   └── tokenizer.py        # 中英文混合分词 + BM25 评分
-│   │   └── afcApi/                 # AFC ↔ LLM 单点桥接层
-│   │       ├── contextBlock.py     # 工具上下文块构建
-│   │       └── responseHandler.py  # LLM 回复中的工具调用解析与执行循环
+│   │   ├── operation/              # 操作循环：模型每次输出一批操作（发言 / 记忆操作 / 工具调用），逐个处理并把结果交回
+│   │   │   ├── types.py            # 操作、结果、任务信息与能力契约
+│   │   │   ├── capabilities.py     # 外部能力列表（能力模块初始化时登记）
+│   │   │   ├── parser.py           # 模型输出里操作块的整批解析
+│   │   │   ├── prompt.py           # 给模型的协议说明与操作记录
+│   │   │   └── loop.py             # 顺序工作循环 runTask
+│   │   ├── capability/             # LLM 自带的能力：说明、校验与送出
+│   │   │   ├── message.py          # 发言：三态送出、错误分类与重发
+│   │   │   ├── memory.py           # 记忆操作：自动执行或送审
+│   │   │   └── reaction.py         # 回应：给触发消息加 emoji reaction
+│   │   └── review/                 # 人工审核
+│   │       ├── items.py            # 审核项的创建与存取（控制台队列与 Telegram 的 bot_data）
+│   │       ├── cards.py            # Telegram 审核卡的文字与键盘
+│   │       ├── console.py          # 控制台展示文字、重试产生的记忆操作入队
+│   │       └── actions.py          # 批准 / 重试 / 补充反馈重试 / 取消 / 编辑
 │   │
 │   ├── afc/                        # AFC 工具调用框架
-│   │   ├── afcIntent.py            # 四级召回意图检测（关键词 / 正则 / 通用 / 上下文延续）
 │   │   ├── registry.py             # 工具注册表（类型注解 + docstring → OpenAI schema）
 │   │   ├── executor.py             # 工具执行器（参数绑定校验 + 超时保护）
-│   │   ├── contextBuilder.py       # 工具上下文构建（注入可用工具 schema）
+│   │   ├── contextBuilder.py       # 工具说明渲染（tool 操作的写法 + 各工具函数的签名与参数说明）
+│   │   ├── capability.py           # 把 AFC 登记为 LLM 操作循环的 tool 能力
 │   │   ├── errors.py               # AFC 异常基类
 │   │   ├── toolManager.py          # AFC 工具状态管理（启用开关 / manifest 读写）
-│   │   └── tools/                  # 工具实现（weather/calc/datetime，可用 scripts/afc_tools.py 管理）
+│   │   └── tools/                  # 工具实现（weather/calc/datetime/web，可用 scripts/afc_tools.py 管理）
 │   │
 │   ├── todos/                      # 待办事项子系统
 │   │   ├── database.py             # SQLite 数据存储
@@ -336,7 +344,7 @@ ZincNya_bot/
 | `/history` | 预览或导出聊天历史记录 |
 | `/nya` | 语录相关功能 |
 | `/todos` | 管理待办事项 |
-| `/llm` | 控制 LLM 功能开关、审核模式、模型、群聊触发、记忆与 URL 读取 |
+| `/llm` | 控制 LLM 功能开关、审核模式、模型、群聊触发与记忆 |
 | `/killsticker` | 中止所有正在进行的表情包下载任务 |
 | `/log` | 管理日志文件 |
 | `/clear` | 清理控制台 |
@@ -425,46 +433,39 @@ python scripts/module.py scan
 
 ### 新增 AFC 工具
 
-如果想给 LLM 加一样能自主调用的本事（[自动工具调用](#自动工具调用-afc) 这章会详细讲），最省事的是先叫脚手架出来——`python scripts/afc_tools.py new dice` 会把整套骨架（含触发词、配置、测试、manifest 模板）一次搭好。
+如果想给 LLM 加一样能自主调用的本事（[自动工具调用](#自动工具调用-afc) 这章会详细讲），最省事的是先叫脚手架出来——`python scripts/afc_tools.py new dice` 会把整套骨架（含入口、实现模块、配置、测试、manifest 模板）一次搭好。
 
-按照惯例，工具都应放在 `utils/afc/tools/<工具名>/` 底下，一个目录就是一个工具。核心是两个文件：
+按照惯例，工具都应放在 `utils/afc/tools/<工具名>/` 底下，一个目录就是一个工具。核心是它的入口文件：
 
-1. **`__init__.py`** —— 薄壳：async 入口函数定义在它的顶层，函数体转调实现模块（脚手架默认生成 `core.py`；calc 里叫 `calculator.py`，叫什么随你）。凡是不以 `_` 开头、又定义在本工具包内的公开函数都会被 `registry.py` 扫到，**函数的 schema 是从类型注解 + docstring 自动生成的**，所以类型标注和参数说明需要写全：
+**`__init__.py`** —— 薄壳：async 入口函数定义在它的顶层，函数体转调实现模块（脚手架默认生成 `core.py`；calc 里叫 `calculator.py`，叫什么随你）。凡是不以 `_` 开头、又定义在本工具包内的公开函数都会被 `registry.py` 扫到，**函数的 schema 是从类型注解 + docstring 自动生成的**，所以类型标注和参数说明需要写全：
 
-   ```python
-   # utils/afc/tools/dice/__init__.py
-   from . import core
-
-
-   async def rollDice(sides: int, count: int = 1) -> str:
-       """
-       掷骰子并返回结果。
-
-       参数：
-           sides: 骰子面数（如 6 表示六面骰）
-           count: 掷几颗，默认 1
-
-       返回：
-           掷骰结果字符串
-       """
-       return await core.rollDice(sides, count)
+```python
+# utils/afc/tools/dice/__init__.py
+from . import core
 
 
-   __all__ = ["rollDice"]
-   ```
+async def rollDice(sides: int, count: int = 1) -> str:
+    """
+    掷骰子并返回结果。
 
-   注解里的 `sides: int` 就会变成 schema 的 `integer` 类型；带默认值的参数（`count`）是可选的，而没有默认值的参数是必填的。docstring 第一行是函数描述，`参数：` 段落里的 `名字: 说明` 会填进各参数的 description。
+    参数：
+        sides: 骰子面数（如 6 表示六面骰）
+        count: 掷几颗，默认 1
 
-   注意别图省事写成 `from .core import rollDice` 纯转发，也别在 `__init__.py` 顶层写裸帮助函数——前者会让 `check` 看不到入口（它只做 AST 静态分析），后者会被 registry 误登记成工具 schema。实现的正主住在实现模块里（脚手架叫它 `core.py`）。
+    返回：
+        掷骰结果字符串
+    """
+    return await core.rollDice(sides, count)
 
-2. **`triggers.py`** —— 声明触发词，`afcIntent.py` 启动时会扫进倒排索引，用来做第一步的意图召回：
 
-   ```python
-   KEYWORDS = ["骰子", "掷骰", "roll"]        # 子串命中即召回（L1）
-   PATTERNS = [r"\d+\s*d\s*\d+"]              # 与 L1 并行的正则召回（L2）
-   ```
+__all__ = ["rollDice"]
+```
 
-   召回是**故意放得很宽**的（宁可多召回、让 LLM 自己决定要不要用），所以触发词写得随手一点没关系。
+注解里的 `sides: int` 就会变成 schema 的 `integer` 类型；带默认值的参数（`count`）是可选的，而没有默认值的参数是必填的。docstring 第一行是函数描述，`参数：` 段落里的 `名字: 说明` 会填进各参数的 description。
+
+注意别图省事写成 `from .core import rollDice` 纯转发，也别在 `__init__.py` 顶层写裸帮助函数——前者会让 `check` 看不到入口（它只做 AST 静态分析），后者会被 registry 误登记成工具 schema。实现的正主住在实现模块里（脚手架叫它 `core.py`）。
+
+工具启用之后，每个入口函数的名称、签名和参数说明都会随操作协议一起交给 LLM，什么时候调用由它自己决定。
 
 写完之后，还有两件事：
 
@@ -540,12 +541,14 @@ LLM 可以读用户发来的图，可以选择走双调用方案：先差遣轻�
 
 LLM 准备回复时，客户端按下面的真实顺序组装 user content：
 
-1. **核心任务说明**（`[核心任务]`）— 指明应回答后面的当前用户消息；
-2. **背景参考**（`<RETRIEVED_CONTEXT>`）— 内部按 `ContextTier` 排序，通常依次包含工具声明、知识库、长期记忆、对话历史与 URL 内容；
+1. **核心任务说明**（`[核心任务]`）— 指明应回应后面的当前用户消息；
+2. **背景参考**（`<RETRIEVED_CONTEXT>`）— 内部按 `ContextTier` 排序，通常依次包含知识库、长期记忆与对话历史；
 3. **当前用户消息**（`<CURRENT_USER_MESSAGE>`）— 唯一应被遵守的用户指令源；
 4. **轻量合成提示**（`<TASK_SYNTHESIS>`）— 在末尾再次引用当前消息并要求只把背景作为参考。
 
-知识库使用 `<TRUSTED_KNOWLEDGE>`，memory、history 和 URL 分别使用低信任标记。把当前消息放在背景之后、并在末尾再强化一次，是为了降低它落在长上下文中部而被忽略的风险；`[核心任务]` 同时提前声明背景不能覆盖 system 规则。设计依据见 [Lost in the Middle](https://arxiv.org/abs/2307.03172 "Lost in the Middle: How Language Models Use Long Contexts - Nelson Z. Liu 等人")。
+任务续跑时（比如 LLM 调了工具、要看结果再说话），末尾还会附上一段 `<OPERATION_LOG>`，列出本任务里它已经输出的操作和实际结果。
+
+知识库使用 `<TRUSTED_KNOWLEDGE>`，memory 和 history 分别使用低信任标记。把当前消息放在背景之后、并在末尾再强化一次，是为了降低它落在长上下文中部而被忽略的风险；`[核心任务]` 同时提前声明背景不能覆盖 system 规则。设计依据见 [Lost in the Middle](https://arxiv.org/abs/2307.03172 "Lost in the Middle: How Language Models Use Long Contexts - Nelson Z. Liu 等人")。
 
 此外，用户消息内的分隔符还会被 `neutralizePromptDelimiters` 统一折为全角，防止越权伪造高信任块。
 
@@ -553,13 +556,11 @@ LLM 准备回复时，客户端按下面的真实顺序组装 user content：
 
 LLM 准备回复的过程中，可以自主调用外部工具（如天气查询、计算器）来辅助回复。
 
-不过需要注意的是，客户端在此使用的 AFC，并非 Anthropic / OpenAI / Gemini 那样的 API 层的原生工具调用，而是基于实际情况做出的，自实现的一套"带前置语义召回的、基于 Prompt 拦截的 Agent 循环（ReAct 变体）"。
+不过需要注意的是，客户端在此使用的 AFC，并非 Anthropic / OpenAI / Gemini 那样的 API 层的原生工具调用，而是基于实际情况做出的，自实现的一套"基于 Prompt 拦截的 Agent 循环（ReAct 变体）"。
 
-在接收到用户的回复时，客户端会先根据用户消息做一次工具意图检测，只把命中的、可能相关的工具 Schema 注入上下文。若认为需要，LLM 会在回复中塞进 `<AFC_ACTION>` 标签（内含 JSON 格式的工具调用指令）来调用工具，客户端执行后将结果包装在 `<FUNCTION_RESULT>` 标签里反馈给 LLM，此后 LLM 将继续生成（另外，单个工具最多给 15 秒的时间，每次调用最多迭代 10 轮）。
+LLM 的每次输出是一个 `<OPERATIONS>` 块，里面是一批操作：对用户说话（`message`）、申请修改记忆（`memory_action`）、调用工具（`tool`）都是操作。已启用工具的名称、签名和参数说明会随操作协议一起交给 LLM；它需要用工具时就写一个 `tool` 操作，客户端校验、执行后把结果记进 `<OPERATION_LOG>` 交还给它，此后 LLM 再决定下一步（另外，单个工具最多给 15 秒的时间，一个任务最多调用模型 16 次）。
 
-因此，LLM 的自主决策依然存在，但范围被限制在已经召回的候选工具里，而不是整个工具集合。
-
-**关于意图检测：** 是一套比较宽松的四级召回（关键词 → 正则 → 通用兜底 → 上下文延续）机制——至于为什么宽松呢？那是因为，宁可多给几个选项让 LLM 决定要不要用，也不应该漏掉本应被召回的工具。触发词，按照建议的 AFC 工具架构，写在各工具目录下的 `triggers.py` 里是最好的说。
+工具说明是全量提供的：启用了哪些工具，LLM 就能看到哪些，用不用由它自己决定。工具的开关归 `python scripts/afc_tools.py enable / disable <工具名>` 管。
 
 ### 审核补充反馈
 
@@ -573,40 +574,31 @@ ops 审核 LLM 回复时，若觉得信息不足或需要额外上下文，可�
 
 ### 记忆操作
 
-- LLM 有权限在回复里通过 `<MEMORY_ACTION>` 块，自主申请新增/更新/删除记忆；
+- LLM 有权限通过 `memory_action` 操作，自主申请新增/更新/删除记忆；
 - 默认记忆操作都要审核后才生效（Telegram 按钮或控制台审核，取决于 `autoMode`）；开启自动批准时仅有下面列出的首轮普通 `global + contextual` 例外；
 - `/llm memory -autoapprove` 只会自动执行首轮生成中的普通 `global + contextual` 操作；`chat/user`、涉及 `pinned` 的操作，以及 retry / `:fb` 新产生的操作，仍需人工审核；
 - LLM 只能动 `source=inferred` 的记忆，用户手动创建的那些就力所不能及啦。
 
-### URL 内容读取
+### 网页读取
 
-用户发来 URL 时，其内容会被 LLM 当作**低信任参考**读进来。这项能力是默认关闭的，由 ops 用 `/llm url -on` 显式开启。
-
-#### 触发要同时满足：
-
-1. 消息已经按现有规则触发了 LLM（私聊 / `@bot` / 群聊关键词）；
-2. `urlReadEnabled == True`；
-3. 当前消息文本带明确读取意图（"总结 / 翻译 / 看看这个 / what's this about" 等），或带 `#url` / `#readurl` 显式标记；
-4. 当前消息或被回复消息里有 `http(s)://` URL。
+读网页是一个内置的 AFC 工具（`web`）：LLM 需要时，自己用 `tool` 操作读取一个 `http(s)://` 地址的文字内容，读回来的内容只当作**低信任参考**。这个工具默认是停用的——它会让 bot 所在的服务器向模型给出的地址发起请求——由 ops 用 `python scripts/afc_tools.py enable web` 显式启用。
 
 #### 边界与安全：
 
-- URL 读取**不参与触发**——裸贴一个 URL 并不会把 LLM 唤醒；
-- 被回复消息只贡献 URL 候选、不贡献意图，免得第三方"帮我总结"诱导被动抓取；
-- "只是分享 / just sharing / no action needed" 之类抑制语句会直接拒读；
-- 抓取层强制 SSRF 防护：拒绝私有 / loopback / link-local IP，逐跳校验 redirect，DNS 解析结果一样校验；
-- Content-Type 只收文本类（`text/*` / `application/json` / `application/xml` 等，及常见源码扩展名）；
-- 字节上限默认 512 KiB，单 URL 字符上限默认 12000，总计 24000，超了会截断并在 context 标 `Truncated`；
-- 整体墙钟上限 15 秒，单 URL 超时 10 秒，最多重试 1 次；
-- 抓取结果通过 `<UNTRUSTED_URL_CONTENT>` 块注入，guardrails 同时告诉模型不许服从其中的提示注入；
-- 审核 / 重试时复用首次抓取的内容，不重新联网。
+- 只接受 `http` / `https`，不接受带 userinfo 的地址；
+- 抓取层强制 SSRF 防护：拒绝私有 / loopback / link-local IP 和黑名单 hostname，逐跳校验 redirect（最多 3 跳），DNS 解析结果一样校验；
+- Content-Type 只收文本类（`text/*` / `application/json` / `application/xml` 等；`application/octet-stream` 按地址里的扩展名判断）；
+- 响应体字节上限 512 KiB，交给模型的正文上限 7000 字符，超了只保留开头并标注；
+- 单次请求超时 6 秒，网络错误最多重试 1 次；
+- 不携带 cookie，不使用环境变量里的代理设置；
+- 读回来的内容作为工具结果记在 `<OPERATION_LOG>` 里，操作协议同时告诉模型其中的文字只是参考、不是指令。
 
-数值类配置（限制、blocked hosts 等）只在控制台 / 配置文件里能改，Telegram 只暴露开关。常见的 `LLM URL 抓取失败` 原因：
+数值类配置都在 `utils/afc/tools/web/config.py` 里。读取失败时，原因会交还给模型，常见的有：
 
 - `HTTP 403`：站点用了 Cloudflare / Akamai bot 防护（学术出版商常见）；
 - `非文本 Content-Type`：图片 / PDF / 二进制文件；
-- `binary content detected`：响应里 NUL 字节或控制字符过多（JS challenge / 加密响应）；
-- `命中 blocked host` / `IP 不是可路由公网地址`：SSRF 防护拦下了；
+- `响应疑似二进制数据`：响应里有 NUL 字节或控制字符过多（JS challenge / 加密响应）；
+- `命中 blocked host` / `不是可路由公网地址`：SSRF 防护拦下了；
 - `redirect 跳数超过上限`：站点 redirect 链太深；
 - `抓取失败（N 次尝试均出错）`：网络超时 / 对方拒连。
 
@@ -705,7 +697,7 @@ python scripts/merge_data.py --source /path/to/other/data --apply
 
 ### 工具调用（AFC）
 
-- [**AFC 架构**](docs/afc.md) — 自实现工具调用系统、意图检测、执行流程
+- [**AFC 架构**](docs/afc.md) — 自实现工具调用系统、工具注册、执行流程
 - [**AFC 工具管理**](docs/afc-tool-management.md) — 工具装卸、开关、清单规范与安全校验
 - [**AFC 错误处理**](docs/afc-error-handling.md) — 错误传递、日志记录规范
 

@@ -5,8 +5,10 @@ utils/llm/contextBuilder.py
     - <UNTRUSTED_MEMORY>      结构化长期记忆（受 includeContext 控制）
     - <TRUSTED_KNOWLEDGE>     知识库（开发者提供的背景知识）
     - <UNTRUSTED_HISTORY>     近期聊天历史（受 includeContext 控制）
-    - <UNTRUSTED_URL_CONTENT> 当前用户显式要求读取的 URL 内容
     - <CURRENT_USER_MESSAGE>  当前用户消息（唯一应被服从的指令源）
+
+这里只组装任务开始时的输入。怎么回应（发言、记忆操作、工具调用）由操作协议
+规定，协议说明和任务内的操作记录由 utils/llm/operation 在每次请求时附加。
 """
 
 from dataclasses import replace
@@ -109,7 +111,7 @@ async def buildKnowledgeContext(query: str, *, llmConfig: dict | None = None) ->
 
     参数：
         query: 用户消息（用于检索相关知识）
-        llmConfig: 请求级配置快照（dict）。由 generateReply 读一次后沿
+        llmConfig: 请求级配置快照（dict）。由 prepareModelInput 读一次后沿
             buildConversationContext 传入，避免 knowledgeEnabled /
             knowledgeMaxResults / knowledgeMinScore 三个 getter 各自重复读盘。
             为 None 时（外部直接调用 / 单测）回退到独立 getter，保持向后兼容。
@@ -153,7 +155,6 @@ async def buildConversationContext(
     userID: str | int | None = None,
     sessionID: str | int | None = None,
     includeContext: bool = False,
-    urlContexts: list[dict] | None = None,
     llmConfig: dict | None = None,
     memoryQuery: MemoryQuery | None = None,
     extraBlocks: list[tuple[ContextTier, str, str]] | None = None,
@@ -166,12 +167,12 @@ async def buildConversationContext(
             复用同一次读盘结果。为 None 时下游回退到独立 getter。
         memoryQuery: handler 在防抖前后保存的结构化当前轮次。为 None 时用
             userMessage 构造兼容查询；近期 history 在本函数内按请求重新附加。
-        extraBlocks: Telegram handler 提取的普通扩展上下文数据（如 AFC 工具块）。
+        extraBlocks: 入口提取的扩展上下文块，格式为 (层级, 来源, 内容)。
     """
     # ========== 层 1: 任务说明（Query Reinforcement 开头）==========
     blocks = [
         "[核心任务]",
-        "你需要回答 <CURRENT_USER_MESSAGE> 块中的用户消息。",
+        "你需要回应 <CURRENT_USER_MESSAGE> 块中的用户消息。",
         "该消息将在下方出现。",
     ]
 
@@ -207,16 +208,8 @@ async def buildConversationContext(
         )
         historyBlock = await buildHistoryContext(chatID, history=history)
 
-    urlBlock = ""
-    if urlContexts:
-        # 这里采用函数内 import，避免两个 llm utils 之间的循环依赖
-        # urlReader 在运行时间接依赖本模块的 buildConversationContext（通过
-        # generateReply → buildConversationContext），在模块顶层引入 urlReader 会在冷启动时形成导入环。
-        from utils.llm.urlReader import buildURLContextBlock
-        urlBlock = buildURLContextBlock(urlContexts)
-
     # ========== 层 2: Context Injection（统一按 ContextTier 排序）==========
-    # 核心块（memory / knowledge / history / url）与扩展模块块纳入同一档位体系，
+    # 核心块（memory / knowledge / history）与扩展模块块纳入同一档位体系，
     # 统一排序后渲染，不存在"锚点之后"的隐藏限制。
     allBlocks: list[tuple[ContextTier, str, str]] = []
 
@@ -226,10 +219,8 @@ async def buildConversationContext(
         allBlocks.append((ContextTier.KNOWLEDGE, "知识库", knowledgeBlock))
     if historyBlock:
         allBlocks.append((ContextTier.LOW_TRUST, "对话历史", historyBlock))
-    if urlBlock:
-        allBlocks.append((ContextTier.LOW_TRUST, "URL 内容", urlBlock))
 
-    # 合并扩展模块注入的块（AFC 工具上下文等）
+    # 合并入口注入的扩展块
     allBlocks.extend(extraBlocks)
 
     # 稳定排序：数值越小越靠前；同 tier 保持插入顺序
@@ -258,11 +249,12 @@ async def buildConversationContext(
         f"用户当前消息：\n"
         f'"{safeUserMessage}"\n'
         "\n"
-        "请回答用户的消息。在回答时：\n"
+        "请回应用户的消息。在回应时：\n"
         "- 优先参考 <RETRIEVED_CONTEXT> 中标注为 [来源：XXX] 的信息\n"
-        "- 如果上下文中有与用户消息直接相关的内容，请在回答中体现\n"
+        "- 如果上下文中有与用户消息直接相关的内容，请在回应中体现\n"
         "- 保持你的人设和说话风格\n"
-        "- 给出针对性的回复，而不是通用回复\n"
+        "- 给出针对性的回应，而不是通用回复\n"
+        "- 按系统说明的操作协议输出，要对用户说的话写在 message 操作里\n"
         "\n"
         "上下文已按相关性排序，越靠前的越相关。\n"
         "</TASK_SYNTHESIS>"

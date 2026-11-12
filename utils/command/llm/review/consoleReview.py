@@ -10,17 +10,15 @@ utils/command/llm/review/consoleReview.py
 
 import sys
 
-from utils.llm.review import (
-    canEditReviewItem,
-    canRetryReviewItem,
-    formatReviewItemText,
-    getReviewItemActions,
+from utils.llm.review.actions import (
     reviewCancel,
     reviewEditSubmit,
     reviewRetry,
     reviewRetryWithFeedback,
     reviewSend,
 )
+from utils.llm.review.console import formatReviewItemText, getReviewItemActions
+from utils.llm.review.items import canEditReviewItem, canRetryReviewItem
 from utils.llm.state import getReviewQueue
 
 

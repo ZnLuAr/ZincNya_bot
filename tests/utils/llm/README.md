@@ -9,11 +9,16 @@
 
 1. **配置持久化**：JSON 文件的原子写（tmpfile + os.replace）
 2. **默认值合并**：部分配置 + 默认值 → 完整配置
-3. **值边界校验**：_boundedInt/_boundedFloat 的范围限制
-4. **字符串规范化**：URL blocked hosts、group trigger keywords 的清洗
+3. **取值校验**：记忆选择配置、autoMode、知识库参数的非法值拒绝
+4. **字符串规范化**：group trigger keywords 的清洗
 5. **集合操作**：add/remove/set 的去重与幂等性
 
-### 覆盖面（41 个测试）
+### 覆盖面（36 个测试）
+
+#### getMemorySelectorSettings() - 15 个测试
+- 非法配置值抛出 ValueError（13 组参数）
+- 默认值与显式 llm 后端
+- messages 协议需显式选择，不修改传入的配置快照
 
 #### loadLLMConfig() - 4 个测试
 - 文件存在时加载
@@ -24,23 +29,6 @@
 #### saveLLMConfig() - 2 个测试
 - 成功保存
 - 原子写（tmpfile 被清理）
-
-#### _boundedInt() / _boundedFloat() - 8 个测试
-- 值在范围内
-- 低于最小值 → 钳制到 min
-- 高于最大值 → 钳制到 max
-- 无效类型返回默认值
-- 字符串数字可转换
-
-#### _normalizeBlockedHost() - 8 个测试
-- 基本域名规范化（转小写）
-- 去除 scheme（https://example.com → example.com）
-- 去除端口（example.com:8080 → example.com）
-- 去除尾随点（example.com. → example.com）
-- IPv6 处理（[::1] → ::1）
-- 空字符串抛出异常
-- 禁止单独使用常见 TLD（com、org）
-- 子域名允许（evil.com 合法）
 
 #### _normalizeGroupTriggerKeyword() - 5 个测试
 - 基本规范化（trim + 转小写）
@@ -58,11 +46,6 @@
 - addGroupTriggerKeyword 添加
 - addGroupTriggerKeyword 重复不添加
 - removeGroupTriggerKeyword 移除
-
-#### URL Blocked Hosts - 3 个测试
-- setURLReadBlockedHosts 去重
-- addURLReadBlockedHost 添加
-- removeURLReadBlockedHost 移除
 
 #### Knowledge 配置 - 4 个测试
 - setKnowledgeMaxResults 有效值（1-10）

@@ -4,6 +4,9 @@ utils/afc/registry.py
 AFC 工具注册表
 
 扫描 tools/*/__init__.py，从类型注解 + docstring 生成 OpenAI function schema。
+
+扫描覆盖全部已安装的工具，只做一次；工具是否启用不在扫描时决定，而是在取
+说明和执行时各查一次 toolManager，所以启停不需要重新扫描。
 """
 
 from __future__ import annotations
@@ -12,6 +15,8 @@ import importlib
 import inspect
 from pathlib import Path
 from typing import get_type_hints, get_origin, get_args
+
+from utils.afc.toolManager import isAfcToolEnabled
 
 
 # ── 工具 schema 缓存 ──────────────────────────────
@@ -33,10 +38,10 @@ def _pythonTypeToJsonType(pyType) -> str:
     if origin is type(None):
         return "null"
 
-    # 处理泛型类型（如 list[str], dict[str, int]）
-    if origin is list:
+    # 处理容器类型，带不带元素类型都算（list / list[str]，dict / dict[str, int]）
+    if origin is list or pyType is list:
         return "array"
-    if origin is dict:
+    if origin is dict or pyType is dict:
         return "object"
 
     # 处理基础类型
@@ -172,12 +177,6 @@ def _scanTools():
             continue
 
         toolName = toolDir.name
-
-        # 跳过被禁用的工具（不注册 schema / callable）
-        from utils.afc.toolManager import isAfcToolEnabled
-        if not isAfcToolEnabled(toolName):
-            continue
-
         toolPackage = f"utils.afc.tools.{toolName}"
 
         # 导入工具模块
@@ -218,27 +217,39 @@ def _scanTools():
 
 
 
-def getToolsSchema(toolNames: set[str]) -> list[dict]:
-    """
-    根据工具名集合，返回 OpenAI format 的 schema 列表
+def getAllToolNames() -> set[str]:
+    """返回所有已安装并成功扫描的工具名，不论是否启用。"""
+    _scanTools()
+    return set(_toolsSchema.keys())
 
-    参数:
-        toolNames: 工具名集合（由 afcIntent.detectTools 返回）
+
+def getEnabledToolsSchema() -> list[dict]:
+    """
+    返回当前已启用工具的 schema，按工具名排序
 
     返回:
-        工具 schema 列表（OpenAI function calling format）
+        [{"tool": 工具名, "functions": [OpenAI function schema, ...]}, ...]
     """
     _scanTools()
-
-    schemas = []
-    for toolName in toolNames:
-        toolSchema = _toolsSchema.get(toolName)
-        if toolSchema:
-            schemas.extend(toolSchema["functions"])
-
-    return schemas
+    return [
+        _toolsSchema[toolName]
+        for toolName in sorted(_toolsSchema)
+        if isAfcToolEnabled(toolName)
+    ]
 
 
+def getFunctionSchema(toolName: str, funcName: str) -> dict | None:
+    """返回单个工具函数的 schema；工具或函数不存在时返回 None。"""
+    _scanTools()
+
+    toolSchema = _toolsSchema.get(toolName)
+    if not toolSchema:
+        return None
+
+    for funcSchema in toolSchema["functions"]:
+        if funcSchema["name"] == funcName:
+            return funcSchema
+    return None
 
 
 def getToolCallable(toolName: str, funcName: str) -> callable | None:
@@ -259,16 +270,3 @@ def getToolCallable(toolName: str, funcName: str) -> callable | None:
         return None
 
     return toolCallables.get(funcName)
-
-
-
-
-def getAllToolNames() -> set[str]:
-    """
-    返回所有已注册的工具名
-
-    返回:
-        工具名集合
-    """
-    _scanTools()
-    return set(_toolsSchema.keys())

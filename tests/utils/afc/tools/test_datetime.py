@@ -4,30 +4,31 @@ tests/utils/afc/tools/test_datetime.py
 测试 datetime 工具的核心功能。
 
 覆盖：
-    - getCurrentTime: 5 种格式输出
-    - calculateDateDiff: 相对/绝对日期、未来/过去/今天
-    - getFutureDate: 正数/负数/零偏移、格式参数
+    - getCurrentTime: 各种格式输出、不支持的格式
+    - calculateDateDiff: 相对/绝对日期、未来/过去/今天、空日期与无法解析的日期
+    - getFutureDate: 正数/负数/零偏移、格式参数、偏移量超出范围
     - _parseRelativeDate: 中英文相对日期、绝对日期
     - _formatTimezone: UTC+8 / UTC-5 / UTC+5:30
-    - AFC 召回: detectTools 触发关键词
+
+参数不合法时工具抛 ToolError，消息是给模型看的原因。
 """
 
 import pytest
 from datetime import datetime, timezone, timedelta
 from freezegun import freeze_time
 
+from utils.afc.errors import ToolError
 from utils.afc.tools.datetime import getCurrentTime, calculateDateDiff, getFutureDate
 from utils.afc.tools.datetime.core import _formatTimezone
-from utils.afc.afcIntent import detectTools
 
 
 # ============================================================================
-# TestGetCurrentTime - 当前时间获取（5 个）
+# TestGetCurrentTime - 当前时间获取（7 个）
 # ============================================================================
 
 @freeze_time("2024-03-15 14:30:00")
 class TestGetCurrentTime:
-    """测试 getCurrentTime 的 5 种格式输出"""
+    """测试 getCurrentTime 的各种格式输出"""
 
     @pytest.mark.asyncio
     async def test_full_format(self):
@@ -37,6 +38,18 @@ class TestGetCurrentTime:
         assert "14:30:00" in result
         assert "星期五" in result
         # 不断言 "UTC+8"——测试环境系统时区不确定
+
+    @pytest.mark.asyncio
+    async def test_datetime_format(self):
+        """日期 + 时间"""
+        result = await getCurrentTime("datetime")
+        assert result == "2024-03-15 14:30:00"
+
+    @pytest.mark.asyncio
+    async def test_invalid_format(self):
+        """不支持的格式：抛 ToolError"""
+        with pytest.raises(ToolError, match="不支持的格式：yearly"):
+            await getCurrentTime("yearly")
 
     @pytest.mark.asyncio
     async def test_date_format(self):
@@ -64,7 +77,7 @@ class TestGetCurrentTime:
 
 
 # ============================================================================
-# TestCalculateDateDiff - 日期差计算（6 个）
+# TestCalculateDateDiff - 日期差计算（8 个）
 # ============================================================================
 
 @freeze_time("2024-03-15")
@@ -105,13 +118,25 @@ class TestCalculateDateDiff:
 
     @pytest.mark.asyncio
     async def test_invalid_date(self):
-        """无效日期：返回错误"""
-        result = await calculateDateDiff("invalid_date")
-        assert result.startswith("错误：")
+        """无效日期：抛 ToolError"""
+        with pytest.raises(ToolError, match="无法解析日期：invalid_date"):
+            await calculateDateDiff("invalid_date")
+
+    @pytest.mark.asyncio
+    async def test_invalid_reference_date(self):
+        """参考日期无法解析：错误消息指向参考日期"""
+        with pytest.raises(ToolError, match="无法解析日期：某一天"):
+            await calculateDateDiff("today", "某一天")
+
+    @pytest.mark.asyncio
+    async def test_empty_reference_date(self):
+        """参考日期为空：抛 ToolError"""
+        with pytest.raises(ToolError, match="日期不能为空"):
+            await calculateDateDiff("today", "")
 
 
 # ============================================================================
-# TestGetFutureDate - 未来/过去日期（5 个）
+# TestGetFutureDate - 未来/过去日期（8 个）
 # ============================================================================
 
 @freeze_time("2024-03-15")
@@ -153,6 +178,24 @@ class TestGetFutureDate:
         assert "3 天后是" in result
         assert "星期一" in result  # 2024-03-18 是周一
 
+    @pytest.mark.asyncio
+    async def test_invalid_format(self):
+        """不支持的格式：抛 ToolError"""
+        with pytest.raises(ToolError, match="不支持的格式：yearly"):
+            await getFutureDate(3, "yearly")
+
+    @pytest.mark.asyncio
+    async def test_offset_beyond_timedelta_range(self):
+        """偏移量超过 timedelta 能表示的天数：抛 ToolError"""
+        with pytest.raises(ToolError, match="天数偏移量超出可表示的日期范围：1000000000"):
+            await getFutureDate(1000000000, "date")
+
+    @pytest.mark.asyncio
+    async def test_offset_beyond_date_range(self):
+        """算出的日期超出公元 9999 年：抛 ToolError"""
+        with pytest.raises(ToolError, match="天数偏移量超出可表示的日期范围：5000000"):
+            await getFutureDate(5000000, "date")
+
 
 # ============================================================================
 # TestDateParsing - 日期解析（4 个）
@@ -191,12 +234,12 @@ class TestDateParsing:
     @pytest.mark.asyncio
     async def test_parse_invalid(self):
         """无效日期：格式错误"""
-        result1 = await calculateDateDiff("2024-99-99")
-        result2 = await calculateDateDiff("not_a_date")
-        result3 = await calculateDateDiff("")
-        assert result1.startswith("错误：")
-        assert result2.startswith("错误：")
-        assert result3.startswith("错误：")
+        with pytest.raises(ToolError, match="无法解析日期：2024-99-99"):
+            await calculateDateDiff("2024-99-99")
+        with pytest.raises(ToolError, match="无法解析日期：not_a_date"):
+            await calculateDateDiff("not_a_date")
+        with pytest.raises(ToolError, match="日期不能为空"):
+            await calculateDateDiff("")
 
 
 # ============================================================================
@@ -222,7 +265,7 @@ class TestFormatting:
 
 
 # ============================================================================
-# TestFormatTimezone - 时区格式化（3 个）
+# TestFormatTimezone - 时区格式化（4 个）
 # ============================================================================
 
 class TestFormatTimezone:
@@ -243,20 +286,6 @@ class TestFormatTimezone:
         dt = datetime(2024, 3, 15, tzinfo=timezone(timedelta(hours=5, minutes=30)))
         assert _formatTimezone(dt) == "UTC+5:30"
 
-
-# ============================================================================
-# TestAFCRecall - AFC 召回测试（2 个）
-# ============================================================================
-
-class TestAFCRecall:
-    """测试 datetime 工具的 AFC 触发关键词召回"""
-
-    def test_detect_by_keyword(self):
-        """关键词触发：今天几点"""
-        tools = detectTools("今天几点了", "test_chat")
-        assert "datetime" in tools
-
-    def test_detect_by_pattern(self):
-        """模式触发：包含日期"""
-        tools = detectTools("距离 2024-12-31 还有多久", "test_chat")
-        assert "datetime" in tools
+    def test_naive_datetime(self):
+        """不带时区的 datetime 没有偏移可取，写成 UTC"""
+        assert _formatTimezone(datetime(2024, 3, 15)) == "UTC"

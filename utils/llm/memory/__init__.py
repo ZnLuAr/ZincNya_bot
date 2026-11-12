@@ -24,7 +24,7 @@ from .database import (
 from .action import (
     MemoryAction,
     MemoryActionContext,
-    parseMemoryActions,
+    parseActionDict,
     validateAction,
     executeAction,
     requiresHumanReview,

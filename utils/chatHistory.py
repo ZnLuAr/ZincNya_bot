@@ -60,6 +60,9 @@ recordBotMessage(chatID, content)
     saveMessage——「bot 何时该入库」的策略在此有主，新增发送路径 grep
     此名即得记录入口
 
+recordBotReaction(chatID, emoji)
+    把 bot 加的 reaction 记为对话历史，格式与用户的 reaction 一致
+
 loadHistory(chatID, limit=0, offset=0)
     加载指定聊天的历史记录（自动解密）
 
@@ -308,6 +311,16 @@ async def recordBotMessage(chatID: str, content: str) -> bool:
     参数与返回同 saveMessage（content 明文进、密文落盘，失败返回 False 不抛）。
     """
     return await saveMessage(chatID, "outgoing", BOT_DISPLAY_NAME, content)
+
+
+async def recordBotReaction(chatID: str, emoji: str) -> bool:
+    """
+    把 bot 加的 reaction 记为对话历史。
+
+    direction 与 content 的写法同 handlers/reaction.py 记录的用户 reaction；
+    返回同 saveMessage。
+    """
+    return await saveMessage(chatID, "reaction", BOT_DISPLAY_NAME, f"回应了 {emoji}")
 
 
 async def loadHistory(chatID: str, limit: int = 0, offset: int = 0) -> List[dict]:

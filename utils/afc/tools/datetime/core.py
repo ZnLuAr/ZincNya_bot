@@ -8,12 +8,14 @@ utils/afc/tools/datetime/core.py
     - calculateDateDiff: 计算两个日期的天数差
     - getFutureDate: 计算未来/过去的日期
 
-所有函数统一返回字符串，错误时返回 "错误：..." 格式。
+所有函数成功时返回字符串；参数不合法时抛 ToolError，消息是给模型看的原因。
 """
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import re
+
+from utils.afc.errors import ToolError
 
 from .config import (
     WEEKDAY_CN,
@@ -42,7 +44,6 @@ async def getCurrentTime(fmt: str = "full") -> str:
 
     返回：
         格式化的当前时间字符串
-        错误时返回 "错误：<错误消息>"
 
     示例：
         >>> await getCurrentTime("full")
@@ -52,11 +53,8 @@ async def getCurrentTime(fmt: str = "full") -> str:
         >>> await getCurrentTime("weekday")
         "星期五"
     """
-    try:
-        now = datetime.now().astimezone()
-        return _formatDateTime(now, fmt)
-    except Exception as e:
-        return f"错误：{str(e)}"
+    now = datetime.now().astimezone()
+    return _formatDateTime(now, fmt)
 
 
 async def calculateDateDiff(date1: str, date2: str = "today") -> str:
@@ -72,7 +70,6 @@ async def calculateDateDiff(date1: str, date2: str = "today") -> str:
 
     返回：
         描述性字符串（如 "距离 2024-12-31 还有 291 天"）
-        错误时返回 "错误：<错误消息>"
 
     示例：
         >>> await calculateDateDiff("2024-12-31", "today")
@@ -80,29 +77,25 @@ async def calculateDateDiff(date1: str, date2: str = "today") -> str:
         >>> await calculateDateDiff("昨天", "今天")
         "昨天距今 1 天"
     """
-    try:
-        if not date1:
-            return ERROR_MESSAGES["empty_input"]
+    if not date1 or not date2:
+        raise ToolError(ERROR_MESSAGES["empty_input"])
 
-        parsedDate1 = _parseRelativeDate(date1)
-        parsedDate2 = _parseRelativeDate(date2)
+    parsedDate1 = _parseRelativeDate(date1)
+    parsedDate2 = _parseRelativeDate(date2)
 
-        if parsedDate1 is None:
-            return ERROR_MESSAGES["parse_failed"].format(date_str=date1)
-        if parsedDate2 is None:
-            return ERROR_MESSAGES["parse_failed"].format(date_str=date2)
+    if parsedDate1 is None:
+        raise ToolError(ERROR_MESSAGES["parse_failed"].format(date_str=date1))
+    if parsedDate2 is None:
+        raise ToolError(ERROR_MESSAGES["parse_failed"].format(date_str=date2))
 
-        diff = (parsedDate1 - parsedDate2).days
+    diff = (parsedDate1 - parsedDate2).days
 
-        if diff > 0:
-            return f"距离 {date1} 还有 {diff} 天"
-        elif diff < 0:
-            return f"{date1} 距今 {-diff} 天"
-        else:
-            return f"{date1} 就是今天"
-
-    except Exception as e:
-        return f"错误：{str(e)}"
+    if diff > 0:
+        return f"距离 {date1} 还有 {diff} 天"
+    elif diff < 0:
+        return f"{date1} 距今 {-diff} 天"
+    else:
+        return f"{date1} 就是今天"
 
 
 async def getFutureDate(days: int, fmt: str = "date") -> str:
@@ -118,7 +111,6 @@ async def getFutureDate(days: int, fmt: str = "date") -> str:
 
     返回：
         格式化的日期字符串
-        错误时返回 "错误：<错误消息>"
 
     示例：
         >>> await getFutureDate(3, "date")
@@ -128,25 +120,22 @@ async def getFutureDate(days: int, fmt: str = "date") -> str:
         >>> await getFutureDate(0, "weekday")
         "今天是 星期五"
     """
+    base = datetime.now().astimezone()
     try:
-        base = datetime.now().astimezone()
         target = base + timedelta(days=days)
+    except OverflowError as e:
+        raise ToolError(f"天数偏移量超出可表示的日期范围：{days}") from e
 
-        formatted = _formatDateTime(target, fmt)
-        if formatted.startswith("错误："):
-            return formatted
+    formatted = _formatDateTime(target, fmt)
 
-        if days > 0:
-            prefix = f"{days} 天后是 "
-        elif days < 0:
-            prefix = f"{-days} 天前是 "
-        else:
-            prefix = "今天是 "
+    if days > 0:
+        prefix = f"{days} 天后是 "
+    elif days < 0:
+        prefix = f"{-days} 天前是 "
+    else:
+        prefix = "今天是 "
 
-        return prefix + formatted
-
-    except Exception as e:
-        return f"错误：{str(e)}"
+    return prefix + formatted
 
 
 # ============================================================================
@@ -190,10 +179,10 @@ def _formatDateTime(dt: datetime, formatType: str) -> str:
         formatType: 格式类型（full/datetime/date/time/weekday/iso）
 
     返回：
-        格式化字符串，formatType 无效时返回错误消息
+        格式化字符串；formatType 无效时抛 ToolError
     """
     if formatType not in FORMAT_TEMPLATES:
-        return ERROR_MESSAGES["invalid_format"].format(fmt=formatType)
+        raise ToolError(ERROR_MESSAGES["invalid_format"].format(fmt=formatType))
 
     template = FORMAT_TEMPLATES[formatType]
 

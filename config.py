@@ -206,7 +206,6 @@ LLM_KNOWLEDGE_DIR = os.path.join(DATA_DIR, "llm", "knowledge")         # 知识�
 # LLM 记忆操作约束（原散落于 memory/action.py / contextBuilder.py）
 LLM_MEMORY_PRIORITY_CAP = 3                # 单条记忆 priority 上限
 LLM_MEMORY_MAX_CONTENT_LEN = 500           # 单条记忆 content 最大长度（字符）
-LLM_MEMORY_MAX_ACTIONS = 3                 # 单轮回复最多解析的记忆操作数
 LLM_MEMORY_MAX_TAGS = 10                   # 单条记忆最多标签数
 LLM_MEMORY_HINT_MAX_CHARS = 80             # 单条记忆检索说明最大长度（字符）
 LLM_MEMORY_RETRIEVE_PER_SCOPE = 20         # 检索时每作用域候选上限
@@ -255,15 +254,15 @@ LLM_VISION_MAX_TOKENS = 4096               # 视觉描述生成 max_tokens
 LLM_VISION_TEMPERATURE = 0.2               # 视觉描述生成 temperature
 LLM_VISION_MIN_DESCRIPTION_LEN = 150       # 视觉描述最小合法长度，低于则视为异常
 LLM_VISION_PREFERRED_MIN_WIDTH = 800       # 选图时偏好的最小宽度阈值
-# URL 读取 / 意图判定（原散落于 urlReader.py / urlIntent.py）
-LLM_URL_RETRY_BACKOFF_SECONDS = 0.5        # URL 抓取重试退避（秒）
-LLM_URL_TOTAL_FETCH_DEADLINE = 15          # 单次 readURLContextsForUserText 总墙钟上限（秒）
-LLM_URL_INTENT_NEGATION_WINDOW = 32        # 否定前缀与 intent 词之间允许的字符窗口
 LLM_REPLY_CONTEXT_LIMIT = 300              # reply-to 文本注入 prompt 时的截断长度（字符）
 
-# AFC（自主工具调用）相关常量（原散落于 afc/executor.py / afcIntent.py）
-AFC_TOOL_TIMEOUT_SECONDS = 15              # 单次工具执行超时（秒），防工具卡死回复链
-AFC_MAX_CONTEXTUAL_MESSAGE_LEN = 10        # L4 延续判定：消息不超此长度且含指代词才继承上轮工具集
+# LLM 操作循环相关常量
+LLM_TASK_MAX_MODEL_CALLS = 16              # 单个任务最多调用模型的次数（含首次、格式纠正与续跑）
+LLM_BATCH_MAX_OPERATIONS = 6               # 模型一次输出最多包含的操作数（各类合计，结束信号不占数）
+
+# AFC（工具箱）相关常量
+AFC_TOOL_TIMEOUT_SECONDS = 15              # 单次工具执行超时（秒），防工具卡死任务
+AFC_TOOL_RESULT_MAX_CHARS = 8000           # 单次工具返回文字的长度上限（字符），超出截断并标注
 
 
 

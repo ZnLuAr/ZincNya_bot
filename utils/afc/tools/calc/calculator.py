@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from utils.core.logger import logSystemEvent, LogLevel
+from utils.afc.errors import ToolError
 
 from .config import (
     RESULT_PRECISION,
@@ -205,7 +206,8 @@ async def calculate(expression: str) -> str:
 
     返回：
         格式化的计算结果字符串（如 "2 + 3 = 5"）
-        错误时返回 "计算错误：<错误消息>"
+
+    失败时抛 ToolError，消息是给模型看的原因。
 
     示例：
         >>> await calculate("2 + 3")
@@ -215,12 +217,11 @@ async def calculate(expression: str) -> str:
         >>> await calculate("sin(rad(90))")
         "sin(rad(90)) = 1"
     """
-    try:
-        # 输入校验
-        expression = expression.strip()
-        if not expression:
-            return f"计算错误：{ERROR_MESSAGES['invalid_expression']}"
+    expression = expression.strip()
+    if not expression:
+        raise ToolError(ERROR_MESSAGES['invalid_expression'])
 
+    try:
         # 预处理
         processedExpr = _preprocessExpression(expression)
 
@@ -228,7 +229,7 @@ async def calculate(expression: str) -> str:
         try:
             tree = ast.parse(processedExpr, mode='eval')
         except SyntaxError:
-            return f"计算错误：{ERROR_MESSAGES['invalid_expression']}"
+            raise ToolError(ERROR_MESSAGES['invalid_expression'])
 
         # 求值
         result = _evalNode(tree.body, SAFE_CONSTANTS)
@@ -238,20 +239,15 @@ async def calculate(expression: str) -> str:
 
         return f"{expression} = {formattedResult}"
 
-    except CalculationError as e:
+    except ToolError:
+        raise
+    except (CalculationError, OverflowError) as e:
         await logSystemEvent(
             "计算错误（用户输入）",
             f"表达式：{expression}，错误：{e}",
             LogLevel.INFO,
         )
-        return f"错误：{e}"
-    except OverflowError as e:
-        await logSystemEvent(
-            "计算错误（溢出）",
-            f"表达式：{expression}，错误：{e}",
-            LogLevel.INFO,
-        )
-        return f"错误：{e}"
+        raise ToolError(str(e)) from e
     except Exception as e:
         await logSystemEvent(
             "计算错误（预期外）",
@@ -259,5 +255,4 @@ async def calculate(expression: str) -> str:
             LogLevel.ERROR,
             exception=e,
         )
-        return f"错误：{ERROR_MESSAGES['invalid_expression']}"
-    
+        raise ToolError(ERROR_MESSAGES['invalid_expression']) from e

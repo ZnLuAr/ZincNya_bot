@@ -10,7 +10,7 @@ utils/chatScreen/receiver.py
 import asyncio
 
 from utils.core.logger import logSystemEvent, LogLevel
-from utils.llm.review import peekReviewHint
+from utils.llm.review.items import peekReviewHint
 from utils.llm.state import getReviewQueue
 
 from .formatter import formatMessage

@@ -26,12 +26,12 @@ import utils.afc.toolManager as toolManager  # noqa: E402
 
 
 _INIT = "utils/afc/tools/mytool/__init__.py"
-_TRIG = "utils/afc/tools/mytool/triggers.py"
+_CORE = "utils/afc/tools/mytool/core.py"
 _TEST = "tests/utils/afc/tools/test_mytool.py"
 
 _LOCAL_FILES = {
     _INIT: b"# init v1\n",
-    _TRIG: b"KEYWORDS = ['x']\n",
+    _CORE: b"# core v1\n",
     _TEST: b"# test v1\n",
 }
 
@@ -41,7 +41,7 @@ def _makeManifest(**overrides):
         "id": "mytool",
         "name": "My Tool",
         "version": "1.0.0",
-        "files": [_INIT, _TRIG],
+        "files": [_INIT, _CORE],
         "testFile": _TEST,
     }
     manifest.update(overrides)
@@ -90,8 +90,6 @@ def updateEnv(tmp_path, monkeypatch):
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             if relPath in env["stagedFiles"]:
                 content = env["stagedFiles"][relPath]
-            elif relPath.endswith("triggers.py"):
-                content = b"KEYWORDS = ['y']\n"
             else:
                 content = b"# staged\n"
             with open(dest, "wb") as f:
@@ -159,7 +157,7 @@ class TestVersionBump:
     def test_version_bump_update(self, updateEnv, capsys):
         updateEnv["custom"]["mytool"]["enabled"] = False  # enabled 状态应保留
         updateEnv["remoteManifest"] = _makeManifest(version="1.1.0")
-        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _TRIG: b"KEYWORDS = ['y']\n", _TEST: b"# test v1\n"}
+        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _CORE: b"# core v2\n", _TEST: b"# test v1\n"}
 
         outcome = afc_tools.cmdUpdate("mytool", assumeYes=True)
 
@@ -178,7 +176,7 @@ class TestVersionBump:
 
 class TestContentChangeWithoutVersionBump:
     def test_content_changed_same_version(self, updateEnv, capsys):
-        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _TRIG: b"KEYWORDS = ['x']\n", _TEST: b"# test v1\n"}
+        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _CORE: b"# core v1\n", _TEST: b"# test v1\n"}
 
         outcome = afc_tools.cmdUpdate("mytool", assumeYes=True)
 
@@ -219,8 +217,8 @@ class TestFileAddDelete:
         oldExtra = "utils/afc/tools/mytool/old.py"
         newExtra = "utils/afc/tools/mytool/new.py"
         (updateEnv["tmpPath"] / oldExtra).write_bytes(b"# old\n")
-        updateEnv["custom"]["mytool"]["manifest"]["files"] = [_INIT, _TRIG, oldExtra]
-        updateEnv["remoteManifest"] = _makeManifest(files=[_INIT, _TRIG, newExtra], version="1.1.0")
+        updateEnv["custom"]["mytool"]["manifest"]["files"] = [_INIT, _CORE, oldExtra]
+        updateEnv["remoteManifest"] = _makeManifest(files=[_INIT, _CORE, newExtra], version="1.1.0")
         updateEnv["stagedFiles"] = dict(_LOCAL_FILES) | {newExtra: b"# new\n"}
 
         outcome = afc_tools.cmdUpdate("mytool", assumeYes=True)
@@ -265,7 +263,7 @@ class TestTestFileTransitions:
 class TestCheckMode:
     def test_check_only_reports(self, updateEnv, capsys):
         updateEnv["remoteManifest"] = _makeManifest(version="1.1.0")
-        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _TRIG: b"KEYWORDS = ['y']\n", _TEST: b"# test v1\n"}
+        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _CORE: b"# core v2\n", _TEST: b"# test v1\n"}
 
         outcome = afc_tools.cmdUpdate("mytool", checkOnly=True)
 
@@ -279,7 +277,7 @@ class TestCheckMode:
 
 class TestConfirmFlow:
     def test_cancel_on_no(self, updateEnv, monkeypatch, capsys):
-        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _TRIG: b"KEYWORDS = ['x']\n", _TEST: b"# test v1\n"}
+        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _CORE: b"# core v1\n", _TEST: b"# test v1\n"}
         monkeypatch.setattr("builtins.input", lambda prompt="": "n")
 
         outcome = afc_tools.cmdUpdate("mytool")
@@ -290,7 +288,7 @@ class TestConfirmFlow:
         assert updateEnv["saved"] is None
 
     def test_eof_treated_as_no(self, updateEnv, monkeypatch):
-        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _TRIG: b"KEYWORDS = ['x']\n", _TEST: b"# test v1\n"}
+        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _CORE: b"# core v1\n", _TEST: b"# test v1\n"}
 
         def raiseEof(prompt=""):
             raise EOFError
@@ -299,7 +297,7 @@ class TestConfirmFlow:
         assert afc_tools.cmdUpdate("mytool") == "cancelled"
 
     def test_assume_yes_skips_input(self, updateEnv, monkeypatch):
-        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _TRIG: b"KEYWORDS = ['x']\n", _TEST: b"# test v1\n"}
+        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _CORE: b"# core v1\n", _TEST: b"# test v1\n"}
 
         def forbidden(prompt=""):
             raise AssertionError("input 不应被调用")
@@ -378,7 +376,7 @@ class TestDowngrade:
     def test_downgrade_warns_but_updates(self, updateEnv, capsys):
         updateEnv["custom"]["mytool"]["manifest"]["version"] = "2.0.0"
         updateEnv["remoteManifest"] = _makeManifest(version="1.0.0")
-        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _TRIG: b"KEYWORDS = ['x']\n", _TEST: b"# test v1\n"}
+        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _CORE: b"# core v1\n", _TEST: b"# test v1\n"}
 
         outcome = afc_tools.cmdUpdate("mytool", assumeYes=True)
 
@@ -403,7 +401,7 @@ class TestLocalStateRecovery:
 
         assert afc_tools.cmdUpdate("mytool", assumeYes=True) == "updated"
         assert _localBytes(updateEnv, _INIT) == _LOCAL_FILES[_INIT]
-        assert _localBytes(updateEnv, _TRIG) == _LOCAL_FILES[_TRIG]
+        assert _localBytes(updateEnv, _CORE) == _LOCAL_FILES[_CORE]
 
 
 class TestDeletionPathEscape:
@@ -411,7 +409,7 @@ class TestDeletionPathEscape:
         escapeTarget = updateEnv["tmpPath"] / "core" / "crypto.py"
         escapeTarget.parent.mkdir(parents=True)
         escapeTarget.write_bytes(b"# do not delete\n")
-        updateEnv["custom"]["mytool"]["manifest"]["files"] = [_INIT, _TRIG, "../../core/crypto.py"]
+        updateEnv["custom"]["mytool"]["manifest"]["files"] = [_INIT, _CORE, "../../core/crypto.py"]
         updateEnv["stagedFiles"] = dict(_LOCAL_FILES)
 
         outcome = afc_tools.cmdUpdate("mytool", assumeYes=True)
@@ -426,7 +424,7 @@ class TestDeletionPathEscape:
 class TestDependencies:
     def test_missing_deps_warns_not_blocks(self, updateEnv, capsys):
         updateEnv["remoteManifest"] = _makeManifest(dependencies=["nonexistent-pkg-xyz"])
-        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _TRIG: b"KEYWORDS = ['x']\n", _TEST: b"# test v1\n"}
+        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _CORE: b"# core v1\n", _TEST: b"# test v1\n"}
 
         outcome = afc_tools.cmdUpdate("mytool", assumeYes=True)
 
@@ -483,17 +481,10 @@ class TestNetworkFailures:
         assert "下载失败" in capsys.readouterr().out
         assert _localBytes(updateEnv, _INIT) == _LOCAL_FILES[_INIT]
 
-    def test_bad_staging_triggers(self, updateEnv, capsys):
-        updateEnv["stagedFiles"] = {_TRIG: b"KEYWORDS = []\nPATTERNS = []\n"}
-
-        assert afc_tools.cmdUpdate("mytool") == "failed"
-        assert "缺少 KEYWORDS 和 PATTERNS" in capsys.readouterr().out
-        assert _localBytes(updateEnv, _INIT) == _LOCAL_FILES[_INIT]
-
 
 class TestRollback:
     def test_apply_failure_rolls_back(self, updateEnv, monkeypatch, capsys):
-        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _TRIG: b"KEYWORDS = ['y']\n", _TEST: b"# test v1\n"}
+        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _CORE: b"# core v2\n", _TEST: b"# test v1\n"}
         tmpPath = updateEnv["tmpPath"]
 
         def flakyApply(tempDir, fileList, pendingTmps):
@@ -510,13 +501,13 @@ class TestRollback:
         out = capsys.readouterr().out
         assert "已回滚到原版本" in out
         assert _localBytes(updateEnv, _INIT) == _LOCAL_FILES[_INIT]  # v1 还原
-        assert _localBytes(updateEnv, _TRIG) == _LOCAL_FILES[_TRIG]
+        assert _localBytes(updateEnv, _CORE) == _LOCAL_FILES[_CORE]
         assert updateEnv["saved"] is None
         assert not (tmpPath / "data" / ".afc_install" / "backup_mytool").exists()
 
     def test_save_failure_rolls_back(self, updateEnv, capsys):
         updateEnv["saveOk"] = False
-        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _TRIG: b"KEYWORDS = ['x']\n", _TEST: b"# test v1\n"}
+        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _CORE: b"# core v1\n", _TEST: b"# test v1\n"}
 
         outcome = afc_tools.cmdUpdate("mytool", assumeYes=True)
 
@@ -527,7 +518,7 @@ class TestRollback:
 
     def test_rollback_partial_failure_keeps_backup(self, updateEnv, monkeypatch, capsys):
         updateEnv["saveOk"] = False
-        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _TRIG: b"KEYWORDS = ['x']\n", _TEST: b"# test v1\n"}
+        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _CORE: b"# core v1\n", _TEST: b"# test v1\n"}
         monkeypatch.setattr(afc_tools, "_rollbackToolFiles", lambda backupDir, newWritten: (0, ["x.py"]))
 
         outcome = afc_tools.cmdUpdate("mytool", assumeYes=True)
@@ -576,7 +567,7 @@ class TestFastLane:
     def test_sha_mismatch_falls_through(self, updateEnv):
         updateEnv["custom"]["mytool"]["remoteSha"] = "abc123"
         updateEnv["sha"] = "def456"  # 远端已变
-        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _TRIG: b"KEYWORDS = ['x']\n", _TEST: b"# test v1\n"}
+        updateEnv["stagedFiles"] = {_INIT: b"# init v2\n", _CORE: b"# core v1\n", _TEST: b"# test v1\n"}
 
         outcome = afc_tools.cmdUpdate("mytool", assumeYes=True)
 
@@ -607,18 +598,18 @@ class TestUpdateAll:
     def test_all_summary(self, updateEnv, monkeypatch, capsys):
         # 两个工具：mytool 有更新，othertool 已是最新
         otherInit = "utils/afc/tools/othertool/__init__.py"
-        otherTrig = "utils/afc/tools/othertool/triggers.py"
+        otherCore = "utils/afc/tools/othertool/core.py"
         otherTest = "tests/utils/afc/tools/test_othertool.py"
         updateEnv["custom"]["othertool"] = {
             "enabled": True,
-            "manifest": _makeManifest(id="othertool", files=[otherInit, otherTrig], testFile=otherTest),
+            "manifest": _makeManifest(id="othertool", files=[otherInit, otherCore], testFile=otherTest),
             "source": "github:https://github.com/user/repo2@main",
             "installedAt": "2026-07-01T00:00:00",
         }
-        for rel, content in ((otherInit, b"# same\n"), (otherTrig, b"KEYWORDS = ['o']\n"), (otherTest, b"# same\n")):
+        for rel in (otherInit, otherCore, otherTest):
             dest = updateEnv["tmpPath"] / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(content)
+            dest.write_bytes(b"# same\n")
 
         def fakeDownload2(githubUrl, rawBase, files, testFile, tempDir):
             for relPath in list(files) + ([testFile] if testFile else []):
@@ -626,10 +617,8 @@ class TestUpdateAll:
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 if relPath == _INIT:
                     content = b"# init v2\n"
-                elif relPath == _TRIG:
-                    content = b"KEYWORDS = ['y']\n"
-                elif relPath == otherTrig:
-                    content = b"KEYWORDS = ['o']\n"
+                elif relPath == _CORE:
+                    content = b"# core v2\n"
                 else:
                     content = b"# same\n"
                 with open(dest, "wb") as f:
@@ -639,7 +628,7 @@ class TestUpdateAll:
         def fakeFetch2(user, repo, branches):
             if repo == "repo":
                 return _makeManifest(), "main", None
-            return _makeManifest(id="othertool", files=[otherInit, otherTrig], testFile=otherTest), "main", None
+            return _makeManifest(id="othertool", files=[otherInit, otherCore], testFile=otherTest), "main", None
 
         monkeypatch.setattr(afc_tools, "_downloadToolFiles", fakeDownload2)
         monkeypatch.setattr(afc_tools, "_fetchRemoteManifest", fakeFetch2)

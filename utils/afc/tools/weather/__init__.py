@@ -5,7 +5,7 @@ utils/afc/tools/weather/__init__.py
 """
 
 from utils.core.logger import logSystemEvent
-from utils.afc.errors import ToolDependencyError
+from utils.afc.errors import ToolError, ToolDependencyError
 
 from . import cache
 from . import client
@@ -31,7 +31,8 @@ async def getWeather(city: str, date: str = "today") -> str:
 
     返回：
         格式化的天气信息字符串
-        错误时返回 "错误：<错误消息>"
+
+    查询不了时抛 ToolError（参数问题）或 ToolDependencyError（天气服务不可用）。
 
     示例：
         >>> await getWeather("北京", "today")
@@ -42,15 +43,15 @@ async def getWeather(city: str, date: str = "today") -> str:
     """
     # 参数校验
     if not city or city is None:
-        return "错误：城市名不能为空"
+        raise ToolError("城市名不能为空")
 
     if not config.WEATHER_API_KEY or config.WEATHER_API_KEY.strip() == "":
-        return "错误：未配置天气 API 密钥（WEATHER_API_KEY）"
+        raise ToolDependencyError("未配置天气 API 密钥（WEATHER_API_KEY）")
 
     # 解析日期参数
     targetDateOffset = dateParser.parseDate(date)
     if targetDateOffset is None:
-        return f"错误：不支持的日期参数（{date}），仅支持 today/明天/后天 或 YYYY-MM-DD 格式（未来 0-2 天）"
+        raise ToolError(f"不支持的日期参数（{date}），仅支持 today/明天/后天 或 YYYY-MM-DD 格式（未来 0-2 天）")
 
     # 检查缓存
     cacheKey = cache.getCacheKey(city, targetDateOffset)
@@ -82,7 +83,7 @@ async def getWeather(city: str, date: str = "today") -> str:
             "weather_input_error",
             f"天气查询参数错误：{city}, error={str(e)}"
         )
-        return f"错误：{e}"
+        raise ToolError(str(e)) from e
 
     except ToolDependencyError as e:
         # 外部依赖错误（API 不可用、网络超时等）
@@ -90,7 +91,7 @@ async def getWeather(city: str, date: str = "today") -> str:
             "weather_dependency_error",
             f"天气服务依赖错误：{city}, error={str(e)}"
         )
-        return f"错误：{e}"
+        raise
 
     except Exception as e:
         # 预期外错误
@@ -98,7 +99,7 @@ async def getWeather(city: str, date: str = "today") -> str:
             "weather_unexpected_error",
             f"天气查询意外错误：{city}, error={str(e)}"
         )
-        return f"错误：天气服务暂时不可用（{type(e).__name__}）"
+        raise ToolDependencyError(f"天气服务暂时不可用（{type(e).__name__}）") from e
 
 
 __all__ = ["getWeather"]

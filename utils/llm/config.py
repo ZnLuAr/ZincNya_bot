@@ -3,7 +3,7 @@ utils/llm/config.py
 
 LLM 配置管理：
     - 加载/保存 llmConfig.json（开关、审核模式、主模型、视觉模型、
-      群聊触发模式与关键词、长期记忆、URL 读取配置与黑名单）
+      群聊触发模式与关键词、长期记忆、知识库）
     - 加载 prompts.json（不存在或解析失败时 fallback 到内嵌的"褪色"占位 prompt）
 
 settable 配置都会通过 _setConfig 加锁串行写盘（read-modify-write 安全）。
@@ -14,7 +14,6 @@ import json
 import threading
 import math
 from enum import IntEnum
-from urllib.parse import urlsplit
 
 from config import (
     LLM_CONFIG_PATH,
@@ -39,7 +38,7 @@ class ContextTier(IntEnum):
     TOOLS         = 200   # 工具与能力声明（AFC 等）
     KNOWLEDGE     = 300   # 高信任背景知识（知识库）
     SUPPLEMENTARY = 400   # 一般补充信息
-    LOW_TRUST     = 500   # 低信任内容（记忆 / 历史 / URL）
+    LOW_TRUST     = 500   # 低信任内容（记忆 / 历史）
 
 
 # 配置 read-modify-write 串行化，避免 Telegram / console 并发改配置时丢更新
@@ -63,20 +62,6 @@ _DEFAULT_CONFIG = {
     "memorySelectorModel": "gpt-5.6-terra",
     "memorySelectorEffort": "high",
     "memorySelectorTimeoutSeconds": 30.0,
-    "urlReadEnabled": False,
-    "urlReadMaxUrls": 3,
-    "urlReadMaxBytes": 512 * 1024,
-    "urlReadMaxChars": 12000,
-    "urlReadTotalMaxChars": 24000,
-    "urlReadTimeoutSeconds": 10,
-    "urlReadMaxRetries": 1,
-    "urlReadRedirectLimit": 3,
-    "urlReadBlockedHosts": [
-        "localhost",
-        "metadata",
-        "metadata.google.internal",
-        "169.254.169.254",
-    ],
     "knowledgeEnabled": True,
     "knowledgeMaxResults": 3,
     "knowledgeMinScore": 0.5,
@@ -325,223 +310,6 @@ def getMemorySelectorSettings(configSnapshot: dict) -> dict:
         raise ValueError("selectorConfig")
     return {"backend": backend, "protocol": protocol, "model": model.strip(),
             "effort": effort, "timeoutSeconds": timeout}
-
-
-
-
-# ── URL 读取 ────────────────────────────────────────
-
-def _boundedInt(value, *, default: int, minValue: int, maxValue: int) -> int:
-    """边界兜底，确保配置值在合理范围内"""
-    try:
-        val = int(value)
-        return max(minValue, min(maxValue, val))
-    except (TypeError, ValueError):
-        return default
-
-
-def _boundedFloat(value, *, default: float, minValue: float, maxValue: float) -> float:
-    """边界兜底，但是是浮点数"""
-    try:
-        val = float(value)
-        return max(minValue, min(maxValue, val))
-    except (TypeError, ValueError):
-        return default
-
-
-# 常见公共 TLD / 二级后缀，拒绝单独作为 blocked host —— 否则
-# 规则 `host == bh or host.endswith(f".{bh}")` 会一次性屏蔽整个 TLD。
-_FORBIDDEN_BARE_SUFFIXES = {
-    # gTLD
-    "com", "net", "org", "info", "biz", "name", "pro",
-    "app", "dev", "xyz", "io", "ai", "me", "co", "tv",
-    "site", "online", "store", "blog", "tech", "cloud",
-    # ccTLD
-    "cn", "jp", "kr", "hk", "tw", "sg", "th", "vn", "in", "id",
-    "us", "uk", "de", "fr", "it", "es", "pl", "nl", "se", "ru",
-    "ca", "au", "nz", "br", "mx",
-    # 受限类
-    "gov", "edu", "mil", "int",
-}
-
-
-def _normalizeBlockedHost(host: str) -> str:
-    """
-    规范化 blocked host
-        - 去掉 scheme/path，只保留 host
-        - 小写、去尾点、IDNA normalize
-        - 拒绝单独的常见 TLD（防止误输 "com" 屏蔽整个 .com）
-    """
-    host = str(host).strip()
-    if not host:
-        raise ValueError("blocked host 不能为空")
-
-    # 如果包含 scheme，用 urlsplit 提取 netloc
-    if "://" in host:
-        parsed = urlsplit(host)
-        host = parsed.netloc or parsed.path.split("/")[0]
-    elif host.startswith("//"):
-        host = host[2:].split("/")[0]
-    else:
-        host = host.split("/")[0]
-
-    # 去掉 port
-    if ":" in host and not host.startswith("["):
-        host = host.rsplit(":", 1)[0]
-    elif host.startswith("[") and "]:" in host:
-        host = host.split("]:")[0] + "]"
-
-    # 去掉 IPv6 方括号用于规范化
-    if host.startswith("[") and host.endswith("]"):
-        host = host[1:-1]
-
-    host = host.lower().rstrip(".")
-
-    # IDNA 编解码
-    try:
-        host = host.encode("idna").decode("ascii")
-    except (UnicodeError, UnicodeDecodeError):
-        pass
-
-    if not host:
-        raise ValueError("blocked host 规范化后为空")
-
-    if host in _FORBIDDEN_BARE_SUFFIXES:
-        raise ValueError(
-            f"blocked host {host!r} 是常见公共后缀；单独使用会屏蔽整个 TLD，"
-            f"请用具体子域名（例如 foo.{host}）"
-        )
-
-    return host
-
-
-def getURLReadEnabled() -> bool:
-    return loadLLMConfig().get("urlReadEnabled", False)
-
-
-def setURLReadEnabled(enabled: bool):
-    _setConfig(urlReadEnabled=bool(enabled))
-
-
-def getURLReadMaxUrls() -> int:
-    val = loadLLMConfig().get("urlReadMaxUrls", 3)
-    return _boundedInt(val, default=3, minValue=1, maxValue=5)
-
-
-def setURLReadMaxUrls(value: int):
-    value = _boundedInt(value, default=3, minValue=1, maxValue=5)
-    _setConfig(urlReadMaxUrls=value)
-
-
-def getURLReadMaxBytes() -> int:
-    val = loadLLMConfig().get("urlReadMaxBytes", 512 * 1024)
-    return _boundedInt(val, default=512 * 1024, minValue=64 * 1024, maxValue=1024 * 1024)
-
-
-def setURLReadMaxBytes(value: int):
-    value = _boundedInt(value, default=512 * 1024, minValue=64 * 1024, maxValue=1024 * 1024)
-    _setConfig(urlReadMaxBytes=value)
-
-
-def getURLReadMaxChars() -> int:
-    val = loadLLMConfig().get("urlReadMaxChars", 12000)
-    return _boundedInt(val, default=12000, minValue=1000, maxValue=30000)
-
-
-def setURLReadMaxChars(value: int):
-    value = _boundedInt(value, default=12000, minValue=1000, maxValue=30000)
-    _setConfig(urlReadMaxChars=value)
-
-
-def getURLReadTotalMaxChars() -> int:
-    val = loadLLMConfig().get("urlReadTotalMaxChars", 24000)
-    return _boundedInt(val, default=24000, minValue=1000, maxValue=60000)
-
-
-def setURLReadTotalMaxChars(value: int):
-    value = _boundedInt(value, default=24000, minValue=1000, maxValue=60000)
-    _setConfig(urlReadTotalMaxChars=value)
-
-
-def getURLReadTimeoutSeconds() -> float:
-    """
-    读取 URL 抓取的总 timeout（秒）。
-
-    注意：该值在 aiohttp Session 创建时绑定，运行时修改 llmConfig.json 中的
-    urlReadTimeoutSeconds 需要重启 bot 才能生效；因此不提供 setter。
-    """
-    val = loadLLMConfig().get("urlReadTimeoutSeconds", 10)
-    return _boundedFloat(val, default=10.0, minValue=2.0, maxValue=20.0)
-
-
-def getURLReadMaxRetries() -> int:
-    val = loadLLMConfig().get("urlReadMaxRetries", 1)
-    return _boundedInt(val, default=1, minValue=0, maxValue=2)
-
-
-def setURLReadMaxRetries(value: int):
-    value = _boundedInt(value, default=1, minValue=0, maxValue=2)
-    _setConfig(urlReadMaxRetries=value)
-
-
-def getURLReadRedirectLimit() -> int:
-    val = loadLLMConfig().get("urlReadRedirectLimit", 3)
-    return _boundedInt(val, default=3, minValue=0, maxValue=5)
-
-
-def setURLReadRedirectLimit(value: int):
-    value = _boundedInt(value, default=3, minValue=0, maxValue=5)
-    _setConfig(urlReadRedirectLimit=value)
-
-
-def getURLReadBlockedHosts() -> list[str]:
-    raw = loadLLMConfig().get("urlReadBlockedHosts", [])
-    if not isinstance(raw, list):
-        return ["localhost", "metadata", "metadata.google.internal", "169.254.169.254"]
-
-    result: list[str] = []
-    seen = set()
-    for item in raw:
-        try:
-            host = _normalizeBlockedHost(item)
-        except ValueError:
-            continue
-        if host not in seen:
-            seen.add(host)
-            result.append(host)
-
-    # 确保默认 blocked hosts 始终存在
-    defaults = ["localhost", "metadata", "metadata.google.internal", "169.254.169.254"]
-    for dh in defaults:
-        if dh not in seen:
-            result.append(dh)
-
-    return result
-
-
-def setURLReadBlockedHosts(hosts: list[str]):
-    result: list[str] = []
-    seen = set()
-    for item in hosts:
-        host = _normalizeBlockedHost(item)
-        if host not in seen:
-            seen.add(host)
-            result.append(host)
-    _setConfig(urlReadBlockedHosts=result)
-
-
-def addURLReadBlockedHost(host: str):
-    hosts = getURLReadBlockedHosts()
-    host = _normalizeBlockedHost(host)
-    if host not in hosts:
-        hosts.append(host)
-        _setConfig(urlReadBlockedHosts=hosts)
-
-
-def removeURLReadBlockedHost(host: str):
-    host = _normalizeBlockedHost(host)
-    hosts = [h for h in getURLReadBlockedHosts() if h != host]
-    _setConfig(urlReadBlockedHosts=hosts)
 
 
 

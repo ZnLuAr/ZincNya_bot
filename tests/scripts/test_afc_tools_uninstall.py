@@ -31,7 +31,7 @@ def fakeTool(tmp_path, monkeypatch):
     toolDir = tmp_path / "utils" / "afc" / "tools" / "mytool"
     toolDir.mkdir(parents=True)
     (toolDir / "__init__.py").write_text("# init\n", encoding="utf-8")
-    (toolDir / "triggers.py").write_text("KEYWORDS = ['x']\n", encoding="utf-8")
+    (toolDir / "core.py").write_text("# core\n", encoding="utf-8")
     (toolDir / "afcTool.json").write_text("{}\n", encoding="utf-8")
 
     testDir = tmp_path / "tests" / "utils" / "afc" / "tools"
@@ -44,7 +44,7 @@ def fakeTool(tmp_path, monkeypatch):
         "version": "1.0.0",
         "files": [
             "utils/afc/tools/mytool/__init__.py",
-            "utils/afc/tools/mytool/triggers.py",
+            "utils/afc/tools/mytool/core.py",
         ],
         "testFile": "tests/utils/afc/tools/test_mytool.py",
     }
