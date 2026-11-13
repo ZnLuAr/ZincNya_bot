@@ -10,13 +10,15 @@ tests/utils/llm/test_task.py
 <OPERATIONS> 块，解析、校验和循环走真实代码。
 """
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 
-from config import LLM_REVIEW_FEEDBACK_MAX_LENGTH, LLM_TASK_MAX_MODEL_CALLS
+from config import LLM_TASK_MAX_MODEL_CALLS
 
 from utils.core.logger import LogLevel
 from utils.llm import task as taskModule
@@ -88,7 +90,7 @@ def _probeCapability(name: str, handled: list) -> Capability:
 
 
 @pytest.fixture
-def modelEnv(monkeypatch):
+def modelEnv(monkeypatch, contextStore):
     """
     替换 task 模块里的模型输入准备与模型请求。
 
@@ -262,26 +264,6 @@ async def test_run_task_feedback_is_used_for_this_task_only(modelEnv):
     assert request.memoryQuery.feedbackText == ""
 
 
-async def test_run_task_rejects_overlong_feedback_before_preparing(modelEnv):
-    feedback = "长" * (LLM_REVIEW_FEEDBACK_MAX_LENGTH + 1)
-
-    with pytest.raises(ValueError, match="反馈过长喵") as excInfo:
-        await runRequest(_request(), capabilities=[], feedback=feedback)
-
-    assert f"{LLM_REVIEW_FEEDBACK_MAX_LENGTH + 1}/{LLM_REVIEW_FEEDBACK_MAX_LENGTH}" in str(excInfo.value)
-    modelEnv.prepare.assert_not_awaited()
-    assert modelEnv.requests == []
-
-
-async def test_run_task_feedback_length_is_measured_after_strip(modelEnv):
-    """长度按去掉首尾空白后的内容算，恰好到上限可以通过"""
-    feedback = "  " + "长" * LLM_REVIEW_FEEDBACK_MAX_LENGTH + "\n"
-
-    outcome = await runRequest(_request(), capabilities=[], feedback=feedback)
-
-    assert outcome.status == TaskStatus.COMPLETED
-
-
 async def test_run_task_identity_comes_from_request(modelEnv):
     """能力拿到的 chatID / userID / 触发消息 ID 来自请求，chatID 统一为字符串"""
     handled = []
@@ -297,7 +279,9 @@ async def test_run_task_identity_comes_from_request(modelEnv):
     assert task.userID == 42
     assert task.triggerMessageID == 7
     assert task.includeContext is True
-    assert len(task.taskID) == 8
+    assert str(UUID(task.taskID)) == task.taskID
+    assert outcome.taskID == task.taskID
+    assert str(UUID(outcome.contextID)) == outcome.contextID
 
 
 async def test_run_task_prepare_failure_is_reported_in_outcome(modelEnv):
@@ -381,6 +365,233 @@ async def test_run_task_prepares_model_input_once_and_reuses_it(modelEnv):
     assert '"step": 1' in modelEnv.requests[1].appendix
     assert '"step": 2' in modelEnv.requests[2].appendix
     assert modelEnv.requests[0].instructions == modelEnv.requests[2].instructions
+
+
+
+
+async def test_runRequestPersistsResultsAndFinalState(modelEnv, contextStore):
+    handled = []
+    modelEnv.outputs = [_batch({"op": "probe", "value": "参数"})]
+
+    outcome = await runRequest(_request(), capabilities=[_probeCapability("probe", handled)])
+
+    records = await contextStore.readRecords(outcome.contextID)
+    assert records[0]["status"] == "done"
+    assert records[0]["content"]["args"] == {"value": "参数"}
+    rows = await contextStore._db.run(lambda conn: [dict(row) for row in conn.execute("SELECT * FROM tasks")])
+    assert [(row["taskID"], row["status"], row["modelCalls"]) for row in rows] == [
+        (outcome.taskID, "completed", 1),
+    ]
+
+
+@pytest.mark.parametrize("stage", ["initialize", "createContext", "createTask"])
+async def test_runRequestStorageFailureBlocksModel(modelEnv, contextStore, monkeypatch, stage):
+    error = OSError("storage unavailable")
+    monkeypatch.setattr(contextStore, stage, AsyncMock(side_effect=error))
+
+    outcome = await runRequest(_request(), capabilities=[])
+
+    assert outcome.status == TaskStatus.FAILED
+    assert outcome.error is error
+    modelEnv.prepare.assert_not_awaited()
+    assert modelEnv.requests == []
+
+
+async def test_runRequestFinalWriteFailurePreservesExecutedResult(modelEnv, contextStore, monkeypatch):
+    handled = []
+    modelEnv.outputs = [_batch({"op": "probe"})]
+    monkeypatch.setattr(contextStore, "finishTask", AsyncMock(side_effect=OSError("disk full")))
+
+    outcome = await runRequest(_request(), capabilities=[_probeCapability("probe", handled)])
+
+    assert outcome.status == TaskStatus.FAILED
+    assert len(handled) == 1
+    assert outcome.records[0].result.status == OperationStatus.DONE
+    assert (await contextStore.readRecords(outcome.contextID))[0]["status"] == "done"
+
+
+@pytest.mark.parametrize("stage", ["createTask", "prepare", "operation", "finishTask"])
+async def test_runRequestCancellationFinishesStoredTask(modelEnv, contextStore, monkeypatch, stage):
+    """在创建、准备、执行和结束写入处取消，任务终态与实际模型调用次数保持一致。"""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    handled = []
+    capability = _probeCapability("probe", handled)
+
+    if stage in {"createTask", "finishTask"}:
+        original = getattr(contextStore, stage)
+
+        async def delayed(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(contextStore, stage, delayed)
+    elif stage == "prepare":
+        async def prepare(*args, **kwargs):
+            entered.set()
+            await release.wait()
+        modelEnv.prepare.side_effect = prepare
+    else:
+        async def handle(operation, task):
+            entered.set()
+            await release.wait()
+            return OperationResult(status=OperationStatus.DONE)
+        capability = Capability(name="probe", describe=capability.describe, validate=capability.validate, handle=handle)
+        modelEnv.outputs = [_batch({"op": "probe"})]
+
+    pending = asyncio.create_task(runRequest(_request(), capabilities=[capability]))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        pending.cancel()
+        await asyncio.sleep(0)
+        pending.cancel()
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(pending, 2)
+
+    rows = await contextStore._db.run(lambda conn: [dict(row) for row in conn.execute("SELECT * FROM tasks")])
+    assert len(rows) == 1
+    assert rows[0]["status"] == ("completed" if stage == "finishTask" else "interrupted")
+    assert rows[0]["modelCalls"] == (1 if stage in {"operation", "finishTask"} else 0)
+    if stage == "operation":
+        assert (await contextStore.readRecords(rows[0]["contextID"]))[0]["status"] == "uncertain"
+
+
+async def test_runRequestSharedContextReusedForIncludeContext(modelEnv, contextStore):
+    """includeContext=True 的请求共享聊天的当前上下文；False 的请求各自新建。"""
+    sharedFirst = await runRequest(_request(includeContext=True), capabilities=[])
+    sharedSecond = await runRequest(_request(includeContext=True), capabilities=[])
+    alone = await runRequest(_request(includeContext=False), capabilities=[])
+
+    assert sharedFirst.contextID == sharedSecond.contextID
+    assert alone.contextID != sharedFirst.contextID
+    rows = await contextStore._db.run(lambda conn: [dict(row) for row in conn.execute("SELECT * FROM currentContexts")])
+    assert [row["chatID"] for row in rows] == ["100"]
+    assert rows[0]["contextID"] == sharedFirst.contextID
+
+    # 独立上下文不建执行门，只有共享上下文留下门条目
+    from utils.llm.context import runtime
+    assert set(runtime._contextGates) == {sharedFirst.contextID}
+
+
+async def test_runRequestSerializesSharedContext(modelEnv, contextStore):
+    """同一上下文的任务串行：第二个任务的输入准备在第一个任务结束写入之后才开始。"""
+    events = []
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handle(operation, task):
+        events.append("first-handle")
+        entered.set()
+        await release.wait()
+        return OperationResult(status=OperationStatus.DONE)
+
+    capability = Capability(
+        name="probe", describe=lambda task: "【probe】测试能力",
+        validate=_probeCapability("probe", []).validate, handle=handle,
+    )
+    modelEnv.outputs = [_batch({"op": "probe"})]
+
+    # 直接返回模型输入而不是回敲原 mock：给 side_effect 设包装会让原 mock 再触发包装，无限递归
+    async def secondPrepare(*args, **kwargs):
+        events.append("second-prepare")
+        return modelEnv.modelInput
+
+    first = asyncio.create_task(runRequest(_request(includeContext=True), capabilities=[capability]))
+    await asyncio.wait_for(entered.wait(), 2)
+    # 第一个任务的模型输出已消费（卡在处理中）；排队的第二个任务改用直接结束的输出
+    modelEnv.outputs = [_batch()]
+    modelEnv.prepare.side_effect = secondPrepare
+    second = asyncio.create_task(runRequest(_request(includeContext=True), capabilities=[]))
+
+    await asyncio.sleep(0.05)
+    assert events == ["first-handle"], "第一个任务未结束时，排队任务不应开始准备输入"
+
+    release.set()
+    firstOutcome, secondOutcome = await asyncio.gather(first, second)
+    assert firstOutcome.status == TaskStatus.COMPLETED
+    assert secondOutcome.status == TaskStatus.COMPLETED
+    assert events == ["first-handle", "second-prepare"]
+
+
+async def test_runRequestStopInvalidatesQueuedRequest(modelEnv, contextStore):
+    """停止运行中的任务时，同上下文排队未开始的请求作废：返回 STOPPED 且不留任务记录。"""
+    from utils.llm.context.runtime import listRunningTasks, stopTask
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handle(operation, task):
+        entered.set()
+        await release.wait()
+        return OperationResult(status=OperationStatus.DONE)
+
+    capability = Capability(
+        name="probe", describe=lambda task: "【probe】测试能力",
+        validate=_probeCapability("probe", []).validate, handle=handle,
+    )
+    # end=False：操作在停止信号到来时进行中（不打断），返回后续跑在循环顶部停下
+    modelEnv.outputs = [_batch({"op": "probe"}, end=False)]
+
+    first = asyncio.create_task(runRequest(_request(includeContext=True), capabilities=[capability]))
+    await asyncio.wait_for(entered.wait(), 2)
+    second = asyncio.create_task(runRequest(_request(includeContext=True), capabilities=[]))
+    await asyncio.sleep(0.05)
+
+    stoppedID = stopTask(listRunningTasks()[0]["taskID"])
+    release.set()
+    firstOutcome, secondOutcome = await asyncio.gather(first, second)
+
+    assert stoppedID == firstOutcome.taskID
+    assert firstOutcome.status == TaskStatus.STOPPED
+    assert secondOutcome.status == TaskStatus.STOPPED
+    assert "排队" in secondOutcome.detail
+    modelEnv.prepare.assert_awaited_once(), "排队的请求作废后不应准备模型输入"
+
+    rows = await contextStore._db.run(lambda conn: [dict(row) for row in conn.execute("SELECT * FROM tasks")])
+    assert [row["taskID"] for row in rows] == [firstOutcome.taskID]
+    assert rows[0]["status"] == "stopped"
+
+
+async def test_runRequestInjectsPersistedHistoryIntoModelInput(modelEnv, contextStore):
+    """共享上下文的后续任务把前序任务的操作记录作为扩展块注入模型输入。"""
+    from utils.llm.config import ContextTier
+
+    handled = []
+    modelEnv.outputs = [_batch({"op": "probe", "value": "第一次"})]
+    firstOutcome = await runRequest(
+        _request(includeContext=True), capabilities=[_probeCapability("probe", handled)],
+    )
+    assert firstOutcome.status == TaskStatus.COMPLETED
+
+    modelEnv.prepare.reset_mock()
+    modelEnv.outputs = [_batch()]
+    await runRequest(_request(includeContext=True), capabilities=[])
+
+    kwargs = modelEnv.prepare.await_args.kwargs
+    assert kwargs["extraBlocks"][0] == (1, "扩展", "扩展内容")
+    tier, source, text = kwargs["extraBlocks"][1]
+    assert (tier, source) == (ContextTier.LOW_TRUST, "工作上下文")
+    assert "<WORK_CONTEXT_HISTORY>" in text
+    assert "#1 probe → 已完成" in text
+    assert "第一次" in text
+
+
+async def test_runRequestHistoryReadFailureDegradesToNoBlock(modelEnv, contextStore, monkeypatch):
+    """历史读取失败不阻断任务：按无历史继续，扩展块保持请求原样并记 WARNING。"""
+    from utils.llm.context import journal as journalModule
+
+    historyLog = AsyncMock()
+    monkeypatch.setattr(journalModule, "logSystemEvent", historyLog)
+    monkeypatch.setattr(contextStore, "readRecords", AsyncMock(side_effect=OSError("unreadable")))
+
+    outcome = await runRequest(_request(includeContext=True), capabilities=[])
+
+    assert outcome.status == TaskStatus.COMPLETED
+    assert modelEnv.prepare.await_args.kwargs["extraBlocks"] == [(1, "扩展", "扩展内容")]
+    historyLog.assert_awaited_once()
 
 
 
@@ -480,11 +691,6 @@ async def test_collect_output_passes_feedback_to_the_task(modelEnv):
     args, kwargs = modelEnv.prepare.await_args
     assert args[0] == request.userMessage + "\n\n[背景信息补充：补充条件]"
     assert kwargs["memoryQuery"].feedbackText == "补充条件"
-
-
-async def test_collect_output_rejects_overlong_feedback(modelEnv):
-    with pytest.raises(ValueError, match="反馈过长喵"):
-        await collectOutput(_request(), feedback="长" * (LLM_REVIEW_FEEDBACK_MAX_LENGTH + 1))
 
 
 async def test_collect_output_raises_original_error_when_prepare_fails(modelEnv):

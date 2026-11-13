@@ -67,7 +67,7 @@ def _memoryAdd(content: str = "测试内容", **fields) -> dict:
 
 
 @pytest.fixture
-def modelEnv(monkeypatch):
+def modelEnv(monkeypatch, contextStore):
     """
     重试用例的模型替身。
 
@@ -141,7 +141,13 @@ def _memoryItem(**actionFields) -> dict:
 class TestReviewRetryWithFeedback:
     """reviewRetryWithFeedback：补充反馈拼接 enhancedMsg 并重试"""
 
-    async def test_retry_reuses_generation_request(self):
+    @pytest.mark.parametrize("feedback, expectedFeedback", [
+        ("补充条件", "补充条件"),
+        ("  补充条件\n", "补充条件"),
+        (" \n\t", ""),
+        ("", ""),
+    ])
+    async def test_retry_reuses_generation_request(self, feedback, expectedFeedback):
         request = TaskRequest(messages=(MessageInput(
             origin=MessageOrigin(chatID="123", userID=42, messageID=9), text="原始问题",
             replyText="被引用内容", images=({"data": "image"},),
@@ -160,10 +166,10 @@ class TestReviewRetryWithFeedback:
             ) as generate,
             patch("utils.llm.review.actions.logAction", new_callable=AsyncMock),
         ):
-            result = await reviewRetryWithFeedback(item, "补充条件")
+            result = await reviewRetryWithFeedback(item, feedback)
 
         assert result["reply"] == "新回复"
-        generate.assert_awaited_once_with(request, feedback="补充条件", logLabel="feedback retry")
+        generate.assert_awaited_once_with(request, feedback=expectedFeedback, logLabel="feedback retry")
 
     async def test_enhanced_message_format(self, modelEnv):
         """交给模型的消息来自原始请求，末尾接 [背景信息补充：...]；不使用审核展示文字"""
@@ -179,17 +185,18 @@ class TestReviewRetryWithFeedback:
         assert "用户原始消息" not in enhancedMsg
         assert "[背景信息补充：假设用户预算 1000 元]" in enhancedMsg
 
-    async def test_feedback_over_limit_raises(self, modelEnv):
-        """反馈超 LLM_REVIEW_FEEDBACK_MAX_LENGTH：抛 ValueError，不准备输入也不请求模型"""
+    @pytest.mark.parametrize("padding", ["", " \n"])
+    async def test_feedback_over_limit_raises(self, padding):
+        """审核入口拒绝超长反馈，任务尚未启动。"""
         longFeedback = "字" * (LLM_REVIEW_FEEDBACK_MAX_LENGTH + 1)
         item = _replyItem(**{"originalMsg": "msg", "chatID": "123", "includeContext": False})
 
-        with pytest.raises(ValueError) as excInfo:
-            await reviewRetryWithFeedback(item, longFeedback)
+        with patch("utils.llm.review.actions.collectOutput", new_callable=AsyncMock) as generate:
+            with pytest.raises(ValueError, match="反馈过长喵") as excInfo:
+                await reviewRetryWithFeedback(item, padding + longFeedback + padding)
 
-        assert "反馈过长" in str(excInfo.value)
-        modelEnv.prepare.assert_not_awaited()
-        modelEnv.request.assert_not_awaited()
+        assert f"{len(longFeedback)}/{LLM_REVIEW_FEEDBACK_MAX_LENGTH}" in str(excInfo.value)
+        generate.assert_not_called()
 
     async def test_returns_updated_reply_preserves_original(self, modelEnv):
         """返回 {**item, reply}，originalMsg 不变（反馈一次性语义）"""
@@ -252,14 +259,18 @@ class TestReviewRetryWithFeedback:
         spy.assert_awaited_once()
         assert spy.await_args.kwargs["logLabel"] == "custom"
 
-    async def test_feedback_within_limit_succeeds(self, modelEnv):
-        """反馈长度等于上限：正常生成不抛异常"""
+    @pytest.mark.parametrize("padding", ["", " \n"])
+    async def test_feedback_within_limit_succeeds(self, modelEnv, padding):
+        """按去除首尾空白后的长度判断，恰好达到上限可以生成。"""
         item = _replyItem(**{"originalMsg": "msg", "chatID": "123", "includeContext": False})
-        feedback = "字" * LLM_REVIEW_FEEDBACK_MAX_LENGTH  # 恰好等于上限，不触发 raise
+        feedback = "字" * LLM_REVIEW_FEEDBACK_MAX_LENGTH
 
-        result = await reviewRetryWithFeedback(item, feedback)
+        result = await reviewRetryWithFeedback(item, padding + feedback + padding)
 
         assert result["reply"] == "新回复"
+        assert modelEnv.prepare.await_args.args[0] == (
+            item["request"].userMessage + f"\n\n[背景信息补充：{feedback}]"
+        )
         modelEnv.request.assert_awaited_once()
 
     async def test_feedback_only_updates_query_feedback_text(self, modelEnv):

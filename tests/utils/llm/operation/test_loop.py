@@ -813,7 +813,7 @@ async def test_runTaskStopDuringModelCallBlocksFirstOperation():
     outcome = await runTask(task=task, capabilities=[capability.build()], callModel=model)
 
     assert outcome.status == TaskStatus.STOPPED
-    assert outcome.detail == "在操作 #1 开始前收到停止信号"
+    assert outcome.detail == "模型请求返回后收到停止信号"
     assert capability.handled == []
     assert outcome.records == ()
 

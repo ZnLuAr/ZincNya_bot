@@ -37,6 +37,7 @@ class StateManager:
         self._interactiveChatID: Optional[str] = None
         self._messageQueue: Optional[asyncio.Queue] = None
         self._memoryRuntime = None
+        self._llmContextStore = None
 
         # 控制台输出回调（用于聊天界面接管 logger 输出）
         self._consoleOutputCallback: Optional[Callable[[str], None]] = None
@@ -52,6 +53,18 @@ class StateManager:
 
         # 锁
         self._stateLock = threading.RLock()
+
+
+    def setLLMContextStore(self, store):
+        """安装 LLM 工作上下文存储，供任务入口完成异步初始化并保存记录。"""
+        with self._stateLock:
+            self._llmContextStore = store
+
+
+    def getLLMContextStore(self):
+        """返回本次运行的工作上下文存储；尚未安装时为 None。"""
+        with self._stateLock:
+            return self._llmContextStore
 
 
     def setEventLoop(self, loop: asyncio.AbstractEventLoop):

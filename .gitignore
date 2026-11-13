@@ -94,6 +94,8 @@ data/llm/prompts.json
 data/llm/llmConfig.json
 data/llm/llmMemory.db
 data/llm/knowledge.db
+# LLM 工作上下文（包含聊天记录等敏感信息）
+data/llm/llmContext*.db
 # 知识库 Markdown（含人设细节，与 prompts.json 同密级）
 # 模板见 data/llm/knowledge.example/
 data/llm/knowledge/

@@ -33,6 +33,7 @@ from utils.llm.state import getReviewQueue
 
 from .knowledgeCmd import _handleKnowledgeCommand
 from .memoryCmd import _handleMemoryCommand
+from .taskCmd import handleTaskCommand
 from .._helpRender import renderSubcommands
 from .review.consoleReview import handleConsoleReview
 
@@ -49,6 +50,8 @@ _LLM_SUBCOMMANDS = {
     "memory [...]": "记忆模式与条目管理（/llm memory 查看子命令）",
     "knowledge [...]": "知识库管理（/llm knowledge 查看子命令）",
     "review": "打开控制台审核队列",
+    "tasks": "列出运行中的 LLM 任务",
+    "stop <taskID>": "停止一个运行中的任务（taskID 支持唯一前缀）",
 }
 
 
@@ -113,7 +116,7 @@ async def execute(app, args):
 
         case "model":
             if not rest:
-                print(f"当前模型：{getModel()}")
+                print(f"当前模型：{getModel()}\n")
                 return
             if rest[0].lower() == "switch" and len(rest) > 1:
                 newModel = rest[1]
@@ -127,7 +130,7 @@ async def execute(app, args):
                 vm = getVisionModel()
                 m = getModel()
                 mode = "双调用喵" if vm != m else "单调用喵"
-                print(f"视觉模型：{vm}（{mode}）")
+                print(f"视觉模型：{vm}（{mode}）\n")
                 return
             if rest[0].lower() == "switch" and len(rest) > 1:
                 newModel = rest[1]
@@ -184,6 +187,9 @@ async def execute(app, args):
         case "review":
             await handleConsoleReview(app.bot)
 
+        case "tasks" | "stop":
+            await handleTaskCommand(rest, app)
+
         case "knowledge":
             await _handleKnowledgeCommand(rest)
 
@@ -224,6 +230,8 @@ def getHelp():
             "/llm knowledge search <query>        测试检索（显示评分）\n"
             "/llm knowledge maxresults <n>        设置召回数（1-10）\n"
             "/llm knowledge minscore <float>      设置最低分数阈值\n"
+            "/llm tasks                           列出运行中的 LLM 任务\n"
+            "/llm stop <taskID>                   停止一个运行中的任务（支持前缀）\n"
         ),
         "example": (
             "/llm status                          查看当前配置\n"

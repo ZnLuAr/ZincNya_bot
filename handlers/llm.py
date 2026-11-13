@@ -61,7 +61,8 @@ _HINT_NO_OPS = "诶——等等……管理员配置貌似有缺位……💦\n�
 # 任务没能正常完成时发给触发方的说明，每个任务最多一句
 _HINT_MODEL_RETRYABLE = "……网络好像有些波动，锌酱没能接收到这条消息喵……可以再试一次吗？"
 _HINT_MODEL_FAILED = "呜哇——有、有意料之外的错误正向咱袭来喵！"
-_HINT_LIMIT_REACHED = "……唔，这件事锌酱绕了好多圈也没能做完喵……先停在这里，换个说法再找咱试试吧💦"
+_HINT_LIMIT_REACHED = "……这件事锌酱绕了好多圈也没能做完……\n\n先停在这里，换个说法再找咱试试吧💦"
+_HINT_STOPPED = "……被管理员拦下来了……剩下的部分没能继续的说💦"
 _HINT_UNFINISHED = "……做到一半出了点状况喵，剩下的部分没能做完💦"
 
 
@@ -147,6 +148,9 @@ async def _notifyAbnormalEnd(
     """任务没能正常完成时，向触发方发一句固定说明；发送失败不再重试。"""
     if outcome.status == TaskStatus.LIMIT_REACHED:
         hint = _HINT_LIMIT_REACHED
+    elif outcome.status == TaskStatus.STOPPED:
+        # 运行中被停止与排队期间作废共用一句说明，差异记录在任务日志的 detail 里
+        hint = _HINT_STOPPED
     elif outcome.status == TaskStatus.FAILED and not outcome.records and outcome.error is not None:
         # 一个操作都还没处理就失败：沿用模型请求失败的两句文案
         hint = _HINT_MODEL_RETRYABLE if isRetryableError(outcome.error) else _HINT_MODEL_FAILED
@@ -224,9 +228,9 @@ async def _runLLMPipeline(
             ],
         )
 
-        # 模型至少成功响应过一次才计入速率限制。任务失败只来自输入准备或模型请求出错，
-        # 这时调用次数大于 1 说明前面的请求成功过。
-        if outcome.status != TaskStatus.FAILED or outcome.modelCalls > 1:
+        # 模型至少成功响应过一次才计入速率限制（排队期间被作废的请求连模型都没调用）。
+        # 任务失败只来自输入准备或模型请求出错，这时调用次数大于 1 说明前面的请求成功过。
+        if outcome.modelCalls > 0 and (outcome.status != TaskStatus.FAILED or outcome.modelCalls > 1):
             addRateLimit(origin.userID)
 
         if outcome.status == TaskStatus.COMPLETED:

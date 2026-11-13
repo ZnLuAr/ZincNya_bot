@@ -119,6 +119,73 @@ class TestLLMCommand:
         getFlag.assert_called_once_with()
         assert mockUpdate.message.reply_text.call_args.args[0] == expected
 
+    @pytest.mark.asyncio
+    async def test_tasks_empty_replies_hint(self, mockUpdate, mockContext):
+        """tasks 无运行任务时回复提示。"""
+        mockContext.args = ["tasks"]
+
+        with (
+            patch('handlers.llmCommand.hasPermission', return_value=True),
+            patch('handlers.llmCommand.listRunningTasks', return_value=[]),
+        ):
+            await handleLLMCommand(mockUpdate, mockContext)
+
+        assert "没有正在运行" in mockUpdate.message.reply_text.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_tasks_lists_running_tasks(self, mockUpdate, mockContext):
+        """tasks 回复包含 taskID、chat 与预览。"""
+        mockContext.args = ["tasks"]
+
+        with (
+            patch('handlers.llmCommand.hasPermission', return_value=True),
+            patch('handlers.llmCommand.listRunningTasks', return_value=[
+                {"taskID": "aaaaaaaa-1111", "chatID": "100", "startedAt": 0.0, "preview": "帮我看代码"},
+            ]),
+        ):
+            await handleLLMCommand(mockUpdate, mockContext)
+
+        call_args = mockUpdate.message.reply_text.call_args[0][0]
+        assert "aaaaaaaa-1111" in call_args
+        assert "100" in call_args
+        assert "帮我看代码" in call_args
+
+    @pytest.mark.asyncio
+    async def test_stop_reports_full_task_id_and_logs(self, mockUpdate, mockContext):
+        mockContext.args = ["stop", "aaaaaaaa"]
+
+        with (
+            patch('handlers.llmCommand.hasPermission', return_value=True),
+            patch('handlers.llmCommand.stopTask', return_value="aaaaaaaa-1111") as mockStop,
+            patch('handlers.llmCommand.logAction', new_callable=AsyncMock) as mockLog,
+        ):
+            await handleLLMCommand(mockUpdate, mockContext)
+
+        mockStop.assert_called_once_with("aaaaaaaa")
+        assert "aaaaaaaa-1111" in mockUpdate.message.reply_text.call_args[0][0]
+        mockLog.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_without_id_shows_usage(self, mockUpdate, mockContext):
+        mockContext.args = ["stop"]
+
+        with patch('handlers.llmCommand.hasPermission', return_value=True):
+            await handleLLMCommand(mockUpdate, mockContext)
+
+        assert "用法" in mockUpdate.message.reply_text.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_stop_error_relays_reason(self, mockUpdate, mockContext):
+        mockContext.args = ["stop", "bbbbbbbb"]
+
+        with (
+            patch('handlers.llmCommand.hasPermission', return_value=True),
+            patch('handlers.llmCommand.stopTask', side_effect=ValueError("没有匹配的运行任务")),
+        ):
+            await handleLLMCommand(mockUpdate, mockContext)
+
+        assert "没有匹配" in mockUpdate.message.reply_text.call_args[0][0]
+
 
 class TestLLMCommandRegister:
     """测试 handler 注册"""

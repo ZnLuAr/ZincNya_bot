@@ -25,6 +25,7 @@ Telegram 端 /llm 控制命令（ops 专用）。
 
 
 import re
+import time
 
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
@@ -43,6 +44,7 @@ from utils.llm import (
     getVisionModel, setVisionModel,
 )
 from utils.core.logger import logAction, LogLevel, LogChildType
+from utils.llm.context.runtime import listRunningTasks, stopTask
 from utils.operators import hasPermission
 
 
@@ -189,6 +191,31 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("keyword 的用法应该是：/llm keyword [{add <关键词>|del <关键词>}]")
 
+        case "tasks":
+            tasks = listRunningTasks()
+            if not tasks:
+                await update.message.reply_text("当前没有正在运行的 LLM 任务喵")
+            else:
+                blocks = []
+                for info in tasks:
+                    started = time.strftime("%H:%M:%S", time.localtime(info["startedAt"]))
+                    blocks.append(
+                        f"{info['taskID']}\nchat {info['chatID']} · {started} 开始\n{info['preview']}"
+                    )
+                await update.message.reply_text("\n\n".join(blocks))
+
+        case "stop":
+            if len(args) < 2:
+                await update.message.reply_text("stop 的用法应该是：/llm stop <taskID>（可用 /llm tasks 查看）")
+                return
+            try:
+                taskID = stopTask(args[1])
+            except ValueError as e:
+                await update.message.reply_text(f"❌ {e}")
+                return
+            await update.message.reply_text(f"已向任务发出停止信号：\n{taskID}")
+            await logAction("System", "Telegram 端停止 LLM 任务", f"操作者：{operatorName}，taskID={taskID}", LogLevel.INFO, LogChildType.WITH_ONE_CHILD)
+
         case "memory":
             if len(args) == 1:
                 state = "开启" if getMemoryEnabled() else "关闭"
@@ -222,6 +249,8 @@ async def handleLLMCommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "/llm keyword add|del &lt;词&gt;    管理群聊触发关键词\n"
                 "/llm memory                  查看记忆模式\n"
                 "/llm memory -on | -off       开启/关闭记忆\n"
+                "/llm tasks                   列出运行中的 LLM 任务\n"
+                "/llm stop &lt;taskID&gt;           停止一个运行中的任务\n"
                 "</pre>"
                 "…… 果然你又忘了吧 0 w0",
                 parse_mode="HTML",

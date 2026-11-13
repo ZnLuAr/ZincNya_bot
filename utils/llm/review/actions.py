@@ -10,6 +10,8 @@ console 与 chatScreen 两端直接使用；Telegram 按钮的重试也走这里
 console 不依赖它，发言、记忆能力送审时用的是这三个文件。
 """
 
+from config import LLM_REVIEW_FEEDBACK_MAX_LENGTH
+
 from utils.core.logger import logAction, LogLevel, LogChildType
 from utils.llm.memory.action import (
     MemoryAction,
@@ -48,7 +50,6 @@ async def _retryReplyReview(
             opsID=item["opsID"], userID=request.userID, logLabel=logLabel,
         )
 
-    feedback = feedback.strip()
     title = "LLM 审核：补充反馈重试" if feedback else "LLM 审核：重新生成"
     detail = f"补充：{feedback[:_LOG_FEEDBACK_LEN]}" if feedback else f"原文：{item['originalMsg']}"
     await logAction("System", title, detail, LogLevel.INFO, LogChildType.WITH_CHILD)
@@ -70,9 +71,14 @@ async def reviewRetryWithFeedback(
     memoryDispatcher=dispatchMemoryActionsToConsole,
     logLabel: str = "feedback retry",
 ) -> dict:
-    """以一次性补充反馈重新生成回复；不改变原始消息或后续重试的输入。"""
+    """校验去除首尾空白后的反馈长度，再用一次性补充信息重试，保留原始请求。"""
     if item.get("kind", "reply") == "memory":
         raise ValueError("记忆审核项暂不支持重试")
+    feedback = feedback.strip()
+    if len(feedback) > LLM_REVIEW_FEEDBACK_MAX_LENGTH:
+        raise ValueError(
+            f"反馈过长喵（{len(feedback)}/{LLM_REVIEW_FEEDBACK_MAX_LENGTH} 字），请精简后重试"
+        )
     return await _retryReplyReview(
         item, feedback=feedback, memoryDispatcher=memoryDispatcher, logLabel=logLabel,
     )

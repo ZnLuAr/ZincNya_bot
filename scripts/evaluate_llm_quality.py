@@ -41,6 +41,7 @@ from config import DATA_DIR
 from utils.llm.knowledge import initDatabase as initKnowledgeDB, getKnowledgeEntries, retrieveKnowledge
 from utils.llm.models import MessageInput, MessageOrigin, TaskRequest
 from utils.llm.task import collectOutput
+from utils.llm.context.journal import initContextStore
 from utils.llm.client._router import getProvider
 from utils.llm.client._request import requestWithRetry
 from utils.llm.config import getModel
@@ -155,7 +156,13 @@ async def main():
 
     judgeModel = args.judgeModel or getModel()
 
-    # 初始化知识库（建表 / 加载 schema）
+    # 安装任务记录存储，并初始化评估使用的知识库。评估使用独立的工作上下文库
+    # （includeContext=True 会共享聊天上下文并注入前序操作记录，混用生产库会
+    # 互相污染，也让评估结果不可复现），每次运行从干净上下文开始。
+    evalContextPath = os.path.join(DATA_DIR, "llm", "llmContextEval.db")
+    if os.path.exists(evalContextPath):
+        os.remove(evalContextPath)
+    initContextStore(evalContextPath)
     await initKnowledgeDB()
 
     # 从知识库动态加载评估规则（不硬编码）

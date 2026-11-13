@@ -19,6 +19,7 @@ from .prompt import buildOperationInstructions, renderAppendix
 from .types import (
     Capability,
     Operation,
+    OperationJournal,
     OperationRecord,
     OperationResult,
     OperationStatus,
@@ -44,6 +45,7 @@ async def runTask(
     capabilities: list[Capability],
     callModel: Callable[..., Awaitable[str]],
     maxModelCalls: int = LLM_TASK_MAX_MODEL_CALLS,
+    journal: OperationJournal | None = None,
 ) -> TaskOutcome:
     """
     运行一个任务直到结束。
@@ -54,6 +56,7 @@ async def runTask(
         callModel: async (*, instructions: list[str], appendix: str) -> str
                    instructions 是操作说明（进 system 消息），appendix 是操作记录与
                    未执行原因（附在 user 内容末尾，首次调用为空串）
+        journal: 执行前后保存操作与结果；保存失败结束任务并保留已发生的实际结果
 
     模型请求抛出的异常不向外抛，记入 TaskOutcome.error；CancelledError 照常传播。
     """
@@ -88,6 +91,12 @@ async def runTask(
         if task.stopEvent.is_set():
             return _outcome(TaskStatus.STOPPED, "在调用模型前收到停止信号")
 
+        if journal is not None:
+            try:
+                journal.checkReady()
+            except Exception as e:
+                return _outcome(TaskStatus.FAILED, "工作上下文存储不可用", e)
+
         # ── 调用模型 ──
         modelCalls += 1
         try:
@@ -100,6 +109,8 @@ async def runTask(
         except Exception as e:
             return _outcome(TaskStatus.FAILED, f"模型请求失败：{type(e).__name__}", e)
         rejectReason = ""
+        if task.stopEvent.is_set():
+            return _outcome(TaskStatus.STOPPED, "模型请求返回后收到停止信号")
 
         # ── 整批解析与校验：任何一处不合法，整批零执行 ──
         try:
@@ -123,19 +134,34 @@ async def runTask(
         batchSucceeded = True
         for name, args in batch.operations:
             operation = Operation(index=len(records) + 1, name=name, args=args)
+            stoppedBeforeExecution = False
 
             if not batchSucceeded:
-                records.append(OperationRecord(
-                    operation=operation,
-                    result=OperationResult(status=OperationStatus.SKIPPED),
-                ))
-                continue
+                result = OperationResult(status=OperationStatus.SKIPPED)
+            else:
+                if task.stopEvent.is_set():
+                    return _outcome(TaskStatus.STOPPED, f"在操作 #{operation.index} 开始前收到停止信号")
+                if journal is not None:
+                    try:
+                        await journal.beforeOperation(operation)
+                    except Exception as e:
+                        return _outcome(TaskStatus.FAILED, f"操作 #{operation.index} 执行前保存失败", e)
+                if task.stopEvent.is_set():
+                    stoppedBeforeExecution = True
+                    result = OperationResult(status=OperationStatus.SKIPPED)
+                else:
+                    result = await _handleOne(active[name], operation, task)
 
-            if task.stopEvent.is_set():
-                return _outcome(TaskStatus.STOPPED, f"在操作 #{operation.index} 开始前收到停止信号")
-
-            result = await _handleOne(active[name], operation, task)
-            records.append(OperationRecord(operation=operation, result=result))
+            record = OperationRecord(operation=operation, result=result)
+            records.append(record)
+            if journal is not None:
+                try:
+                    await journal.afterOperation(record)
+                except Exception as e:
+                    # 实际执行结果先进入内存记录；保存失败作为任务故障另行报告。
+                    return _outcome(TaskStatus.FAILED, f"操作 #{operation.index} 的结果保存失败", e)
+            if stoppedBeforeExecution:
+                return _outcome(TaskStatus.STOPPED, f"操作 #{operation.index} 执行前保存期间收到停止信号")
             if result.status not in _SUCCESS_STATUSES:
                 batchSucceeded = False
 

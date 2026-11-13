@@ -132,7 +132,10 @@ def test_reactionCapabilityDescribesFormatAndAllowedEmojis():
     description = capability.describe(_task())
 
     assert capability.name == REACTION_CAPABILITY_NAME == "reaction"
-    assert '{"op": "reaction", "emoji": "👍"}' in description
+    exampleLine = next(line.strip() for line in description.splitlines() if line.strip().startswith("{"))
+    example = json.loads(exampleLine)
+    assert example["op"] == "reaction"
+    assert example["emoji"] in {emoji.value for emoji in ReactionEmoji}
     for emoji in ReactionEmoji:
         assert emoji.value in description
 

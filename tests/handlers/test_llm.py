@@ -29,6 +29,7 @@ from handlers.llm import (
     _HINT_MODEL_FAILED,
     _HINT_MODEL_RETRYABLE,
     _HINT_NO_OPS,
+    _HINT_STOPPED,
     _HINT_UNFINISHED,
     _takeExtraBlocks,
     _downloadMessageImages,
@@ -560,6 +561,10 @@ class TestRateLimit:
         # 第一次请求就失败，或输入准备失败
         (TaskStatus.FAILED, (), 1, False),
         (TaskStatus.FAILED, (), 0, False),
+        # 运行中停止：模型已经动过，计入
+        (TaskStatus.STOPPED, (), 3, True),
+        # 排队期间被作废：连模型都没调用，不计入
+        (TaskStatus.STOPPED, (), 0, False),
     ])
     async def test_rate_limit_follows_task_outcome(self, status, records, modelCalls, counted):
         error = RuntimeError("模型请求失败") if status == TaskStatus.FAILED else None
@@ -583,7 +588,7 @@ class TestAbnormalEnd:
         (TaskStatus.FAILED, (), TimeoutError("request timeout"), _HINT_MODEL_RETRYABLE),
         (TaskStatus.FAILED, (), ValueError("响应无法解析"), _HINT_MODEL_FAILED),
         (TaskStatus.FAILED, (_makeRecord(),), TimeoutError("request timeout"), _HINT_UNFINISHED),
-        (TaskStatus.STOPPED, (_makeRecord(),), None, _HINT_UNFINISHED),
+        (TaskStatus.STOPPED, (_makeRecord(),), None, _HINT_STOPPED),
     ])
     async def test_abnormal_end_sends_one_hint(self, status, records, error, hint):
         pipeline = _Pipeline()

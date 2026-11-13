@@ -11,7 +11,7 @@ utils/llm/operation/types.py
 import asyncio
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Protocol
 
 
 
@@ -23,7 +23,7 @@ class OperationStatus(str, Enum):
     SUBMITTED = "submitted"     # 已送审：等待人工批准，副作用尚未发生
     FAILED = "failed"           # 失败：确认没有完成
     UNCERTAIN = "uncertain"     # 结果不确定：无法确认副作用是否发生
-    SKIPPED = "skipped"         # 尚未执行：同批前序操作未成功，本操作没有开始
+    SKIPPED = "skipped"         # 尚未执行：前序操作未成功或执行前收到停止信号
 
 
 class TaskStatus(str, Enum):
@@ -32,7 +32,7 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"             # 模型给出结束信号，且该批操作全部处理成功
     LIMIT_REACHED = "limitReached"      # 达到模型调用次数上限
     STOPPED = "stopped"                 # 被停止信号中断
-    FAILED = "failed"                   # 模型输入准备失败或模型请求失败
+    FAILED = "failed"                   # 模型输入、模型请求或工作上下文存储失败
 
 
 
@@ -117,3 +117,23 @@ class TaskOutcome:
     modelCalls: int = 0
     detail: str = ""
     error: Exception | None = None
+    taskID: str = ""
+    contextID: str = ""
+
+
+
+
+class OperationJournal(Protocol):
+    """
+    操作记录的保存接口，由循环在执行前后调用。
+
+    checkReady 检查存储是否可用；beforeOperation 保存即将执行的操作，
+    afterOperation 保存实际结果，包括因前序失败而跳过的操作。
+    保存异常由循环交回任务入口，已发生的实际结果保留在 TaskOutcome 中。
+    """
+
+    def checkReady(self) -> None: ...
+
+    async def beforeOperation(self, operation: Operation) -> None: ...
+
+    async def afterOperation(self, record: OperationRecord) -> None: ...
